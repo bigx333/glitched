@@ -544,6 +544,43 @@ func TestMarksSettleForAnySetOfProjects(t *testing.T) {
 		if other, _ := settleMarks(stored, p); !slices.Equal(other, out) {
 			t.Fatalf("%d: the order of %d names changed the marks", iter, len(shown))
 		}
+
+		// P7: shown one way and another by turns, as a server comes and
+		// goes, the marks settle in a round and then stay.
+		// Nested sets always do; two that overlap do while all the names
+		// the file holds fit, so that none need take another's mark.
+		a := shown[:r.IntN(len(shown)+1)]
+		b := slices.Clone(shown)
+		if r.IntN(2) == 0 {
+			b = append(b[len(a)/2:], randomNames(r.IntN(20))...)
+			all := map[string]bool{}
+			for _, m := range stored {
+				all[m.Name] = true
+			}
+			for _, n := range slices.Concat(a, b) {
+				all[n] = true
+			}
+			if fits := len(all) <= 8 || len(a) > 8 && len(b) > 8 && len(all) <= 56; !fits || hasFrozen {
+				b = shown
+			}
+		}
+		s := stored
+		s, _ = settleMarks(s, a)
+		s, _ = settleMarks(s, b)
+		for round := range 3 {
+			for _, set := range [][]string{a, b} {
+				next, changed := settleMarks(s, set)
+				if changed {
+					var moved []string
+					for i := range s {
+						if s[i] != next[i] {
+							moved = append(moved, fmt.Sprintf("%v -> %v", s[i], next[i]))
+						}
+					}
+					t.Fatalf("%d: round %d, %d names and %d by turns, settling %d moved %q", iter, round+2, len(a), len(b), len(set), moved)
+				}
+			}
+		}
 	}
 }
 
@@ -647,8 +684,8 @@ func TestProjectsThatHashToOneIconAreListedOnThreeAndKeptSo(t *testing.T) {
 	if g := again.listed("glitched", "mygo", "pstack-t3"); !maps.Equal(g, got) {
 		t.Errorf("after a restart %v; before %v", g, got)
 	}
-	if _, m := readMarks(t, dir); !m.Equal(mtime) {
-		t.Error("a restart wrote marks.json")
+	if again, m := readMarks(t, dir); !m.Equal(mtime) || !slices.Equal(again, ms) {
+		t.Errorf("a restart wrote marks.json: %v to %v", ms, again)
 	}
 }
 
@@ -775,5 +812,130 @@ func TestAThreadOutOfTheListDrawsItsProjectsMark(t *testing.T) {
 	h.a.projects = slices.DeleteFunc(h.a.projects, func(p *project) bool { return p.name() == "mygo" })
 	if icon, color := h.a.projectOf(th).markNames(); icon != got["mygo"].Icon || color != got["mygo"].Color {
 		t.Errorf("mygo out of the list draws %s %s; listed %v", icon, color, got["mygo"])
+	}
+}
+
+func TestAMarkStaysPutAsAServersProjectsComeAndGo(t *testing.T) {
+	// Six projects here and four on a server, then a seventh here, which
+	// comes to share an icon with one of these while the server's show.
+	local := []string{"glitched", "mygo", "openbot", "fiona-voice", "b", "site", "tool0"}
+	all := append(slices.Clone(local), "r-api", "r-web", "r-ops", "r-db")
+	s, _ := settleMarks(nil, slices.Concat(all[:6], all[7:]))
+	s, _ = settleMarks(s, all)
+	if m := markOf(t, s, "tool0"); m != (projectMark{"tool0", "magic-stick-3", "#0ea5e9"}) {
+		t.Fatalf("tool0 is %v", m)
+	}
+	// Started again before the server answers, then with it, by turns.
+	s, _ = settleMarks(s, local)
+	s, _ = settleMarks(s, all)
+	for range 3 {
+		for _, shown := range [][]string{local, all} {
+			if next, changed := settleMarks(s, shown); changed {
+				t.Fatalf("%d shown changed %v to %v", len(shown), s, next)
+			}
+		}
+	}
+}
+
+// marksApp is an app on dir with projects named names, as a rebuild
+// leaves them.
+func marksApp(dir string, names ...string) *app {
+	a := &app{dir: dir}
+	a.loadMarks()
+	showMarks(a, names...)
+	return a
+}
+
+func showMarks(a *app, names ...string) {
+	a.projects = nil
+	for _, n := range names {
+		a.projects = append(a.projects, a.newProject(nil, keyOf(nil, "/work/"+n)))
+	}
+	a.settleShownMarks()
+}
+
+func marksDrawn(a *app) map[string]projectMark {
+	by := map[string]projectMark{}
+	for _, p := range a.projects {
+		icon, color := p.markNames()
+		by[p.name()] = projectMark{p.name(), icon, color}
+	}
+	return by
+}
+
+func TestAMarkAnotherWindowWroteAtTheSameTimeIsDrawn(t *testing.T) {
+	dir := t.TempDir()
+	a := marksApp(dir, "glitched", "mygo", "pstack-t3")
+	path := filepath.Join(dir, "marks.json")
+	ms, mtime := readMarks(t, dir)
+	ms[0] = projectMark{ms[0].Name, "folder", "#14b8a6"}
+	b, _ := json.Marshal(ms)
+	if err := os.WriteFile(path, append(b, "\n\n"...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Chtimes(path, mtime, mtime)
+	showMarks(a, "glitched", "mygo", "pstack-t3")
+	if got := marksDrawn(a)[ms[0].Name]; got != ms[0] {
+		t.Errorf("%s draws %v; another window wrote %v", ms[0].Name, got, ms[0])
+	}
+}
+
+func TestANewProjectIsMarkedOnTheNextRebuild(t *testing.T) {
+	dir := t.TempDir()
+	a := marksApp(dir, "glitched", "mygo")
+	showMarks(a, "glitched", "mygo")
+	showMarks(a, "glitched", "mygo", "pstack-t3")
+	if ms, _ := readMarks(t, dir); len(ms) != 3 {
+		t.Errorf("marks.json holds %v", ms)
+	}
+	by := marksDrawn(a)
+	if by["pstack-t3"].Icon == by["glitched"].Icon || by["pstack-t3"].Icon == by["mygo"].Icon {
+		t.Errorf("drawn %v", by)
+	}
+}
+
+func TestMarksDeletedWhileTheAppRunsAreWrittenAgainAsTheyWere(t *testing.T) {
+	dir := t.TempDir()
+	a := marksApp(dir, "mygo")
+	showMarks(a, "mygo", "pstack-t3")
+	showMarks(a, "mygo", "pstack-t3", "glitched")
+	before := marksDrawn(a)
+	if err := os.Remove(filepath.Join(dir, "marks.json")); err != nil {
+		t.Fatal(err)
+	}
+	showMarks(a, "mygo", "pstack-t3", "glitched", "sparky")
+	after := marksDrawn(a)
+	for n, m := range before {
+		if after[n] != m {
+			t.Errorf("%s moved from %v to %v", n, m, after[n])
+		}
+	}
+	if ms, _ := readMarks(t, dir); len(ms) != 4 || ms[0].Name != "mygo" || ms[3].Name != "sparky" {
+		t.Errorf("marks.json holds %v", ms)
+	}
+}
+
+func TestMarksThatCantBeSavedHoldForTheSession(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "marks.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var logged syncBuffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	a := marksApp(dir, "glitched", "mygo", "pstack-t3")
+	lines := strings.Count(logged.String(), "\n")
+	if lines == 0 || lines > 2 {
+		t.Errorf("logged %q", logged.String())
+	}
+	for range 5 {
+		showMarks(a, "glitched", "mygo", "pstack-t3")
+	}
+	if strings.Count(logged.String(), "\n") != lines {
+		t.Errorf("rebuilds tried again: %q", logged.String())
+	}
+	by := marksDrawn(a)
+	if by["glitched"].Icon == by["mygo"].Icon || by["mygo"].Icon == by["pstack-t3"].Icon || by["glitched"].Icon == by["pstack-t3"].Icon {
+		t.Errorf("drawn %v", by)
 	}
 }

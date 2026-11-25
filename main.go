@@ -506,10 +506,12 @@ type app struct {
 	added      []addedProject
 	addedEdits uint64
 	// marks are the projects' marks as marks.json holds them, in the order
-	// the projects were first seen; marksRead is the file's time as last
-	// read or written here, and drawnMarks each name's mark to draw.
+	// the projects were first seen; marksRead is the file as last read or
+	// written here, marksShown the names they were last settled for, and
+	// drawnMarks each name's mark to draw.
 	marks      []projectMark
-	marksRead  time.Time
+	marksRead  marksFile
+	marksShown string
 	drawnMarks map[string]projectMark
 	// lastProject is the folder of the project the last thread on each
 	// machine was started in, by machineKey, as last-project.json holds

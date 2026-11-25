@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"glitched/internal/jsonfile"
 )
@@ -60,11 +61,11 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 	}
 
 	type pick struct {
-		at       int // the entry in out; -1 for a new name
-		name     string
-		color    int // the one to start from: stored, or the hash one
-		hashIcon int
-		claim    bool
+		at          int // the entry in out; -1 for a new name
+		name        string
+		icon, color int // the ones to start from: stored, or the hash ones
+		hashIcon    int
+		claim       bool
 	}
 	iconUses := make([]int, len(projectIcons))
 	colorUses := make([]int, len(projectColors))
@@ -94,14 +95,29 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 			}
 		}
 	}
+	byIcon := room+len(frozenIcons) <= len(projectIcons)
+	byPair := !byIcon && room+len(frozenPairs) <= len(projectIcons)*len(projectColors)
 	clash := func(icon, color int) bool {
 		switch {
-		case room+len(frozenIcons) <= len(projectIcons):
+		case byIcon:
 			return iconUses[icon] > 0
-		case room+len(frozenPairs) <= len(projectIcons)*len(projectColors):
+		case byPair:
 			return pairs[[2]int{icon, color}]
 		}
 		return false
+	}
+	// Those not shown hold nothing, but a name that moves keeps off their
+	// marks where it can, those seen before it first, so that the projects
+	// shown now with some, now with others, settle once and stay.
+	type absentMark struct{ at, icon, color int }
+	var absent []absentMark
+	gone := map[string]bool{}
+	for i, m := range out {
+		if !want[m.Name] && !gone[m.Name] {
+			gone[m.Name] = true
+			icon, color := drawn(m)
+			absent = append(absent, absentMark{i, icon, color})
+		}
 	}
 	var picks []pick
 	clear(seen)
@@ -123,7 +139,7 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 			continue
 		}
 		hi, _ := hashMark(m.Name)
-		picks = append(picks, pick{at: i, name: m.Name, color: color, hashIcon: hi})
+		picks = append(picks, pick{at: i, name: m.Name, icon: icon, color: color, hashIcon: hi})
 	}
 	var fresh []string
 	for n := range want {
@@ -134,20 +150,10 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 	slices.Sort(fresh)
 	for _, n := range fresh {
 		hi, hc := hashMark(n)
-		picks = append(picks, pick{at: -1, name: n, color: hc, hashIcon: hi})
+		picks = append(picks, pick{at: -1, name: n, icon: hi, color: hc, hashIcon: hi})
 	}
 
-	// The first of those to hash to an icon no one holds takes it, before
-	// any that must move does, so that a name alone on its hash icon gets it.
-	claimed := map[int]bool{}
-	for k, p := range picks {
-		if iconUses[p.hashIcon] == 0 && !claimed[p.hashIcon] {
-			claimed[p.hashIcon] = true
-			picks[k].claim = true
-		}
-	}
-	settle := func(p pick, icon int) {
-		color := pickColor(icon, p.color, colorUses, pairs)
+	settle := func(p pick, icon, color int) {
 		hold(icon, color)
 		m := projectMark{p.name, projectIcons[icon], projectColors[color]}
 		switch {
@@ -159,14 +165,112 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 			changed = true
 		}
 	}
+	// avoid is what p keeps off: 3 for an icon or pair no one shown or
+	// absent has, 2 for one only those absent seen after p have, 1 for one
+	// only those absent have, 0 for one shown.
+	avoid := func(p pick) (iconRank func(int) int, pairRank func(int, int) int) {
+		before := p.at
+		if before < 0 {
+			before = len(out)
+		}
+		rank := func(shown bool, absentHas func(absentMark) bool) int {
+			if shown {
+				return 0
+			}
+			r := 3
+			for _, x := range absent {
+				if absentHas(x) {
+					r = min(r, 2)
+					if x.at < before {
+						return 1
+					}
+				}
+			}
+			return r
+		}
+		iconRank = func(i int) int {
+			return rank(iconUses[i] > 0, func(x absentMark) bool { return x.icon == i })
+		}
+		pairRank = func(i, c int) int {
+			return rank(pairs[[2]int{i, c}], func(x absentMark) bool { return x.icon == i && x.color == c })
+		}
+		return iconRank, pairRank
+	}
+	pickColor := func(p pick, icon int) int {
+		_, pairRank := avoid(p)
+		n := len(projectColors)
+		best, bestRank := p.color, pairRank(icon, p.color)
+		for d := range n {
+			c := (p.color + d) % n
+			if r := pairRank(icon, c); r > bestRank {
+				best, bestRank = c, r
+			}
+		}
+		return best
+	}
+	// pickIcon is the icon for p, which must move or may: while icons go
+	// round, a free one, kept off those absent have; while pairs do, one
+	// with a pair free, its own if it has one, then a free one. Past that,
+	// the least used; the first from p's hash icon of those as good.
+	pickIcon := func(p pick) int {
+		iconRank, pairRank := avoid(p)
+		score := func(i int) []int {
+			colors := 0
+			for c := range projectColors {
+				colors = max(colors, pairRank(i, c))
+			}
+			free, own := 0, 0
+			if iconUses[i] == 0 {
+				free = 1
+			}
+			if p.at >= 0 && i == p.icon {
+				own = 1
+			}
+			if byIcon {
+				return []int{free, min(iconRank(i), 2), iconRank(i), colors, -iconUses[i]}
+			}
+			return []int{min(colors, 1), own, colors, free, min(iconRank(i), 2), iconRank(i), -iconUses[i]}
+		}
+		n := len(projectIcons)
+		from := p.hashIcon
+		if p.at >= 0 {
+			from = p.icon
+		}
+		best := from
+		for d := range n {
+			if i := (from + d) % n; slices.Compare(score(i), score(best)) > 0 {
+				best = i
+			}
+		}
+		return best
+	}
+
+	// The first to hash to an icon no one holds takes it, before any that
+	// must move does, so that a name alone on its hash icon gets it. One
+	// seen before claims it only where it must move anyway, while icons go
+	// round, and none seen before it is absent with it.
+	claimed := map[int]bool{}
+	for k, p := range picks {
+		if iconUses[p.hashIcon] > 0 || claimed[p.hashIcon] {
+			continue
+		}
+		if p.at >= 0 {
+			if iconRank, _ := avoid(p); !byIcon || iconRank(p.hashIcon) < 2 {
+				continue
+			}
+		}
+		claimed[p.hashIcon] = true
+		picks[k].claim = true
+	}
 	for _, p := range picks {
 		if p.claim {
-			settle(p, p.hashIcon)
+			settle(p, p.hashIcon, pickColor(p, p.hashIcon))
 		}
 	}
 	for _, p := range picks {
 		if !p.claim {
-			settle(p, pickIcon(p.hashIcon, iconUses))
+			icon := pickIcon(p)
+			settle(p, icon, pickColor(p, icon))
 		}
 	}
 	// New names were appended claims first; put them in name order.
@@ -174,46 +278,6 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 		return strings.Compare(a.Name, b.Name)
 	})
 	return out, changed
-}
-
-// pickIcon is the icon for a name that must move off hash: the first free
-// one from there; else the least used, the first from hash of those used
-// as little. While pairs go round, that one has a color free with it.
-func pickIcon(hash int, uses []int) int {
-	n := len(uses)
-	least := hash
-	for d := range n {
-		i := (hash + d) % n
-		if uses[i] == 0 {
-			return i
-		}
-		if uses[i] < uses[least] {
-			least = i
-		}
-	}
-	return least
-}
-
-// pickColor is the color to draw icon with, from start: start while no
-// one has the pair; else the least used color whose pair with icon is
-// free, the first from start of those used as little; else the least used.
-func pickColor(icon, start int, uses []int, pairs map[[2]int]bool) int {
-	if !pairs[[2]int{icon, start}] {
-		return start
-	}
-	n := len(uses)
-	best, bestFree := -1, false
-	for d := range n {
-		c := (start + d) % n
-		free := !pairs[[2]int{icon, c}]
-		switch {
-		case best < 0, free && !bestFree:
-			best, bestFree = c, free
-		case free == bestFree && uses[c] < uses[best]:
-			best = c
-		}
-	}
-	return best
 }
 
 // marksByName is each name's mark to draw: the stored icon and colour, or the
@@ -232,15 +296,32 @@ func marksByName(marks []projectMark) map[string]projectMark {
 
 func (a *app) marksPath() string { return filepath.Join(a.dir, "marks.json") }
 
+// marksFile is what a stat of marks.json says of it: another window that
+// writes it changes its time or its size, or both. One that writes as
+// many bytes within the same tick of the clock goes unseen till the next
+// write; that is the risk taken for a stat a rebuild, not a read.
+type marksFile struct {
+	mod  time.Time
+	size int64
+}
+
+func (a *app) statMarks() marksFile {
+	fi, err := os.Stat(a.marksPath())
+	if err != nil {
+		return marksFile{}
+	}
+	return marksFile{fi.ModTime(), fi.Size()}
+}
+
+func (f marksFile) same(g marksFile) bool { return f.mod.Equal(g.mod) && f.size == g.size }
+
 // loadMarks takes the projects' marks as marks.json holds them.
 func (a *app) loadMarks() {
+	a.marksRead, a.marksShown = a.statMarks(), ""
 	a.marks = nil
 	if err := jsonfile.Load(a.marksPath(), &a.marks); err != nil {
 		log.Printf("glitched: marks: %v", err)
 		a.marks = nil
-	}
-	if fi, err := os.Stat(a.marksPath()); err == nil {
-		a.marksRead = fi.ModTime()
 	}
 	a.drawnMarks = marksByName(a.marks)
 }
@@ -252,12 +333,12 @@ var errMarksSettled = errors.New("marks settled")
 // settleShownMarks gives the projects the sidebar has a mark each, as
 // settleMarks does, onto what another window wrote to marks.json since,
 // and writes the file only when that changes it. Marks it couldn't save
-// hold here for as long as the app runs.
+// hold here for as long as the app runs. With the same projects shown,
+// and the file as it was, there is nothing to do.
 func (a *app) settleShownMarks() {
-	if a.dir != "" {
-		if fi, err := os.Stat(a.marksPath()); err == nil && !fi.ModTime().Equal(a.marksRead) {
-			a.loadMarks()
-		}
+	// A file gone leaves the marks here, to write again.
+	if f := a.statMarks(); a.dir != "" && !f.same(marksFile{}) && !f.same(a.marksRead) {
+		a.loadMarks()
 	}
 	var names []string
 	for _, p := range a.projects {
@@ -265,12 +346,25 @@ func (a *app) settleShownMarks() {
 			names = append(names, p.name())
 		}
 	}
+	slices.Sort(names)
+	names = slices.Compact(names)
+	shown := strings.Join(names, "\x00")
+	if shown == a.marksShown && a.drawnMarks != nil {
+		return
+	}
+	a.marksShown = shown
+	before := a.marks
 	if out, changed := settleMarks(a.marks, names); changed {
 		a.marks = out
 		if a.dir != "" {
 			ms, err := jsonfile.EditOrReset(a.marksPath(), func(ms *[]projectMark) error {
-				out, changed := settleMarks(*ms, names)
-				if !changed {
+				// A file gone, or made anew, leaves the marks here to keep.
+				from, lost := *ms, len(*ms) == 0 && len(before) > 0
+				if lost {
+					from = before
+				}
+				out, changed := settleMarks(from, names)
+				if !changed && !lost {
 					return errMarksSettled
 				}
 				*ms = out
@@ -278,10 +372,7 @@ func (a *app) settleShownMarks() {
 			})
 			switch {
 			case err == nil || errors.Is(err, errMarksSettled):
-				a.marks = ms
-				if fi, err := os.Stat(a.marksPath()); err == nil {
-					a.marksRead = fi.ModTime()
-				}
+				a.marks, a.marksRead = ms, a.statMarks()
 			default:
 				log.Printf("glitched: marks: %v", err)
 			}
