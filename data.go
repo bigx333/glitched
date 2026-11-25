@@ -177,10 +177,10 @@ type entry struct {
 	// when the turn failed or was stopped: there is something to ask
 	// again.
 	retry bool
-	// A run's work: whether some of it is still going, and for how long it
-	// went, as said and as a duration, zero while it goes.
-	working bool
-	worked  time.Duration
+	// A run's work: whether some of it is still going, and when it started
+	// and ended, zero while it goes.
+	working        bool
+	started, ended time.Time
 	// paused is what a run's last work says while the run waits on a
 	// request.
 	paused  string
@@ -605,8 +605,8 @@ func unfinished(end *client.TurnEnd) bool {
 func workEntry(key string, w *client.WorkEntry) entry {
 	e := entry{key: key, kind: entryWork, work: w.Items, working: w.Ended.IsZero(), took: "Working…", run: w.Run}
 	if !e.working {
-		e.worked = w.Ended.Sub(w.Started)
-		e.took = "Worked for " + e.worked.Round(time.Second).String()
+		e.started, e.ended = w.Started, w.Ended
+		e.took = "Worked for " + w.Ended.Sub(w.Started).Round(time.Second).String()
 	}
 	return e
 }

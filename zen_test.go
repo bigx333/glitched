@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,8 +35,13 @@ func zenRow(key string, kind entryKind, run api.ID) entry {
 	return entry{key: key, kind: kind, run: run}
 }
 
+// zenClock is when the next zenWork starts: each works a second, one
+// after another.
+var zenClock atomic.Int64
+
 func zenWork(key string, run api.ID, steps ...api.WorkStatus) entry {
-	e := entry{key: key, kind: entryWork, run: run, worked: time.Second}
+	at := time.Unix(zenClock.Add(2), 0)
+	e := entry{key: key, kind: entryWork, run: run, started: at, ended: at.Add(time.Second)}
 	for _, s := range steps {
 		e.work = append(e.work, client.WorkStep{Status: s})
 	}
@@ -133,7 +139,7 @@ func TestZenFoldsASilentRun(t *testing.T) {
 func TestZenKeepsTheReplyBeingWritten(t *testing.T) {
 	r := api.NewID()
 	es := []entry{zenRow("u", entryUser, r), zenWork("w1", r), zenRow("a1", entryAssistant, r)}
-	es[1].working, es[1].worked = true, 0
+	es[1].working, es[1].started, es[1].ended = true, time.Time{}, time.Time{}
 	es[2].streaming = true
 	v := zenView(es, nil)
 	wantShape(t, es, v, "u", "fold(w1)", "a1")
@@ -451,11 +457,11 @@ func BenchmarkZenView(b *testing.B) {
 func TestWorkEntryKeepsHowLongItWorked(t *testing.T) {
 	start := time.Date(2026, 11, 25, 9, 0, 0, 0, time.UTC)
 	e := workEntry("w", &client.WorkEntry{Started: start, Ended: start.Add(1500 * time.Millisecond)})
-	if e.worked != 1500*time.Millisecond || e.took != "Worked for 2s" {
-		t.Fatalf("worked %v, took %q", e.worked, e.took)
+	if e.ended.Sub(e.started) != 1500*time.Millisecond || e.took != "Worked for 2s" {
+		t.Fatalf("worked %v to %v, took %q", e.started, e.ended, e.took)
 	}
-	if e := workEntry("w", &client.WorkEntry{Started: start}); e.worked != 0 || !e.working {
-		t.Fatalf("running work worked %v", e.worked)
+	if e := workEntry("w", &client.WorkEntry{Started: start}); !e.started.IsZero() || !e.working {
+		t.Fatalf("running work started %v", e.started)
 	}
 }
 

@@ -18,8 +18,8 @@ type zenFold struct {
 	key string
 	// rows are the rows it folds, in order.
 	rows          []int
-	steps, failed int // failed is the folded steps that failed
-	worked        time.Duration
+	steps, failed int           // failed is the folded steps that failed
+	worked        time.Duration // the time its work covers, once each
 	working       bool
 	paused        string
 }
@@ -312,15 +312,19 @@ func (v *timelineView) addTurn(start, end int, open map[string]bool) {
 		if !work {
 			continue
 		}
+		var spans [][2]time.Time
 		for _, i := range f.rows {
 			of[i-start] = f
 			if e := es[i]; e.kind == entryWork {
 				f.steps += len(e.work)
 				f.failed += failedSteps(e.work)
-				f.worked += e.worked
 				f.working = f.working || e.working
+				if !e.started.IsZero() {
+					spans = append(spans, [2]time.Time{e.started, e.ended})
+				}
 			}
 		}
+		f.worked = covered(spans)
 	}
 	lines := map[*zenFold]int{}
 	for i := start; i < end; i++ {
@@ -336,6 +340,24 @@ func (v *timelineView) addTurn(start, end int, open map[string]bool) {
 		v.at[i] = len(v.items)
 		v.items = append(v.items, listItem{row: i})
 	}
+}
+
+// covered is how long the spans cover, counting a time two of them share
+// once.
+func covered(spans [][2]time.Time) time.Duration {
+	slices.SortFunc(spans, func(x, y [2]time.Time) int { return x[0].Compare(y[0]) })
+	var d time.Duration
+	var end time.Time
+	for _, s := range spans {
+		if s[0].After(end) {
+			end = s[0]
+		}
+		if s[1].After(end) {
+			d += s[1].Sub(end)
+			end = s[1]
+		}
+	}
+	return d
 }
 
 func failedSteps(ws []client.WorkStep) int {

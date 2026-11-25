@@ -30,7 +30,7 @@ func zenTurns(n int) []client.Entry {
 				Started: at, Ended: at.Add(12 * time.Second)},
 			&client.AssistantEntry{Run: run, Text: zenBetween(i)},
 			&client.WorkEntry{Run: run, Items: []client.WorkStep{{Item: "s2", Kind: "edit", Title: "Edited chat.go", Status: api.WorkCompleted, Started: at, Ended: at}},
-				Started: at, Ended: at.Add(30 * time.Second)},
+				Started: at.Add(12 * time.Second), Ended: at.Add(42 * time.Second)},
 			&client.AssistantEntry{Run: run, Text: zenFinal(i)},
 		)
 	}
