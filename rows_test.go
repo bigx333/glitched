@@ -18,10 +18,13 @@ import (
 // following it does, wherever in the thread they land, with snapshots that
 // replace it and commands sent from here, and checks after each that the
 // rows the timeline reads are entriesOf's, with the files, turns and
-// waiting requests they hold.
+// waiting requests they hold. In the quiet half, events land only in the
+// newest runs, with no snapshot, so the rows far up stay as they are, as
+// Zen's folds of them do.
 func TestRowsFollowTheTranscript(t *testing.T) {
-	for seed := range uint64(4) {
+	for seed := range uint64(8) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
+			quiet := seed >= 4
 			r := rand.New(rand.NewPCG(seed, 7))
 			a := &app{rows: map[api.ID]*rowsCache{}, listed: map[api.ID]*timelineMemo{}}
 			a.settings.zen = true
@@ -39,9 +42,10 @@ func TestRowsFollowTheTranscript(t *testing.T) {
 				played = append(played, e)
 				tr.Apply(e)
 			}
-			// Mostly the newest, where a thread changes, and else any.
+			// Mostly the newest, where a thread changes, and else any;
+			// when quiet, only the newest.
 			pick := func(n int) int {
-				if r.IntN(2) == 0 {
+				if quiet || r.IntN(2) == 0 {
 					return max(0, n-1-r.IntN(4))
 				}
 				return r.IntN(n)
@@ -119,8 +123,16 @@ func TestRowsFollowTheTranscript(t *testing.T) {
 					queued = append(queued, id)
 				},
 				func() {
+					// A steer into the newest run starts a turn of the run.
+					id := api.NewID()
+					pos++
+					play(api.MessageQueued{Message: id, Text: "steer", Mode: api.SteerActive, Pos: pos})
+					play(api.MessageClaimed{Message: id, Run: runs[len(runs)-1], Steer: true})
+					play(api.MessageDispatched{Message: id})
+				},
+				func() {
 					// A snapshot replaces the transcript, as reconnecting does.
-					if r.IntN(10) == 0 {
+					if !quiet && r.IntN(10) == 0 {
 						var fresh client.Transcript
 						for _, e := range played {
 							fresh.Apply(e)
@@ -150,6 +162,15 @@ func TestRowsFollowTheTranscript(t *testing.T) {
 				},
 			}
 			for i := range 1200 {
+				// Zen turns off for long enough that the rows of the turns
+				// it folded change and settle, and on again.
+				stays := 96
+				if a.settings.zen {
+					stays = 16
+				}
+				if r.IntN(stays) == 0 {
+					a.settings.zen = !a.settings.zen
+				}
 				if r.IntN(8) == 0 {
 					pending[r.IntN(len(pending))]()
 				} else {
@@ -182,7 +203,11 @@ func TestRowsFollowTheTranscript(t *testing.T) {
 				}
 				// The Zen view, its folds kept while their rows stay the
 				// same, is the one built afresh.
-				if kept, fresh := a.viewFor(th.id(), got), zenView(want, nil); !slices.Equal(shape(got.es, kept), shape(want, fresh)) ||
+				if !a.settings.zen {
+					if v := a.viewFor(th.id(), got); v.items != nil {
+						t.Fatalf("step %d: with Zen off the view folds", i)
+					}
+				} else if kept, fresh := a.viewFor(th.id(), got), zenView(want, nil); !slices.Equal(shape(got.es, kept), shape(want, fresh)) ||
 					!slices.EqualFunc(folds(kept), folds(fresh), func(x, y *zenFold) bool { return reflect.DeepEqual(*x, *y) }) {
 					t.Fatalf("step %d: the Zen view is %q, built afresh %q", i, shape(got.es, kept), shape(want, fresh))
 				}

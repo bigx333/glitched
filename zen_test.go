@@ -532,3 +532,74 @@ func TestZenUpdateBuildsOnlyTheLiveTurnsAgain(t *testing.T) {
 		t.Fatalf("an update costs %v allocations with Zen on, %v off", cost[true], cost[false])
 	}
 }
+
+// A reply that explains two commands shows while either card waits: the
+// first answered, it still explains the second.
+func TestZenKeepsTheReplyWhileARequestAfterItWaits(t *testing.T) {
+	r := api.NewID()
+	es := []entry{zenRow("u", entryUser, r), zenWork("w0", r), zenRow("a1", entryAssistant, r), zenAsk("q1", r, api.KindApproval), zenAsk("q2", r, api.KindApproval)}
+	wantShape(t, es, zenView(es, nil), "u", "fold(w0)", "a1", "q1", "q2")
+	es[3].request.State = api.RequestAnswered
+	es = append(es, zenWork("w1", r))
+	v := zenView(es, nil)
+	wantShape(t, es, v, "u", "fold(w0 w1)", "a1", "q1", "q2")
+	if got := v.fold(1).paused; got != "Paused for approval" {
+		t.Fatalf("paused %q", got)
+	}
+	es[4].request.State = api.RequestAnswered
+	wantShape(t, es, zenView(es, nil), "u", "fold(w0 a1 w1)", "q1", "q2")
+}
+
+// A steer between a command starting and its approval puts them in turns
+// of their own, of one run: the run's line says it's paused, and the reply
+// that explains the command shows.
+func TestZenPausesARunAcrossASteer(t *testing.T) {
+	r := api.NewID()
+	msg := "m/" + r.String()
+	es := []entry{zenRow(msg, entryUser, r), zenRow("a1", entryAssistant, r), zenWork("w1", r), zenRow("steer", entryUser, r), zenAsk("q", r, api.KindApproval)}
+	es[2].working = true
+	v := zenView(es, nil)
+	wantShape(t, es, v, msg, "a1", "fold(w1)", "steer", "q")
+	if got := v.fold(2).paused; got != "Paused for approval" {
+		t.Fatalf("paused %q", got)
+	}
+	es[4].request.State = api.RequestAnswered
+	v = zenView(es, nil)
+	wantShape(t, es, v, msg, "fold(a1 w1)", "steer", "q")
+	if f := v.fold(1); f.paused != "" || !f.working {
+		t.Fatalf("answered, paused %q, working %v", f.paused, f.working)
+	}
+}
+
+// A turn's fold kept from before Zen turned off is built again if its rows
+// changed while it was off: its approval answered, its command failed and
+// the thread grown past it.
+func TestZenBuildsAgainAFoldThatChangedWhileOff(t *testing.T) {
+	run := api.NewID()
+	work := &client.WorkEntry{Run: run, Items: []client.WorkStep{{Item: "c", Kind: "command", Title: "Ran it", Status: api.WorkStarted}}}
+	ask := &client.RequestEntry{Run: run, Request: api.NewID(), Kind: api.KindApproval, State: api.RequestPending}
+	tr := &client.Transcript{Entries: []client.Entry{&client.UserEntry{Message: run, Text: "ask", State: client.Sent}, work, ask}}
+	th := thread{Thread: &client.Thread{Transcript: tr}}
+	a := &app{rows: map[api.ID]*rowsCache{}, listed: map[api.ID]*timelineMemo{}}
+	a.settings.zen = true
+	if f := a.viewFor(th.id(), a.rowsOf(th)).fold(1); f == nil || f.paused == "" {
+		t.Fatalf("the waiting turn's line is %+v", f)
+	}
+	a.settings.zen = false
+	ask.State = api.RequestAnswered
+	work.Items[0].Status = api.WorkFailed
+	a.posts++
+	a.viewFor(th.id(), a.rowsOf(th))
+	tr.Entries = append(tr.Entries, zenTurns(2*rowsLive/5)...)
+	a.posts++
+	a.viewFor(th.id(), a.rowsOf(th))
+	a.settings.zen = true
+	rs := a.rowsOf(th)
+	if rs.stable < 3 {
+		t.Fatalf("the turn's rows aren't stable: %d", rs.stable)
+	}
+	kept, fresh := a.viewFor(th.id(), rs).fold(1), zenView(rs.es, nil).fold(1)
+	if kept.paused != fresh.paused || kept.failed != fresh.failed {
+		t.Fatalf("the line kept is paused %q with %d failed, built afresh %q with %d", kept.paused, kept.failed, fresh.paused, fresh.failed)
+	}
+}
