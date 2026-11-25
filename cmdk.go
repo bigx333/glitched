@@ -10,6 +10,8 @@ import (
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/widget"
 )
@@ -35,6 +37,7 @@ func (a *app) openCommandPalette() {
 		return
 	}
 	a.cmdkOpen, a.cmdkQuery, a.cmdkIndex = true, "", 0
+	a.cmdkHits, a.cmdkSearched = nil, ""
 	a.cmdkOpens++
 }
 
@@ -93,6 +96,7 @@ func (a *app) actions() []command {
 	}
 	cmds = append(cmds,
 		action("model.switch", "Switch model", "", "sparkles", a.openModelPicker),
+		action("thread.find", "Find in thread", "⌘F", "search", func() { a.router.Push("/"); a.openFind() }),
 		action("diff.toggle", "Toggle diff panel", "⌘D", "pull-request", func() { a.showDiff = !a.showDiff }),
 		action("terminal.toggle", "Toggle terminal", "⌘J", "terminal", func() { a.showTerminal = !a.showTerminal }),
 		action("preview.toggle", "Toggle preview", "⇧⌘P", "global", a.togglePreview),
@@ -127,7 +131,68 @@ func (a *app) commands() []command {
 			shown = append(shown, cmd)
 		}
 	}
+	if !actionsOnly && len(query) >= 2 && len(a.cmdkHits) > 0 {
+		shown = append(shown, a.messageCommands(query)...)
+	}
 	return shown
+}
+
+func (a *app) triggerCmdkSearch(query string) {
+	q := strings.TrimSpace(query)
+	if len(q) < 2 {
+		a.cmdkHits, a.cmdkSearched = nil, ""
+		return
+	}
+	if q == a.cmdkSearched {
+		return
+	}
+	a.cmdkSearched = q
+	a.cmdkSearchGen++
+	gen := a.cmdkSearchGen
+	a.backend.Search(q, 20, func(hits []client.SearchMatch) {
+		if a.cmdkSearchGen == gen && a.cmdkOpen {
+			a.cmdkHits = hits
+		}
+	})
+}
+
+func (a *app) messageCommands(query string) []command {
+	var out []command
+	for _, hit := range a.cmdkHits {
+		th := a.findThreadByID(hit.Env, hit.Hit.Thread)
+		if th == nil {
+			continue
+		}
+		tCopy := *th
+		snippet := strings.TrimSpace(strings.ReplaceAll(hit.Hit.Snippet, "\n", " "))
+		if snippet == "" {
+			snippet = hit.Hit.Role + " match"
+		}
+		out = append(out, command{
+			section: "Messages",
+			label:   title(tCopy),
+			hint:    snippet,
+			run: func() {
+				a.select_(tCopy)
+				a.revealing = tCopy.id()
+				a.openFindWith(query)
+			},
+			t: &tCopy,
+		})
+	}
+	return out
+}
+
+func (a *app) findThreadByID(env *client.Env, id api.ID) *thread {
+	for _, p := range a.projects {
+		for i := range p.threads {
+			th := p.threads[i]
+			if th.id() == id && (env == nil || th.env == env) {
+				return &th
+			}
+		}
+	}
+	return nil
 }
 
 // threadCommands are the palette's threads, the most recently active
@@ -228,6 +293,9 @@ func (a *app) commandPalette(c *ui.Context) {
 // nativePalette is Glitched's own drawing of the palette, which shows
 // where no plugin draws it.
 func (a *app) nativePalette(c *ui.Context) {
+	if query, actionsOnly := strings.CutPrefix(a.cmdkQuery, ">"); !actionsOnly {
+		a.triggerCmdkSearch(query)
+	}
 	cmds := a.commands()
 	a.cmdkIndex = max(0, min(a.cmdkIndex, len(cmds)-1))
 	// The arrows move the choice from the search field, which keeps
@@ -272,7 +340,7 @@ func (a *app) nativePalette(c *ui.Context) {
 	l := &a.cmdkList
 	l.Key = func(i int) any {
 		if t := cmds[i].t; t != nil {
-			return t.id()
+			return cmds[i].section + "/" + t.id().String()
 		}
 		return cmds[i].section + "/" + cmds[i].label
 	}

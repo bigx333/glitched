@@ -649,13 +649,23 @@ type app struct {
 	// stamps are messages' times as their toolbars write them.
 	stamps map[stampKey][2]string
 
-	cmdkOpen  bool
-	cmdkQuery string
-	cmdkIndex int
+	cmdkOpen      bool
+	cmdkQuery     string
+	cmdkIndex     int
+	cmdkHits      []client.SearchMatch
+	cmdkSearched  string
+	cmdkSearchGen int
 	// cmdkOpens counts the palette's openings, each a copy of its own of
 	// the palette component, which none of the last one's state shows in.
 	cmdkOpens int
 	cmdkList  ui.ListState
+
+	findOpen   bool
+	findQuery  string
+	findThread api.ID
+	findIndex  int
+	findFocus  bool
+	findJump   bool
 
 	glassOffset ui.Point
 	checkUntil  time.Time
@@ -1064,6 +1074,9 @@ func (a *app) pages(c *ui.Context) {
 func (a *app) shortcuts(c *ui.Context) {
 	if c.Shortcut(ui.Cmd, ui.KeyK) {
 		a.openCommandPalette()
+	}
+	if c.Shortcut(ui.Cmd, ui.KeyF) && a.router.Path() == "/" && !a.terminalFocused {
+		a.openFind()
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyN) {
 		a.newThread()

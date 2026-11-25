@@ -574,6 +574,11 @@ func (h *Host) boot(ctx context.Context) error {
 	return nil
 }
 
+// Search queries the full-text transcript index over non-deleted threads.
+func (h *Host) Search(ctx context.Context, q api.SearchQuery) (api.SearchResult, error) {
+	return h.store.Search(ctx, q)
+}
+
 // work leases effects for threads that have none in flight, so one thread's
 // effects run in order and threads never wait on each other.
 func (h *Host) work() {

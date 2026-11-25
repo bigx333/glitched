@@ -60,6 +60,8 @@ type Server struct {
 	// Replies says what a run said last, for a link following a thread it
 	// started here, or any client the server admits.
 	Replies Replies
+	// Search queries the full-text transcript index for any admitted client.
+	Search Searcher
 	// Authorize admits a socket whose client proved, in the handshake, that
 	// it holds one of the keys Authorize knows. proved reports whether the
 	// proof was made with a key; Authorize asks it of every key it knows,
@@ -377,6 +379,11 @@ type Plugins interface {
 // its parent.
 type Replies interface {
 	ChildReply(ctx context.Context, q api.ChildReplyQuery) (api.ChildReply, error)
+}
+
+// Searcher searches indexed user and assistant messages across threads.
+type Searcher interface {
+	Search(ctx context.Context, q api.SearchQuery) (api.SearchResult, error)
 }
 
 // Asks are what glitched mcp asks of the engine for request_credentials.
@@ -717,6 +724,9 @@ func (s *Server) methods() map[string]handler {
 	}
 	if r := s.Replies; r != nil {
 		m["child.reply"] = callHandler(r.ChildReply)
+	}
+	if sr := s.Search; sr != nil {
+		m["search"] = callHandler(sr.Search)
 	}
 	if h := s.Hub; h != nil {
 		m["hub.append"] = callHandler(h.Append)

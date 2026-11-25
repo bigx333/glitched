@@ -690,10 +690,17 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 	if version < 16 {
 		sqlText = threadsV15 + sqlText
 	}
+	if version < 18 {
+		sqlText += ftsV17
+	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
 	}
 }
+
+const ftsV17 = `
+	DROP TABLE IF EXISTS transcript_fts;
+`
 
 // The runs table up to version 6, before a run kept its model and access.
 const runsV6 = `
@@ -1622,5 +1629,109 @@ func TestACancelledWriteStops(t *testing.T) {
 	_, err = s.Submit(closing, settle, time.Now())
 	if took := time.Since(began); !errors.Is(err, context.Canceled) || took > time.Second {
 		t.Fatalf("a write cancelled waiting for the lock returned %v after %s, want context.Canceled at once", err, took)
+	}
+}
+
+func TestVersion17UpgradesWithFTS5AndBackfills(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+
+	th := api.NewID()
+	if _, err := s.Submit(ctx, create(th), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	r1 := api.NewID()
+	if _, err := s.Submit(ctx, api.Command{ID: r1, Target: th, Body: api.MessageDispatch{Text: "legacy deploy pipeline check", Mode: api.StartNow}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, th, engine.Started{Run: r1}, time.Now(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, th, engine.Delta{Run: r1, Text: "verified telemetry "}, time.Now(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, th, engine.Delta{Run: r1, Text: "collector config"}, time.Now(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, th, engine.Ended{Run: r1, Outcome: api.OutcomeCompleted}, time.Now(), 0); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	// Downgrade to schema 17 (dropping transcript_fts) and reopen to trigger v17 -> v18 migration.
+	downgrade(t, path, "", 17)
+	s = open(t, path)
+	defer s.Close()
+
+	for _, q := range []string{"deploy pipeline", "telemetry collector"} {
+		res, err := s.Search(ctx, api.SearchQuery{Query: q})
+		if err != nil {
+			t.Fatalf("Search(%q) = %v", q, err)
+		}
+		if len(res.Hits) != 1 || res.Hits[0].Thread != th {
+			t.Fatalf("Search(%q) = %+v, want hit for thread %s", q, res.Hits, th)
+		}
+	}
+}
+
+func TestSearchFTS5LiveIndexAndDelete(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, filepath.Join(t.TempDir(), "host.db"))
+
+	t1 := api.NewID()
+	if _, err := s.Submit(ctx, create(t1), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	r1 := api.NewID()
+	if _, err := s.Submit(ctx, api.Command{ID: r1, Target: t1, Body: api.MessageDispatch{Text: "configure websocket auth rate-limit", Mode: api.StartNow}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, t1, engine.Started{Run: r1}, time.Now(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, t1, engine.Delta{Run: r1, Text: "Added handshakeLimiter with exponential backoff."}, time.Now(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, t1, engine.Ended{Run: r1, Outcome: api.OutcomeCompleted}, time.Now(), 0); err != nil {
+		t.Fatal(err)
+	}
+
+	t2 := api.NewID()
+	if _, err := s.Submit(ctx, create(t2), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: t2, Body: api.MessageDispatch{Text: "another rate-limiter note", Mode: api.StartNow}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Prefix + punctuation-safe search should match both threads cleanly.
+	res, err := s.Search(ctx, api.SearchQuery{Query: "rate-lim"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Hits) != 2 {
+		t.Fatalf("Search(\"rate-lim\") returned %d hits: %+v", len(res.Hits), res.Hits)
+	}
+
+	// Thread-scoped search returns matching entries in that thread only.
+	resOne, err := s.Search(ctx, api.SearchQuery{Query: "exponential", Thread: t1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resOne.Hits) != 1 || resOne.Hits[0].Role != "assistant" {
+		t.Fatalf("thread-scoped search = %+v", resOne.Hits)
+	}
+
+	// Deleting t1 removes its rows from transcript_fts.
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: t1, Body: api.ThreadDelete{}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	resAfterDelete, err := s.Search(ctx, api.SearchQuery{Query: "handshakeLimiter"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resAfterDelete.Hits) != 0 {
+		t.Fatalf("deleted thread still searchable: %+v", resAfterDelete.Hits)
 	}
 }

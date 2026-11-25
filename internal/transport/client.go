@@ -736,6 +736,12 @@ func (e *EndpointClient) Open(ctx context.Context, s api.Subscription) (api.Stre
 	return open[api.StreamItem](ctx, e.c, "subscribe", s)
 }
 
+// Search queries the full-text transcript index on this engine.
+func (e *EndpointClient) Search(ctx context.Context, q api.SearchQuery) (api.SearchResult, error) {
+	var out api.SearchResult
+	return out, e.c.call(ctx, "search", q, &out)
+}
+
 // HubClient reaches the hub replica on another node. It is the uploader's
 // hub.Client.
 type HubClient struct{ c *conn }

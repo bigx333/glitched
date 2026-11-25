@@ -85,6 +85,7 @@ func (a *app) chatPage(c *ui.Context) {
 				// Before the composer, whose ⌘⏎ would send or stop.
 				a.approvalKeys(c, pane, t, rs)
 				a.composer(c, t, rs)
+				a.findBar(c, t, rs)
 			})
 			// A server's workspace isn't here for a shell. The diff panel,
 			// opened from an edit, says its files are there.
@@ -538,9 +539,26 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) (laid bool) {
 	// The agents strip sits over the composer: the end clears it too.
 	room := composerRoom + a.agentsRoom(t) + a.queueRoom(t)
 	at := thinkingAt(t, rs)
+	var matchSet map[int]bool
+	activeMatch := -1
+	if a.findOpen && strings.TrimSpace(a.findQuery) != "" && t.id() == a.findThread {
+		if ms := findMatches(rs.es, a.findQuery); len(ms) > 0 {
+			matchSet = make(map[int]bool, len(ms))
+			for _, idx := range ms {
+				matchSet[idx] = true
+			}
+			activeMatch = ms[max(0, min(a.findIndex, len(ms)-1))]
+		}
+	}
 	list := ui.List(c.Key(t.id()), l, len(es), func(i int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
-			ui.Column(c).Grow(1).MinWidth(0).MaxWidth(contentWidth).Gap(22).Children(func() {
+			col := ui.Column(c).Grow(1).MinWidth(0).MaxWidth(contentWidth).Gap(22)
+			if i == activeMatch {
+				col.Background(palette.accent.Alpha(0.10)).Border(1, palette.accent.Alpha(0.45)).Radius(10).Padding(6, 8)
+			} else if matchSet[i] {
+				col.Background(palette.accent.Alpha(0.05)).Border(1, palette.border).Radius(10).Padding(6, 8)
+			}
+			col.Children(func() {
 				a.entry(c, t, rs, i)
 				if i == at {
 					a.thinkingRow(c, t)

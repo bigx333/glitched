@@ -252,11 +252,19 @@ CREATE TABLE effects (
 	state   TEXT NOT NULL CHECK (state IN ('pending', 'leased', 'done'))
 ) STRICT;
 CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
+
+CREATE VIRTUAL TABLE transcript_fts USING fts5(
+	thread_id UNINDEXED,
+	seq UNINDEXED,
+	role UNINDEXED,
+	body,
+	tokenize='unicode61'
+);
 `
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 17
+const schemaVersion = 18
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -385,6 +393,36 @@ ALTER TABLE threads ADD COLUMN origin TEXT;
 `,
 	// Retire old outbox work without replaying changes to the worktree.
 	16: `UPDATE effects SET state = 'done' WHERE kind IN ('checkpoint.capture', 'checkpoint.drop', 'thread.revert') AND state <> 'done';`,
+	// Full-text transcript search over user messages and completed assistant turns.
+	17: `
+CREATE VIRTUAL TABLE IF NOT EXISTS transcript_fts USING fts5(
+	thread_id UNINDEXED,
+	seq UNINDEXED,
+	role UNINDEXED,
+	body,
+	tokenize='unicode61'
+);
+INSERT INTO transcript_fts (thread_id, seq, role, body)
+SELECT hex(e.thread), e.seq, 'user', json_extract(CAST(e.payload AS TEXT), '$.text')
+FROM events e
+JOIN threads t ON t.id = e.thread
+WHERE t.deleted = 0 AND e.type = 'message.queued'
+  AND COALESCE(json_extract(CAST(e.payload AS TEXT), '$.silent'), 0) = 0
+  AND COALESCE(json_extract(CAST(e.payload AS TEXT), '$.text'), '') <> '';
+INSERT INTO transcript_fts (thread_id, seq, role, body)
+SELECT hex(sub.thread), MIN(sub.seq), 'assistant', group_concat(sub.txt, '')
+FROM (
+	SELECT e.thread AS thread, e.seq AS seq,
+		json_extract(CAST(e.payload AS TEXT), '$.run') AS run_id,
+		json_extract(CAST(e.payload AS TEXT), '$.text') AS txt
+	FROM events e
+	JOIN threads t ON t.id = e.thread
+	WHERE t.deleted = 0 AND e.type = 'assistant.delta'
+	ORDER BY e.seq
+) sub
+GROUP BY sub.thread, sub.run_id
+HAVING COALESCE(group_concat(sub.txt, ''), '') <> '';
+`,
 }
 
 func (s *Store) migrate() error {
