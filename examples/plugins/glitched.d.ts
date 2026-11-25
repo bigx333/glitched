@@ -146,6 +146,8 @@ type Widget = {
       onChange?: Handler;
       /** Enter, in a single-line input. */
       onSubmit?: Handler;
+      /** The input loses the keyboard. */
+      onBlur?: Handler;
     }
   | {
       type: "toggle";
@@ -1039,6 +1041,8 @@ declare const glitched: {
   };
   /** The preview browser in this window. Needs ui.place. */
   browser: {
+    /** The address loses the keyboard. */
+    blur(tab: number): Promise<void>;
     /** Keeps the tab's typed address as the user types it. */
     draft(tab: number, text: string): Promise<void>;
     navigate(tab: number, url: string): Promise<void>;

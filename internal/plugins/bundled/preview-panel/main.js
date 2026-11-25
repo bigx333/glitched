@@ -1,35 +1,29 @@
 // The preview browser's chrome. The page itself stays the native web view;
 // browse.Page and the agent browser stay core.
-export function init() {
-  return { state: { address: {} } };
-}
-
 const click = (handler, payload) => payload === undefined ? handler : { handler, payload };
 const iconButton = (id, icon, tooltip, handler, disabled) => ({
   type: "button", id, style: "ghost", tooltip, disabled: !!disabled, padding: [5],
   onClick: handler, children: [{ type: "icon", id: id + "-icon", name: icon, fontSize: 15 }],
 });
 
-export function place({ state, items }) {
+export function place({ items }) {
   return items.map(({ context }) => {
     if (!context) return { type: "row" };
-    if (context.part === "header") return header(state, context);
+    if (context.part === "header") return header(context);
     if (context.part === "tabs") return tabs(context);
     return body(context);
   });
 }
 
-function header(state, ctx) {
-  const id = String(ctx.active);
-  const typed = state.address[id];
-  const address = typed === undefined ? ctx.draft || ctx.url : typed;
+function header(ctx) {
+  const address = ctx.draft || ctx.url;
   return { type: "row", height: ctx.barHeight, padding: [0, 8 + ctx.barRight, 0, 10], gap: 4, align: "center", children: [
     iconButton("back", "arrow-left", "Back", click("back", ctx.active), !ctx.canBack),
     iconButton("forward", "arrow-right", "Forward", click("forward", ctx.active), !ctx.canForward),
     ctx.loading
       ? iconButton("stop", "close", "Stop", click("stop", ctx.active), false)
       : iconButton("reload", "refresh", "Reload  ⌘R", click("reload", ctx.active), !ctx.page && !ctx.error),
-    { type: "input", id: "address", label: "Address", placeholder: "Type an address", value: address, controlled: true, focus: ctx.focus, grow: true, onChange: "address", onSubmit: "navigate" },
+    { type: "input", id: "address", label: "Address", placeholder: "Type an address", value: address, controlled: true, focus: ctx.focus, grow: true, onChange: "address", onSubmit: "navigate", onBlur: "blur" },
     iconButton("new-tab", "plus", "New tab  ⌘T", "newTab", false),
     iconButton("external", "square-share-line", "Open in browser", "external", !ctx.url),
     iconButton("close-preview", "close", "Close preview", "closePreview", false),
@@ -50,7 +44,7 @@ function tabs(ctx) {
 }
 
 function body(ctx) {
-  if (ctx.page) return { type: "native", id: "webview", name: "browser.webview" };
+  if (ctx.page) return { type: "native", id: "webview", name: "browser.webview", grow: true };
   if (ctx.error) return centered([{ type: "text", text: "The preview could not start: " + ctx.error, color: "$text.muted", padding: [24] }]);
   if (!ctx.url) return centered([
     { type: "icon", name: "globe", fontSize: 28, color: "$text.muted" },
@@ -69,18 +63,15 @@ export async function update({ state, event }) {
   const ctx = event.place.context || {};
   const tab = event.payload ?? ctx.active;
   switch (event.handler) {
-    case "address": {
-      const text = String(event.value ?? "");
-      await glitched.browser.draft(ctx.active, text);
-      const address = { ...state.address, [String(ctx.active)]: text };
-      return { state: { ...state, address } };
-    }
-    case "navigate": {
-      await glitched.browser.navigate(ctx.active, event.value ?? state.address[String(ctx.active)] ?? ctx.draft);
-      const address = { ...state.address };
-      delete address[String(ctx.active)];
-      return { state: { ...state, address } };
-    }
+    case "address":
+      await glitched.browser.draft(ctx.active, String(event.value ?? ""));
+      return {};
+    case "blur":
+      await glitched.browser.blur(ctx.active);
+      return {};
+    case "navigate":
+      await glitched.browser.navigate(ctx.active, event.value ?? ctx.draft);
+      return {};
     case "back": await glitched.browser.back(tab); return {};
     case "forward": await glitched.browser.forward(tab); return {};
     case "reload": await glitched.browser.reload(tab); return {};

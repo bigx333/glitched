@@ -255,6 +255,8 @@ type Node struct {
 	OnClick  *Handler `json:"onClick,omitempty"`
 	OnChange *Handler `json:"onChange,omitempty"`
 	OnSubmit *Handler `json:"onSubmit,omitempty"`
+	// OnBlur is an input's, as it loses the keyboard.
+	OnBlur *Handler `json:"onBlur,omitempty"`
 	// OnClose is a dialog's, as the user dismisses it.
 	OnClose *Handler `json:"onClose,omitempty"`
 

@@ -149,9 +149,10 @@ type tap struct {
 }
 
 type control struct {
-	kind string
-	text string // an input's text, a select's value
-	on   bool   // a toggle's
+	kind    string
+	focused bool
+	text    string // an input's text, a select's value
+	on      bool   // a toggle's
 	// seen is the value the plugin last gave, as JSON, so that only a
 	// value it changes overrides the user's.
 	seen string
@@ -725,6 +726,11 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			if n.Focus {
 				e.Focus()
 			}
+			focused := e.Focused()
+			if ctl.focused && !focused {
+				r.fire(n, n.OnBlur, "blur", nil)
+			}
+			ctl.focused = focused
 			if n.Style == "bare" {
 				e.AutoFocus().Grow(1).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).Padding(0).FontSize(15)
 			}

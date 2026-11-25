@@ -461,6 +461,8 @@ func (a *app) browserEffect(e plugins.Effect) (any, error) {
 		}
 		t.draft = in.Text
 		a.browser.typing = true
+	case "browser.blur":
+		a.browser.typing = false
 	case "browser.closeTab":
 		a.closeTab(i)
 	case "browser.activateTab":
