@@ -286,8 +286,6 @@ func (d *decision) local(id api.ID, b api.Intent) error {
 		err = d.move(b)
 	case api.QueueSteer:
 		err = d.steer(b)
-	case api.ThreadRevert:
-		err = d.revert(id, b)
 	case api.ResumeCancel:
 		err = d.cancelResume(b)
 	default:
@@ -865,7 +863,6 @@ func (d *decision) admit(message api.ID) error {
 		return nil
 	}
 	m := d.t.Queue[d.t.messageAt(message)]
-	first := len(d.t.Runs) == 0
 	var texts []string
 	var with []api.ID
 	for _, w := range d.t.Queue {
@@ -887,28 +884,12 @@ func (d *decision) admit(message api.ID) error {
 			return err
 		}
 	}
-	if first {
-		d.checkpoint(message, api.CheckpointBase)
-	}
 	d.effects = append(d.effects, StartTurn{
 		Run: message, Generation: gen, Text: strings.Join(texts, "\n\n"), Workspace: d.t.Workspace, Model: d.t.Model, Access: d.t.Access,
 	})
 	return nil
 }
 
-// checkpoint has the runtime save the files of the thread's worktree for
-// run, before anything later in the commit, such as the next turn's start.
-// Only a thread of the user's in a worktree of its own keeps checkpoints:
-// a child's files are its parent's, and a folder the thread shares is
-// never one it can restore. A silent run changes no files.
-func (d *decision) checkpoint(run api.ID, phase api.CheckpointPhase) {
-	if d.t.checkpointed() && !d.t.silentRun(run) {
-		d.effects = append(d.effects, CaptureCheckpoint{Run: run, Phase: phase})
-	}
-}
-
-// sent marks the wakes that went in with run's first message as handed to
-// its agent, as that message is.
 func (d *decision) sent(run api.ID) error {
 	var ids []api.ID
 	for _, m := range d.t.Queue {
@@ -1027,7 +1008,6 @@ func (d *decision) stop(r Run) error {
 		if err := d.emit(api.TurnEnded{Run: r.ID, Outcome: api.OutcomeAbandoned}); err != nil {
 			return err
 		}
-		d.checkpoint(r.ID, api.CheckpointRun)
 		return nil
 	}
 	if err := d.emit(api.TurnStopping{Run: r.ID}); err != nil {
@@ -1315,78 +1295,7 @@ func (d *decision) delete(b api.ThreadDelete) error {
 	if b.RemoveWorktree && d.t.Branch != "" {
 		d.effects = append(d.effects, RemoveWorktree{Workspace: d.t.Workspace, Project: d.t.Project, Branch: d.t.Branch})
 	}
-	if d.t.checkpointed() {
-		d.effects = append(d.effects, DropCheckpoints{})
-	}
 	return d.emit(api.ThreadDeleted{})
-}
-
-// revert has the runtime put the thread's files back as a checkpoint of
-// the thread's holds them, rewind its conversation to that checkpoint's
-// run, or both. A thread with no worktree of its own keeps no
-// checkpoints, nor does a child, whose work reaches the user through its
-// parent's branch; and a run at work could write the files under the
-// revert, or add to the conversation, so the thread is idle. The runtime
-// finds whether the checkpoint was saved, and refuses a tree at work or a
-// folder another thread works in before this commits.
-//
-// A conversation rewinds to the end of a run with a turn of the user's
-// after it, as the base has no turn before it; to a recovery checkpoint it
-// undoes the rewind that took it, which the runtime finds and checks is
-// the thread's last.
-func (d *decision) revert(id api.ID, b api.ThreadRevert) error {
-	switch {
-	case !b.Files && !b.Conversation:
-		return rejected("a revert puts back the files, the conversation, or both")
-	case !d.t.Parent.IsZero():
-		return rejected("A child thread keeps no checkpoints; revert its parent instead")
-	case b.Files && !d.t.checkpointed():
-		return rejected("Revert needs this thread to run in its own worktree")
-	case d.t.Live() != nil && b.Files:
-		return rejected("Stop the thread before reverting its files")
-	case d.t.Live() != nil:
-		return rejected("Stop the thread before rewinding its conversation")
-	}
-	switch b.To.Phase {
-	case api.CheckpointBase:
-		if len(d.t.Runs) == 0 || d.t.Runs[0].ID != b.To.ID {
-			return rejected("the base checkpoint is its first run's")
-		}
-	case api.CheckpointRun:
-		if d.t.runAt(b.To.ID) < 0 || d.t.silentRun(b.To.ID) {
-			return rejected("no run of the thread's has that checkpoint")
-		}
-	case api.CheckpointRecovery:
-		if b.To.ID.IsZero() {
-			return rejected("a recovery checkpoint is named by its revert")
-		}
-	default:
-		return rejected("unknown checkpoint")
-	}
-	var dropped []api.ID
-	if b.Conversation && b.To.Phase != api.CheckpointRecovery {
-		switch {
-		case b.To.Phase == api.CheckpointBase:
-			return rejected("Nothing comes before the thread's first turn to rewind its conversation to")
-		case d.t.Runs[d.t.runAt(b.To.ID)].Dropped:
-			return rejected("A rewind took this turn out of the conversation")
-		}
-		user := false
-		for _, r := range d.t.Runs[d.t.runAt(b.To.ID)+1:] {
-			if !r.Dropped {
-				dropped = append(dropped, r.ID)
-				user = user || !r.Silent
-			}
-		}
-		if !user {
-			return rejected("The conversation already ends at this turn")
-		}
-	}
-	if err := d.emit(api.ThreadReverting{Revert: id, To: b.To, Conversation: b.Conversation, KeepFiles: !b.Files}); err != nil {
-		return err
-	}
-	d.effects = append(d.effects, RevertThread{Revert: id, To: b.To, Conversation: b.Conversation, KeepFiles: !b.Files, Dropped: dropped})
-	return nil
 }
 
 func (d *decision) rename(b api.ThreadRename) error {
@@ -1428,8 +1337,8 @@ func (d *decision) observe(o Observation) error {
 	switch o := o.(type) {
 	case Bound:
 		// A run that is no longer the thread's binds nothing.
-		if isLive(o.Run) && (o.Rewound != "" || o.Session != "" && o.Session != d.t.Session) {
-			return d.emit(api.SessionBound{Run: o.Run, Session: o.Session, Rewound: o.Rewound})
+		if isLive(o.Run) && (o.Fork != "" || o.Session != "" && o.Session != d.t.Session) {
+			return d.emit(api.SessionBound{Run: o.Run, Session: o.Session, Fork: o.Fork})
 		}
 	case Started:
 		if !isLive(o.Run) {
@@ -1468,7 +1377,6 @@ func (d *decision) observe(o Observation) error {
 			if err := d.emit(api.TurnEnded{Run: o.Run, Outcome: o.Outcome, Error: o.Error, Tokens: o.Tokens, Limit: limit, Head: o.Head}); err != nil {
 				return err
 			}
-			d.checkpoint(o.Run, api.CheckpointRun)
 			// A run being stopped or a silent maintenance run reports nothing.
 			switch {
 			case stopped || silent:
@@ -1510,12 +1418,6 @@ func (d *decision) observe(o Observation) error {
 		if isLive(o.Plan.Run) {
 			return d.emit(o.Plan)
 		}
-	case Captured:
-		if d.t.runAt(o.Checkpoint.Run) >= 0 {
-			return d.emit(o.Checkpoint)
-		}
-	case Reverted:
-		return d.emit(o.Revert)
 	case Surfaced:
 		dup := index(d.t.Requests, func(r Request) bool { return r.Run == o.Run && r.Dedup == o.Dedup }) >= 0
 		if isLive(o.Run) && !dup && live.Silent {

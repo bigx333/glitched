@@ -25,7 +25,7 @@ var ErrWithdrawn = errors.New("The agent stopped waiting before the answer reach
 // models, it says nothing of what the account runs.
 var ErrSignedOut = errors.New("signed out")
 
-// ErrNoConversation is what Rewind returns, wrapped with the provider's
+// ErrNoConversation is what ForkConversation returns, wrapped with the provider's
 // words, when the provider no longer has the conversation it is to
 // branch off: no branch of it can be made, ever.
 var ErrNoConversation = errors.New("the agent no longer has the conversation")
@@ -78,53 +78,34 @@ type AskResult struct {
 
 // Sessioned is an Agent whose provider chose its own id for the thread's
 // conversation. The host reads it after Open and stores it before Start,
-// or, in a run that takes up a rewind, once Start sent the run's message,
+// or, in a fork, once Start sent the run's message,
 // and gives it back in SessionSpec.Session to the thread's later runs.
 type Sessioned interface{ Session() string }
 
-// Rewinder is an Adapter that can rewind a thread's conversation in its
-// provider's own terms. Rewind never calls a model. An adapter that isn't
-// one, or whose Rewind returns a portable Rewind, has the thread's next
-// run start a new conversation, which the host hands the kept turns.
-type Rewinder interface {
-	Rewind(ctx context.Context, spec RewindSpec) (Rewind, error)
+// ConversationForker can branch from a source conversation without
+// changing it. The host hands off the turns if no native fork was made.
+type ConversationForker interface {
+	ForkConversation(ctx context.Context, spec ForkSpec) (ConversationFork, error)
 }
 
-// RewindSpec is a rewind of Thread's conversation, Session, to where its
-// run Head left it, which Revert, the revert's command, asks; or a fork
-// of it there, which Revert, the fork's thread, asks. Dropped are
-// the Heads of the runs after it, oldest first, "" for one that said
-// none. Compacted is that the provider compacted the conversation in one
-// of those.
-type RewindSpec struct {
-	Thread, Revert api.ID
+type ForkSpec struct {
+	Thread, Target api.ID
 	Workspace      string
 	Session, Head  string
 	Dropped        []string
 	Compacted      bool
 }
 
-// Rewind is how the adapter rewound the conversation: Session is the
-// thread's from now on, "" for a new one its provider names. Native is
-// that it holds the kept turns as the provider had them. At is, when the
-// adapter makes the native conversation at the thread's next run, where
-// it branches off spec.Session, which SessionSpec.Rewound gives it back.
-type Rewind struct {
+type ConversationFork struct {
 	Session string
 	Native  bool
 	At      string
 }
 
-// Rewound is the rewind the run's agent takes up, when the thread's
-// conversation was rewound since its last run opened one. From and At are
-// the Rewind's, set for an adapter that makes the native conversation
-// now; without them the run starts a new one.
-type Rewound struct{ From, At string }
+// ForkLaunch identifies a native fork an adapter opens at the next run.
+type ForkLaunch struct{ From, At string }
 
-// Rewinding is an Agent opened for a SessionSpec with Rewound that says
-// whether it took up the native conversation; the host hands any other
-// agent the kept turns in the run's message.
-type Rewinding interface{ Native() bool }
+type NativeFork interface{ Native() bool }
 
 // Grant is how one of Glitched's access levels reaches an agent: the
 // permission mode its session runs in, "" for the agent's own, and what
@@ -236,11 +217,8 @@ type SessionSpec struct {
 	Skills Skills
 	// Tap sees each line on the pipes of the program the run's agent runs
 	// in, which may serve the thread's later runs too; nil sees none.
-	Tap Tap
-	// Rewound is the rewind this run takes up, nil when there is none. A
-	// program the thread's earlier runs left holds the conversation before
-	// it, which the run's agent never runs in.
-	Rewound *Rewound
+	Tap  Tap
+	Fork *ForkLaunch
 }
 
 // Skills are Glitched's skills a run's agent gets. Root is a Claude Code
@@ -450,7 +428,7 @@ type TurnEnded struct {
 	// it; nil when none did or the provider can't tell.
 	Limit *api.UsageLimit
 	// Head is where the turn left the conversation, in the adapter's own
-	// terms, which RewindSpec gives it back: "" where it can't say.
+	// terms, which ForkSpec gives it back: "" where it can't say.
 	Head string
 }
 

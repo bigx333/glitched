@@ -17,15 +17,15 @@ import (
 // fake's with three turns: one, two and three.
 type forking struct {
 	n      node
-	fake   *rewinder
-	other  *rewinder
+	fake   *forkAdapter
+	other  *forkAdapter
 	thread api.ID
 	runs   []api.TurnEnded
 }
 
-func newForking(t *testing.T, rewind provider.Rewind, native bool) forking {
+func newForking(t *testing.T, rewind provider.ConversationFork, native bool) forking {
 	t.Helper()
-	f := forking{fake: newRewinder(rewind, nil, native), other: newRewinder(provider.Rewind{}, nil, false), thread: api.NewID()}
+	f := forking{fake: newForkAdapter(rewind, nil, native), other: newForkAdapter(provider.ConversationFork{}, nil, false), thread: api.NewID()}
 	st, err := store.Open(filepath.Join(t.TempDir(), "host.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func (f forking) untouched(t *testing.T, before int, session string) {
 // one, none after it, and its next message is its own. The source stays
 // as it was, and its provider is never asked to fork anything.
 func TestAThreadGoesOnOnAnotherProvider(t *testing.T) {
-	f := newForking(t, provider.Rewind{Session: "forked", Native: true}, true)
+	f := newForking(t, provider.ConversationFork{Session: "forked", Native: true}, true)
 	before, session := len(events(t, f.n.h, f.thread)), sessionOf(t, f.n.st, f.thread)
 	fork := f.fork(t, 1, "other", "go on")
 	f.again(t, fork, "and again", 2)
@@ -96,39 +96,38 @@ func TestAThreadGoesOnOnAnotherProvider(t *testing.T) {
 		strings.Index(handed, "<user>\ntwo") > strings.Index(handed, "<user>\none") {
 		t.Fatalf("the fork's first message %q; want turns two and one, then its own", handed)
 	}
-	if sent[1] != "and again" || opened[0].Rewound == nil || *opened[0].Rewound != (provider.Rewound{}) || opened[0].Session != "" || opened[1].Rewound != nil {
-		t.Fatalf("sent %q, opened %+v then %+v; want the handoff taken up by the first run alone", sent[1], opened[0].Rewound, opened[1].Rewound)
+	if sent[1] != "and again" || opened[0].Fork == nil || *opened[0].Fork != (provider.ForkLaunch{}) || opened[0].Session != "" || opened[1].Fork != nil {
+		t.Fatalf("sent %q, opened %+v then %+v; want the handoff taken up by the first run alone", sent[1], opened[0].Fork, opened[1].Fork)
 	}
 	if specs, _, _ := f.fake.seen(); len(specs) != 0 {
-		t.Fatalf("the source's provider was asked to rewind %+v", specs)
+		t.Fatalf("the source's provider was asked to fork %+v", specs)
 	}
-	if bs := boundOf(t, f.n.h, fork); len(bs) != 1 || bs[0].Rewound != api.RewindPortable {
+	if bs := boundOf(t, f.n.h, fork); len(bs) != 1 || bs[0].Fork != api.ForkPortable {
 		t.Fatalf("the fork's session.bound %+v; want one, portable", bs)
 	}
 	f.untouched(t, before, session)
 	assertReplay(t, f.n.st)
 }
 
-// A fork on the source's provider forks its conversation at the turn, as
-// a rewind would, without its later turns: the fork resumes the
+// A fork on the source's provider forks its conversation at the turn, without its later turns: the fork resumes the
 // provider's fork, and its agent is handed nothing.
 func TestAForkOnItsProviderForksTheConversation(t *testing.T) {
-	f := newForking(t, provider.Rewind{Session: "forked", Native: true, At: "at"}, true)
+	f := newForking(t, provider.ConversationFork{Session: "forked", Native: true, At: "at"}, true)
 	before, session := len(events(t, f.n.h, f.thread)), sessionOf(t, f.n.st, f.thread)
 	fork := f.fork(t, 1, "fake", "go on")
 	f.again(t, fork, "and again", 2)
 	specs, opened, sent := f.fake.seen()
-	if len(specs) != 1 || !reflect.DeepEqual(specs[0], provider.RewindSpec{Thread: f.thread, Revert: fork, Workspace: "/src/app", Session: session, Head: f.runs[1].Head, Dropped: []string{f.runs[2].Head}}) {
-		t.Fatalf("rewind specs %+v; want the source's conversation forked at its second turn, the third dropped", specs)
+	if len(specs) != 1 || !reflect.DeepEqual(specs[0], provider.ForkSpec{Thread: f.thread, Target: fork, Workspace: "/src/app", Session: session, Head: f.runs[1].Head, Dropped: []string{f.runs[2].Head}}) {
+		t.Fatalf("fork specs %+v; want the source's conversation forked at its second turn, the third dropped", specs)
 	}
 	last := opened[len(opened)-2:]
-	if last[0].Session != "forked" || last[0].Rewound == nil || *last[0].Rewound != (provider.Rewound{From: session, At: "at"}) || last[1].Rewound != nil || last[1].Session != "forked" {
+	if last[0].Session != "forked" || last[0].Fork == nil || *last[0].Fork != (provider.ForkLaunch{From: session, At: "at"}) || last[1].Fork != nil || last[1].Session != "forked" {
 		t.Fatalf("the fork opened %+v then %+v; want the provider's fork taken up once, then resumed", last[0], last[1])
 	}
 	if got := sent[len(sent)-2:]; got[0] != "go on" || got[1] != "and again" {
 		t.Fatalf("the fork sent %q; want its own messages alone", got)
 	}
-	if bs := boundOf(t, f.n.h, fork); len(bs) != 1 || bs[0].Session != "forked" || bs[0].Rewound != api.RewindNative {
+	if bs := boundOf(t, f.n.h, fork); len(bs) != 1 || bs[0].Session != "forked" || bs[0].Fork != api.ForkNative {
 		t.Fatalf("the fork's session.bound %+v; want the provider's fork, native", bs)
 	}
 	f.untouched(t, before, session)
@@ -139,11 +138,11 @@ func TestAForkOnItsProviderForksTheConversation(t *testing.T) {
 // take up, hands the turns over as text instead.
 func TestAForkTheProviderCantMakeIsHandedTheTurns(t *testing.T) {
 	for name, tc := range map[string]struct {
-		rewind provider.Rewind
+		rewind provider.ConversationFork
 		native bool
 	}{
-		"no native fork":         {rewind: provider.Rewind{Session: "s"}},
-		"one the agent couldn't": {rewind: provider.Rewind{Session: "forked", Native: true, At: "at"}},
+		"no native fork":         {rewind: provider.ConversationFork{Session: "s"}},
+		"one the agent couldn't": {rewind: provider.ConversationFork{Session: "forked", Native: true, At: "at"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newForking(t, tc.rewind, tc.native)
@@ -152,34 +151,12 @@ func TestAForkTheProviderCantMakeIsHandedTheTurns(t *testing.T) {
 			if handed := sent[len(sent)-1]; !strings.HasPrefix(handed, "<forked_conversation>") || !strings.Contains(handed, "<user>\none\n</user>") || strings.Contains(handed, "two") {
 				t.Fatalf("the fork's first message %q; want the first turn handed", handed)
 			}
-			if bs := boundOf(t, f.n.h, fork); len(bs) != 1 || bs[0].Rewound != api.RewindPortable {
+			if bs := boundOf(t, f.n.h, fork); len(bs) != 1 || bs[0].Fork != api.ForkPortable {
 				t.Fatalf("the fork's session.bound %+v", bs)
 			}
 			assertReplay(t, f.n.st)
 		})
 	}
-}
-
-// A fork goes on from the conversation its source held when it was made:
-// a rewind of the source since that drops the fork's turn leaves the
-// fork's handoff as it was.
-func TestAForkKeepsTheConversationItWasMadeFrom(t *testing.T) {
-	path, dir := dbPath(t), tempDir(t)
-	ad := newRewinder(provider.Rewind{}, nil, false)
-	r := twoTurnsWith(t, path, dir, repo(t), ad)
-	fork := api.NewID()
-	submit(t, r.n.h, fork, api.ThreadCreate{Workspace: r.ws, Title: "fork", Model: api.ModelRef{Provider: "fake", Model: "fake"}, Fork: &api.Fork{Thread: r.thread, Run: r.run.Run}})
-	submit(t, r.n.h, r.thread, api.ThreadRevert{To: runCheckpoint(r.first), Conversation: true})
-	if got := untilReverted(t, r.n.h, r.thread, 1); got.Conversation != api.RewindPortable {
-		t.Fatalf("the source's rewind %+v", got)
-	}
-	submit(t, r.n.h, fork, dispatch("go on", api.StartNow))
-	until(t, r.n.h, fork, "the fork's first turn", func(th api.Thread) bool { return idle(th) && len(runsOf(t, r.n.h, fork)) == 1 })
-	_, _, sent := ad.seen()
-	if handed := sent[len(sent)-1]; !strings.HasPrefix(handed, "<forked_conversation>") || !strings.Contains(handed, "<user>\nnext\n</user>") || !strings.HasSuffix(handed, "go on") {
-		t.Fatalf("the fork's first message %q; want the turn the source dropped since handed", handed)
-	}
-	assertReplay(t, r.n.st)
 }
 
 // A fork's first message that never reached its agent hands the turns
@@ -188,7 +165,7 @@ func TestAForkKeepsTheConversationItWasMadeFrom(t *testing.T) {
 func TestAForkHandsTheTurnsWithTheFirstMessageSent(t *testing.T) {
 	for name, first := range map[string]string{"a start that failed": "go on", "a command": "/status"} {
 		t.Run(name, func(t *testing.T) {
-			f := newForking(t, provider.Rewind{}, false)
+			f := newForking(t, provider.ConversationFork{}, false)
 			if first == "go on" {
 				f.other.mu.Lock()
 				f.other.failStarts = 1
@@ -208,7 +185,7 @@ func TestAForkHandsTheTurnsWithTheFirstMessageSent(t *testing.T) {
 			if len(sent) != want || !strings.HasPrefix(sent[want-2], "<forked_conversation>") || !strings.HasSuffix(sent[want-2], "now") || sent[want-1] != "later" {
 				t.Fatalf("the fork sent %q; want the turns handed once, with \"now\"", sent)
 			}
-			if bs := boundOf(t, f.n.h, fork); !slices.ContainsFunc(bs, func(b api.SessionBound) bool { return b.Rewound == api.RewindPortable }) {
+			if bs := boundOf(t, f.n.h, fork); !slices.ContainsFunc(bs, func(b api.SessionBound) bool { return b.Fork == api.ForkPortable }) {
 				t.Fatalf("the fork's session.bound %+v", bs)
 			}
 			assertReplay(t, f.n.st)

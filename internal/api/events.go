@@ -416,14 +416,28 @@ type ThreadRenamed struct {
 }
 
 // SessionBound is the provider's id for the thread's conversation, as the
-// run's agent bound it: the thread's later runs resume it. Rewound is,
-// on the first run after a revert rewound the conversation, how the
-// run's agent took it up: natively, or as a new session the run's
-// message hands the kept turns to.
+// run's agent bound it: the thread's later runs resume it. Fork records
+// how the first prompt took up its fork's source conversation.
 type SessionBound struct {
-	Run     ID         `json:"run"`
-	Session string     `json:"session"`
-	Rewound RewindKind `json:"rewound,omitempty"`
+	Run     ID       `json:"run"`
+	Session string   `json:"session"`
+	Fork    ForkKind `json:"fork,omitempty"`
+}
+
+func (b *SessionBound) UnmarshalJSON(p []byte) error {
+	type bound SessionBound
+	var v struct {
+		bound
+		LegacyFork ForkKind `json:"rewound"`
+	}
+	if err := json.Unmarshal(p, &v); err != nil {
+		return err
+	}
+	*b = SessionBound(v.bound)
+	if b.Fork == "" {
+		b.Fork = v.LegacyFork
+	}
+	return nil
 }
 
 // ThreadConfigured is the model and access the thread's turns run at from
@@ -481,126 +495,12 @@ type DispositionChanged struct {
 	Fence int `json:"fence,omitempty"`
 }
 
-// CheckpointPhase is when a checkpoint was taken: base before a thread's
-// first run, run at the end of each run, and recovery before a revert
-// put files back, so that the revert can be undone.
-type CheckpointPhase string
+type ForkKind string
 
 const (
-	CheckpointBase     CheckpointPhase = "base"
-	CheckpointRun      CheckpointPhase = "run"
-	CheckpointRecovery CheckpointPhase = "recovery"
+	ForkNative   ForkKind = "native"
+	ForkPortable ForkKind = "portable"
 )
-
-// CheckpointRef names one of a thread's checkpoints: the base or a run's
-// by the run, and a recovery one by the revert that took it.
-type CheckpointRef struct {
-	Phase CheckpointPhase `json:"phase"`
-	ID    ID              `json:"id"`
-}
-
-type CheckpointStatus string
-
-const (
-	CheckpointReady   CheckpointStatus = "ready"
-	CheckpointSkipped CheckpointStatus = "skipped" // over a budget, or a folder it can't save whole
-	CheckpointFailed  CheckpointStatus = "failed"  // git failed
-)
-
-// CheckpointCaptured is a checkpoint of the thread's worktree: its files as
-// Run left them, or as they were before it in the base phase, saved in the
-// engine's own store under refs/glitched/<thread>/base or
-// refs/glitched/<thread>/run/<run>. Commit is that ref's commit, Head the
-// checkout's HEAD then, Files and Bytes what it holds, and Changed how many
-// paths differ from Since, the thread's checkpoint before it, if any. Reason
-// says why one is skipped or failed, or on a ready one what it had to do
-// the slow way. Transcript only.
-type CheckpointCaptured struct {
-	Run     ID               `json:"run"`
-	Phase   CheckpointPhase  `json:"phase"`
-	Status  CheckpointStatus `json:"status"`
-	Reason  string           `json:"reason,omitempty"`
-	Commit  string           `json:"commit,omitempty"`
-	Head    string           `json:"head,omitempty"`
-	Files   int              `json:"files,omitempty"`
-	Bytes   int64            `json:"bytes,omitempty"`
-	Changed int              `json:"changed,omitempty"`
-	Since   string           `json:"since,omitempty"`
-	Ms      int64            `json:"ms"`
-}
-
-// ThreadReverting is a revert the engine is to do: Revert is its command,
-// and To the checkpoint it goes back to. It puts the files back unless
-// KeepFiles, and rewinds the conversation too when Conversation. It moves
-// the thread's revision and nothing else of its view.
-type ThreadReverting struct {
-	Revert       ID            `json:"revert"`
-	To           CheckpointRef `json:"to"`
-	Conversation bool          `json:"conversation,omitempty"`
-	KeepFiles    bool          `json:"keepFiles,omitempty"`
-}
-
-type RevertStatus string
-
-const (
-	RevertRestored  RevertStatus = "restored"
-	RevertUnchanged RevertStatus = "unchanged" // the files were as To has them
-	RevertFailed    RevertStatus = "failed"    // nothing changed, or what had was put back
-	RevertKept      RevertStatus = "kept"      // the revert left the files as they were, as asked
-)
-
-// RewindKind is how a revert rewound a thread's conversation.
-type RewindKind string
-
-const (
-	// RewindNative: the provider's own conversation, cut after To's run.
-	RewindNative RewindKind = "native"
-	// RewindPortable: a new conversation, whose first message hands the
-	// agent each kept turn's message and reply.
-	RewindPortable RewindKind = "portable"
-	// RewindFailed: the conversation couldn't be rewound, so nothing changed.
-	RewindFailed RewindKind = "failed"
-)
-
-// ThreadReverted is what a revert did: Changed is how many paths it put
-// back as To has them, and Recovery the commit of the checkpoint it took
-// of the files first, which a revert to it undoes. Error says why one
-// failed. HEAD, the index and the branch stay as they were.
-//
-// Conversation is how it rewound the conversation, "" when it wasn't
-// asked to. Session is then the thread's conversation from now on, ""
-// for a new one its provider names, and From the one it was. At is where
-// a native rewind's new conversation branches off From, in its provider's
-// terms, when the provider makes it at the thread's next run. Until that
-// run takes it up, natively or as a portable one where its provider can't
-// or lost the one it made, the rewind is pending. Dropped is the
-// runs after To the conversation held, which it no longer does. A revert
-// either does all it was asked or changes nothing. One that undoes a
-// rewind, To the rewind's recovery checkpoint, rewinds the conversation to
-// where it was before it: Restored is the runs the rewind dropped, which
-// the conversation holds again.
-//
-// It moves the thread's revision; one that rewound the conversation sets
-// the thread's session, and clears what the thread knew of its context.
-type ThreadReverted struct {
-	Revert       ID            `json:"revert"`
-	To           CheckpointRef `json:"to"`
-	Status       RevertStatus  `json:"status"`
-	Changed      int           `json:"changed,omitempty"`
-	Recovery     string        `json:"recovery,omitempty"`
-	Error        string        `json:"error,omitempty"`
-	Conversation RewindKind    `json:"conversation,omitempty"`
-	Session      string        `json:"session,omitempty"`
-	From         string        `json:"from,omitempty"`
-	At           string        `json:"at,omitempty"`
-	Dropped      []ID          `json:"dropped,omitempty"`
-	Restored     []ID          `json:"restored,omitempty"`
-}
-
-// Rewound is whether the revert rewound the thread's conversation.
-func (r ThreadReverted) Rewound() bool {
-	return r.Conversation == RewindNative || r.Conversation == RewindPortable
-}
 
 func (ThreadCreated) eventType() string       { return "thread.created" }
 func (MessageQueued) eventType() string       { return "message.queued" }
@@ -639,9 +539,6 @@ func (SessionBound) eventType() string        { return "session.bound" }
 func (ContextReported) eventType() string     { return "context.reported" }
 func (AccessGranted) eventType() string       { return "access.granted" }
 func (ModelConfirmed) eventType() string      { return "model.confirmed" }
-func (CheckpointCaptured) eventType() string  { return "checkpoint.captured" }
-func (ThreadReverting) eventType() string     { return "thread.reverting" }
-func (ThreadReverted) eventType() string      { return "thread.reverted" }
 func (ResumeCancelled) eventType() string     { return "resume.cancelled" }
 func (WorktreeReady) eventType() string       { return "worktree.ready" }
 func (WorktreeFailed) eventType() string      { return "worktree.failed" }
@@ -690,9 +587,6 @@ func init() {
 	register[ContextReported]()
 	register[AccessGranted]()
 	register[ModelConfirmed]()
-	register[CheckpointCaptured]()
-	register[ThreadReverting]()
-	register[ThreadReverted]()
 	register[ResumeCancelled]()
 	register[WorktreeReady]()
 	register[WorktreeFailed]()

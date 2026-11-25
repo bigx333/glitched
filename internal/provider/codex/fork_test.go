@@ -17,7 +17,7 @@ func TestAForkForksTheSourcesCodexThread(t *testing.T) {
 	fork := spec(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	r, err := a.Rewind(ctx, provider.RewindSpec{Thread: src.Thread, Revert: fork.Thread, Workspace: fork.Workspace, Session: session, Head: heads[0], Dropped: heads[1:]})
+	r, err := a.ForkConversation(ctx, provider.ForkSpec{Thread: src.Thread, Target: fork.Thread, Workspace: fork.Workspace, Session: session, Head: heads[0], Dropped: heads[1:]})
 	if err != nil || !r.Native || r.Session == session {
 		t.Fatalf("the fork's rewind %+v, %v", r, err)
 	}
@@ -25,12 +25,12 @@ func TestAForkForksTheSourcesCodexThread(t *testing.T) {
 		t.Fatalf("forks %s", forks)
 	}
 
-	fork.Run, fork.Session, fork.Rewound = api.NewID(), r.Session, &provider.Rewound{From: session}
+	fork.Run, fork.Session, fork.Fork = api.NewID(), r.Session, &provider.ForkLaunch{From: session}
 	g := open(t, a, fork)
 	do(t, g, provider.Start{Text: "three"})
 	got := text(turn(t, g))
-	if !g.(provider.Rewinding).Native() || g.(provider.Sessioned).Session() != r.Session {
-		t.Errorf("the fork's run: native %v, session %q, want %q", g.(provider.Rewinding).Native(), g.(provider.Sessioned).Session(), r.Session)
+	if !g.(provider.NativeFork).Native() || g.(provider.Sessioned).Session() != r.Session {
+		t.Errorf("the fork's run: native %v, session %q, want %q", g.(provider.NativeFork).Native(), g.(provider.Sessioned).Session(), r.Session)
 	}
 	closeRun(t, g)
 	if got != "earlier you said: one" {

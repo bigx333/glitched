@@ -16,9 +16,9 @@ import (
 	"glitched/internal/provider"
 )
 
-var _ provider.Rewinder = (*Adapter)(nil)
+var _ provider.ConversationForker = (*Adapter)(nil)
 
-// Claude Code's hidden flags that rewind a conversation, which its --help
+// Claude Code's hidden flags for branching from a source conversation, which its --help
 // leaves out. A launch passes one only where its program holds it.
 const (
 	flagResumeAt  = "--resume-session-at"
@@ -34,24 +34,19 @@ type head struct {
 	Prompt string `json:"prompt,omitempty"`
 }
 
-// branch is where a native rewind branches off: From, the session it
+// branch is where a native fork branches off: From, the session it
 // forks, At, the message the kept conversation ends with, and Drops, the
-// one run it drops, by its prompt. It is a Rewind's At.
+// one run it drops, by its prompt. It is a ConversationFork's At.
 type branch struct {
 	From  string `json:"from,omitempty"`
 	At    string `json:"at"`
 	Drops string `json:"drops,omitempty"`
 }
 
-// Rewind names the thread's new session, uuidOf the revert: the thread's
-// own uuid may be its session already. A fork's thread is another than
-// spec.Thread, whose session it forks. The rewind is native where the
-// program holds the flags that fork a conversation at a message, the
-// target run said where it left it, and no dropped run compacted it,
-// which leaves the target's messages out of the transcript. The fork is
-// made at the next launch.
-func (a *Adapter) Rewind(ctx context.Context, spec provider.RewindSpec) (provider.Rewind, error) {
-	r := provider.Rewind{Session: uuidOf(spec.Revert)}
+// ForkConversation prepares a new session at the source's last message
+// in the selected turn, if the installed program supports it.
+func (a *Adapter) ForkConversation(ctx context.Context, spec provider.ForkSpec) (provider.ConversationFork, error) {
+	r := provider.ConversationFork{Session: uuidOf(spec.Target)}
 	var h head
 	json.Unmarshal([]byte(spec.Head), &h)
 	prog, err := a.program()
@@ -72,21 +67,17 @@ func (a *Adapter) Rewind(ctx context.Context, spec provider.RewindSpec) (provide
 	return r, nil
 }
 
-// rewound starts the claude of a run that takes up a rewind: on session,
-// the fork an earlier launch made, else one it makes now at the rewind's
-// branch; else, where Claude Code can't or won't fork, on a new
-// conversation of a session of its own, so that only a fork is ever
-// session. It says whether claude holds the kept conversation, and the
-// session it runs.
-func (a *Adapter) rewound(ctx context.Context, prog provider.Program, spec provider.SessionSpec, args []string, session string) (*proc, bool, string, error) {
+// launchFork opens a previously created fork or creates it now. If
+// Claude cannot fork, it starts a separate session for the handoff.
+func (a *Adapter) launchFork(ctx context.Context, prog provider.Program, spec provider.SessionSpec, args []string, session string) (*proc, bool, string, error) {
 	p, err := launch(ctx, prog, spec, slices.Concat(args, []string{"--resume", session}))
 	if !errors.Is(err, errNoSession) {
 		return p, err == nil, session, err
 	}
 	var b branch
-	json.Unmarshal([]byte(spec.Rewound.At), &b)
+	json.Unmarshal([]byte(spec.Fork.At), &b)
 	if f := probe(prog.Path); b.At != "" && f[flagResumeAt] && f[flagFork] {
-		fork := []string{"--resume", cmp.Or(b.From, spec.Rewound.From, uuidOf(spec.Thread)), flagResumeAt, b.At}
+		fork := []string{"--resume", cmp.Or(b.From, spec.Fork.From, uuidOf(spec.Thread)), flagResumeAt, b.At}
 		if b.Drops != "" && f[flagDropsTurn] {
 			fork = append(fork, flagDropsTurn, b.Drops)
 		}

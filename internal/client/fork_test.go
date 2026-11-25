@@ -17,8 +17,8 @@ func TestAForksTranscriptStartsWithItsSource(t *testing.T) {
 	if len(tr.Entries) != 1 || !ok || f.Thread != forked.Thread || f.Run != forked.Run || f.Took != "" || !f.At.Equal(at(1)) {
 		t.Fatalf("entries %+v; want the fork's source alone", tr.Entries)
 	}
-	tr.apply(event(3, api.SessionBound{Run: run, Session: "s", Rewound: api.RewindNative}))
-	if f.Took != api.RewindNative {
+	tr.apply(event(3, api.SessionBound{Run: run, Session: "s", Fork: api.ForkNative}))
+	if f.Took != api.ForkNative {
 		t.Fatalf("took %q once the run said it took it up natively", f.Took)
 	}
 	if plain := play(api.ThreadCreated{Title: "plain"}); len(plain.Entries) != 0 {

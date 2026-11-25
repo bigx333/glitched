@@ -51,7 +51,7 @@ func (a *app) forkDivider(c *ui.Context, t thread, e entry) {
 		}
 		if f.Took != "" {
 			kind, tip := "Native", "The agent's own conversation, forked at that turn"
-			if f.Took == api.RewindPortable {
+			if f.Took == api.ForkPortable {
 				kind, tip = "Portable", "A new conversation, handed the turns up to there"
 			}
 			a.tip(c, ui.Box(c).Label(kind).Shrink(0).Padding(1, 6).Radius(6).Border(1, palette.border).Children(func() {

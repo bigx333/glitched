@@ -153,7 +153,6 @@ const (
 	entryError // why a run failed
 	entryCompact
 	entryPlan
-	entryRevert
 	entryFork
 )
 
@@ -191,8 +190,6 @@ type entry struct {
 	run     api.ID // the run a message, a reply or a work entry is of
 	// reports are a run of children's reports, one card's.
 	reports []client.ReportEntry
-	// revert is how a revert of the files ended, a revert entry's.
-	revert *client.RevertEntry
 	// fork is where a fork goes on from, a fork entry's.
 	fork *client.ForkEntry
 	// turn is the run a turn's last reply is of, once the run ended: a
@@ -278,8 +275,6 @@ func (d *deriving) add(e client.Entry) {
 			return
 		}
 		d.es = append(d.es, entry{key: "k/" + e.Run.String(), kind: entryCompact, text: compactLabel(e), at: e.At})
-	case *client.RevertEntry:
-		d.es = append(d.es, entry{key: "v/" + e.Revert.String(), kind: entryRevert, at: e.At, revert: e})
 	case *client.ForkEntry:
 		d.es = append(d.es, entry{key: "fork", kind: entryFork, at: e.At, fork: e})
 	case *client.ReportEntry:
@@ -877,8 +872,6 @@ func failedTo(p client.Pending) string {
 		return "rename the thread"
 	case api.ThreadDelete:
 		return "delete the thread"
-	case api.ThreadRevert:
-		return "revert the files"
 	case api.ThreadConfigure:
 		return "change the thread's " + given(b)
 	}

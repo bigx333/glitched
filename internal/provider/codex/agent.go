@@ -74,9 +74,9 @@ type Agent struct {
 }
 
 var (
-	_ provider.Agent     = (*Agent)(nil)
-	_ provider.Sessioned = (*Agent)(nil)
-	_ provider.Rewinding = (*Agent)(nil)
+	_ provider.Agent      = (*Agent)(nil)
+	_ provider.Sessioned  = (*Agent)(nil)
+	_ provider.NativeFork = (*Agent)(nil)
 )
 
 // Session is Codex's id of the thread's conversation.

@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -255,7 +256,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 16
+const schemaVersion = 17
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -382,6 +383,8 @@ ALTER TABLE runs ADD COLUMN resume_cancelled INTEGER NOT NULL DEFAULT 0 CHECK (r
 ALTER TABLE threads ADD COLUMN remote TEXT;
 ALTER TABLE threads ADD COLUMN origin TEXT;
 `,
+	// Retire old outbox work without replaying changes to the worktree.
+	16: `UPDATE effects SET state = 'done' WHERE kind IN ('checkpoint.capture', 'checkpoint.drop', 'thread.revert') AND state <> 'done';`,
 }
 
 func (s *Store) migrate() error {
@@ -456,6 +459,28 @@ func upgradeOnce(ctx context.Context, conn *sql.Conn, version int) error {
 		return err
 	}
 	defer tx.Rollback()
+	var interrupted []string
+	if version == 16 {
+		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT COALESCE(NULLIF(threads.workspace, ''), hex(effects.thread))
+			FROM effects LEFT JOIN threads ON threads.id = effects.thread
+			WHERE effects.kind = 'thread.revert' AND effects.state IN ('pending', 'leased')
+			AND CASE WHEN json_valid(effects.payload) THEN json_extract(effects.payload, '$.KeepFiles') IS NOT 1 ELSE 1 END`)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var workspace string
+			if err := rows.Scan(&workspace); err != nil {
+				rows.Close()
+				return err
+			}
+			interrupted = append(interrupted, workspace)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.ExecContext(ctx, upgrades[version]+fmt.Sprintf(`PRAGMA user_version = %d;`, version+1)); err != nil {
 		return err
 	}
@@ -468,7 +493,13 @@ func upgradeOnce(ctx context.Context, conn *sql.Conn, version int) error {
 	if broken {
 		return errors.New("a foreign key no longer holds")
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	for _, workspace := range interrupted {
+		slog.Warn("store: an unfinished file restore was not retried; the worktree may be partially restored", "workspace", workspace)
+	}
+	return nil
 }
 
 // rewind gives the log a new id, for a database that is behind what its

@@ -178,7 +178,7 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	// speaks while its model is set is stopped, and a new one starts. One
 	// on another session than the thread's is the thread's no longer, nor
 	// is one on the conversation a rewind left behind.
-	if ok && (spec.Rewound != nil || spec.Session != "" && p.sessionID() != spec.Session) {
+	if ok && (spec.Fork != nil || spec.Session != "" && p.sessionID() != spec.Session) {
 		p.discard()
 		ok = false
 	}

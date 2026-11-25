@@ -387,7 +387,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	} else {
 		slog.Warn("agents run without glitched mcp, so they start no child threads", "err", errors.Join(err, absErr))
 	}
-	opts = append(opts, runtime.WithMCPServers(cfg.MCP...), runtime.WithWorktrees(filepath.Join(cfg.Dir, "worktrees")), runtime.WithCheckpoints(filepath.Join(cfg.Dir, "checkpoints")), runtime.WithVault(secrets.New(secrets.Under(cfg.Dir))), runtime.WithIdleCompaction(cfg.CompactBeforeExpireEnabled()), runtime.WithAutoContinue(cfg.ContinueAfterRestart), runtime.WithLimitResume(cfg.ContinueAfterLimit), runtime.WithName(cfg.Name))
+	opts = append(opts, runtime.WithMCPServers(cfg.MCP...), runtime.WithWorktrees(filepath.Join(cfg.Dir, "worktrees")), runtime.WithVault(secrets.New(secrets.Under(cfg.Dir))), runtime.WithIdleCompaction(cfg.CompactBeforeExpireEnabled()), runtime.WithAutoContinue(cfg.ContinueAfterRestart), runtime.WithLimitResume(cfg.ContinueAfterLimit), runtime.WithName(cfg.Name))
 	// The skills staged for an agent are read from its workspace too.
 	if dir, err := filepath.Abs(cfg.Dir); err == nil {
 		opts = append(opts, runtime.WithSkills(dir))

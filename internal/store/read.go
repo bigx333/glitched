@@ -49,11 +49,11 @@ func (s *Store) RunReply(ctx context.Context, thread, run api.ID) (string, error
 // Heads are where each of the thread's runs left its conversation, as its
 // turn.ended says, by run, while the thread's conversation still holds
 // it, and the runs whose agent compacted it. A run that started a
-// conversation of its own, as a portable rewind's first run does, leaves
+// conversation of its own, as a portable fork's first run does, leaves
 // the heads before it behind.
 func (s *Store) Heads(ctx context.Context, thread api.ID) (heads map[api.ID]string, compacted map[api.ID]bool, err error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT type, json_extract(payload, '$.run'), json_extract(payload, '$.head'),
-			json_extract(payload, '$.session'), json_extract(payload, '$.rewound') FROM events
+			json_extract(payload, '$.session'), COALESCE(json_extract(payload, '$.fork'), json_extract(payload, '$.rewound')) FROM events
 		WHERE thread = ? AND (type = ? OR type = ? OR type = ? AND json_extract(payload, '$.compacted') = 1) ORDER BY seq`,
 		thread[:], api.EventType(api.TurnEnded{}), api.EventType(api.SessionBound{}), api.EventType(api.ContextReported{}))
 	if err != nil {
@@ -64,8 +64,8 @@ func (s *Store) Heads(ctx context.Context, thread api.ID) (heads map[api.ID]stri
 	session := ""
 	for rows.Next() {
 		var kind, run string
-		var head, bound, rewound sql.NullString
-		if err := rows.Scan(&kind, &run, &head, &bound, &rewound); err != nil {
+		var head, bound, fork sql.NullString
+		if err := rows.Scan(&kind, &run, &head, &bound, &fork); err != nil {
 			return nil, nil, err
 		}
 		id, err := api.ParseID(run)
@@ -76,9 +76,9 @@ func (s *Store) Heads(ctx context.Context, thread api.ID) (heads map[api.ID]stri
 		case api.EventType(api.TurnEnded{}):
 			heads[id] = head.String
 		case api.EventType(api.SessionBound{}):
-			// A conversation of a run's own, not one a native rewind
+			// A conversation of a run's own, not one a native fork
 			// forked, holds none of the runs before it.
-			if rewound.String == string(api.RewindPortable) || rewound.String == "" && session != "" && bound.String != session {
+			if fork.String == string(api.ForkPortable) || fork.String == "" && session != "" && bound.String != session {
 				clear(heads)
 			}
 			session = bound.String
@@ -87,30 +87,6 @@ func (s *Store) Heads(ctx context.Context, thread api.ID) (heads map[api.ID]stri
 		}
 	}
 	return heads, compacted, rows.Err()
-}
-
-// Rewound is the revert that last rewound the thread's conversation, while
-// the thread's next run still has to take it up: a new conversation, a
-// native one its provider makes then, or one its provider made already,
-// which the run may find lost. nil when there is none.
-func (s *Store) Rewound(ctx context.Context, thread api.ID) (*api.ThreadReverted, error) {
-	var kind string
-	var payload []byte
-	err := s.db.QueryRowContext(ctx, `SELECT type, payload FROM events WHERE thread = ? AND (
-		type = ? AND json_extract(payload, '$.conversation') IN (?, ?) OR type = ? AND json_extract(payload, '$.rewound') IS NOT NULL)
-		ORDER BY seq DESC LIMIT 1`,
-		thread[:], api.EventType(api.ThreadReverted{}), api.RewindNative, api.RewindPortable, api.EventType(api.SessionBound{})).Scan(&kind, &payload)
-	if errors.Is(err, sql.ErrNoRows) || err == nil && kind != api.EventType(api.ThreadReverted{}) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var r api.ThreadReverted
-	if err := json.Unmarshal(payload, &r); err != nil {
-		return nil, err
-	}
-	return &r, nil
 }
 
 // Origin is where thread, a fork, goes on from; nil for any other thread.
@@ -127,7 +103,7 @@ func (s *Store) Forked(ctx context.Context, thread api.ID) (*api.Forked, error) 
 func (s *Store) origin(ctx context.Context, thread api.ID, pending bool) (*api.Forked, error) {
 	var fork []byte
 	err := s.db.QueryRowContext(ctx, `SELECT json_extract(payload, '$.fork') FROM events WHERE thread = ? AND type = ? AND json_extract(payload, '$.fork') IS NOT NULL
-		AND NOT (? AND EXISTS (SELECT 1 FROM events WHERE thread = ? AND type = ? AND json_extract(payload, '$.rewound') IS NOT NULL))`,
+		AND NOT (? AND EXISTS (SELECT 1 FROM events WHERE thread = ? AND type = ? AND COALESCE(json_extract(payload, '$.fork'), json_extract(payload, '$.rewound')) IS NOT NULL))`,
 		thread[:], api.EventType(api.ThreadCreated{}), pending, thread[:], api.EventType(api.SessionBound{})).Scan(&fork)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -142,77 +118,6 @@ func (s *Store) origin(ctx context.Context, thread api.ID, pending bool) (*api.F
 	return &f, nil
 }
 
-// Ended is how a thread's revert ended, and what came after it in the
-// thread's log before another revert, but, was asked for: Turned, whether
-// a turn other than a silent one was admitted once the revert was asked
-// for, and Reverted, whether a revert asked for since either hasn't ended
-// yet or ended without failing.
-type Ended struct {
-	api.ThreadReverted
-	Turned, Reverted bool
-}
-
-// Reverted is how thread's revert ended, nil while it hasn't, and what
-// came after it before but was asked for.
-func (s *Store) Reverted(ctx context.Context, thread, revert, but api.ID) (*Ended, error) {
-	reverting, reverted, admitted := api.EventType(api.ThreadReverting{}), api.EventType(api.ThreadReverted{}), api.EventType(api.TurnAdmitted{})
-	rows, err := s.db.QueryContext(ctx, `SELECT type, payload FROM events WHERE thread = ? AND type IN (?, ?, ?) AND seq >=
-			(SELECT min(seq) FROM events WHERE thread = ? AND type = ? AND json_extract(payload, '$.revert') = ?) ORDER BY seq`,
-		thread[:], reverting, reverted, admitted, thread[:], reverting, revert.String())
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var e *Ended
-	var turned, cut bool
-	since := map[api.ID]bool{} // each revert asked for since, and whether it counts: it hasn't failed
-	for rows.Next() {
-		var kind string
-		var payload []byte
-		if err := rows.Scan(&kind, &payload); err != nil {
-			return nil, err
-		}
-		switch kind {
-		case reverting:
-			var r api.ThreadReverting
-			if err := json.Unmarshal(payload, &r); err != nil {
-				return nil, err
-			}
-			cut = cut || r.Revert == but
-			if !cut && r.Revert != revert {
-				since[r.Revert] = true
-			}
-		case admitted:
-			var a api.TurnAdmitted
-			if err := json.Unmarshal(payload, &a); err != nil {
-				return nil, err
-			}
-			turned = turned || !cut && !a.Silent
-		default:
-			var r api.ThreadReverted
-			if err := json.Unmarshal(payload, &r); err != nil {
-				return nil, err
-			}
-			if _, ok := since[r.Revert]; ok {
-				since[r.Revert] = r.Status != api.RevertFailed
-			}
-			if r.Revert == revert {
-				e = &Ended{ThreadReverted: r}
-			}
-		}
-	}
-	if err := rows.Err(); err != nil || e == nil {
-		return nil, err
-	}
-	e.Turned = turned
-	for _, counts := range since {
-		e.Reverted = e.Reverted || counts
-	}
-	return e, nil
-}
-
-// Read answers q from one read transaction, so the projection and the
-// events agree with the snapshot's cursor.
 func (s *Store) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
@@ -76,6 +78,35 @@ func TestAReplyForksTheThread(t *testing.T) {
 	h.tt.Advance(time.Second)
 	if h.a.current().id() != src.id() {
 		t.Fatal("the fork's first row doesn't open its source")
+	}
+}
+
+func TestForkActionRespectsLegacyDroppedTurns(t *testing.T) {
+	h, _ := checked(t)
+	src := h.a.current()
+	reply := strings.TrimSpace(lastReply(t, src))
+	pointAt(t, h, reply)
+	if !h.tt.HasText("Fork from here") {
+		t.Fatal("the finished turn did not offer Fork from here")
+	}
+	apply := func(kind string) {
+		t.Helper()
+		p, err := json.Marshal(map[string]any{"conversation": "portable", kind: []api.ID{src.View.LastTurn.Run}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursor := src.Transcript.Cursor
+		cursor.Seq++
+		src.Transcript.Apply(api.Event{Cursor: cursor, Type: "thread.reverted", Payload: p})
+		pointAt(t, h, reply)
+	}
+	apply("dropped")
+	if h.tt.HasText("Fork from here") {
+		t.Fatal("a turn dropped by a legacy rewind offered Fork from here")
+	}
+	apply("restored")
+	if !h.tt.HasText("Fork from here") {
+		t.Fatal("a turn restored by a legacy Undo did not offer Fork from here")
 	}
 }
 

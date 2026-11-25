@@ -3,7 +3,6 @@ package claude_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -78,25 +77,9 @@ func TestATurnEndsWithWhereItLeftTheConversation(t *testing.T) {
 	}
 }
 
-// Idle compaction never takes up a rewind: it would launch the claude the
-// rewind has the run make.
-func TestAResumeOnlyRunDeclinesARewind(t *testing.T) {
-	argv, _ := keep(t, []string{"hi"}, nil)
-	ad := &claude.Adapter{Path: must(os.Executable())}
-	t.Cleanup(func() { ad.Close() })
-	spec := provider.SessionSpec{Thread: api.NewID(), Run: api.NewID(), Generation: 2, Workspace: t.TempDir(), ResumeOnly: true,
-		Session: claude.SessionOf(api.NewID()), Rewound: &provider.Rewound{At: `{"at":"` + hiAt + `"}`}}
-	if _, err := ad.Open(ctx, spec); !errors.Is(err, provider.ErrDeclined) {
-		t.Errorf("a resume-only run of a rewound thread opened with %v, want it declined", err)
-	}
-	if _, err := os.Stat(argv); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("a declined run started claude: %v", err)
-	}
-}
-
 // The probe finds a hidden flag anywhere in the program, across the
 // probe's reads too, and only the flag itself.
-func TestTheProbeFindsTheHiddenFlagsAProgramHolds(t *testing.T) {
+func TestTheForkProbeFindsTheHiddenFlagsAProgramHolds(t *testing.T) {
 	dir := t.TempDir()
 	with := filepath.Join(dir, "with")
 	body := strings.Repeat("x", claude.ProbeChunk-5) + "--resume-session-at" + strings.Repeat("y", claude.ProbeChunk) + "--fork-session\x00--resume-drops-turn"
@@ -119,7 +102,7 @@ func TestTheProbeFindsTheHiddenFlagsAProgramHolds(t *testing.T) {
 
 // The probe reads a program once for each size and modification time it
 // has, so a launch costs a stat, and reads it again once it changes.
-func TestTheProbeReadsAChangedProgramAgain(t *testing.T) {
+func TestTheForkProbeReadsAChangedProgramAgain(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "claude")
 	then, later := time.Now().Add(-time.Hour).Round(time.Second), time.Now().Round(time.Second)
 	write := func(body string, mod time.Time) {
