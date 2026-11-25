@@ -22,7 +22,7 @@ func TestRemoveProject(t *testing.T) {
 	h.a.settings.confirmDelete = false // removing a project asks whatever this says
 	h.thread("SIP re-INVITE handling")
 	h.tt.Advance(time.Second)
-	h.click("t3code")
+	h.clickPlugin("t3code")
 	h.tt.Advance(time.Second)
 	if !h.a.projectFilter[projectKey{workspace: "/work/t3code"}] {
 		t.Fatal("clicking the chip didn't filter to it")

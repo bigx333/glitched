@@ -881,14 +881,14 @@ func TestSnooze(t *testing.T) {
 	// pushing the rows down: point at the row once it has.
 	settlePlugins(t, h.a, h.tt, h.p)
 	h.hover(th.View.Title)
-	h.click("Snooze")
+	h.clickPlugin("Snooze")
 	settlePlugins(t, h.a, h.tt, h.p)
 	if h.a.snoozeFor != th.id() || !h.tt.HasText("sleep on it") {
 		t.Fatalf("snooze popover not open: %s", h.a.snoozeFor)
 	}
 	// Off the row, onto the popover's choice.
 	h.hover("Tomorrow")
-	h.click("Tomorrow")
+	h.clickPlugin("Tomorrow")
 	want := morning(h.tt.Now(), 1)
 	h.until("the engine to snooze it", func() bool {
 		d := th.View.Disposition
@@ -898,10 +898,10 @@ func TestSnooze(t *testing.T) {
 	if h.a.shownIn(th) != catSnoozed {
 		t.Errorf("snoozed thread shown in section %d", h.a.shownIn(th))
 	}
-	h.click("Snoozed")
+	h.clickPlugin("Snoozed")
 	h.tt.Advance(time.Second)
 	h.hover(th.View.Title)
-	h.click("Back to inbox")
+	h.clickPlugin("Back to inbox")
 	h.until("the engine to bring it back", func() bool { return th.View.Disposition.State == api.Open && len(th.Pending) == 0 })
 	if h.a.categoryOf(th) != catInbox {
 		t.Errorf("thread back in section %d, want the inbox", h.a.categoryOf(th))
@@ -963,13 +963,13 @@ func TestDiffPanel(t *testing.T) {
 		t.Errorf("%d changes after accepting one of %d", len(d.Hunks()), n)
 	}
 	// Split needs the room: at 1320 the panel would be 608 wide.
-	h.click("Split")
+	h.clickPlugin("Split")
 	if a.diffLayout != editor.DiffUnified {
 		t.Error("Split switched the layout without the room for it")
 	}
 	tt.SetSize(1600, 900)
 	settlePlugins(t, a, tt, h.p)
-	h.click("Split")
+	h.clickPlugin("Split")
 	if a.diffLayout != editor.DiffSplit {
 		t.Error("Split did not switch the layout")
 	}
@@ -1294,17 +1294,17 @@ func TestProjectFilter(t *testing.T) {
 		return m
 	}
 	for _, name := range []string{"t3code", "agent-phone"} {
-		h.click(name)
+		h.clickPlugin(name)
 	}
 	if s := shown(); !s["t3code"] || !s["agent-phone"] || s["mygo"] {
 		t.Errorf("filtered to t3code and agent-phone, the sidebar shows %v", s)
 	}
-	h.click("mygo")
+	h.clickPlugin("mygo")
 	if len(a.projectFilter) != 0 {
 		t.Errorf("every project chosen should be no filter, got %v", a.projectFilter)
 	}
 	h.clickPlugin("agent-phone")
-	h.click("All")
+	h.clickPlugin("All")
 	if len(a.projectFilter) != 0 {
 		t.Error("All should clear the filter")
 	}
