@@ -7,15 +7,19 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"maps"
 	"math"
 	"math/rand/v2"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -33,6 +37,7 @@ import (
 	"glitched/internal/mcp"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/pack"
+	"glitched/internal/service"
 	"glitched/internal/transport"
 	"glitched/wind"
 )
@@ -174,6 +179,7 @@ type settings struct {
 	newThreadMode int // Local, Worktree
 	notifications bool
 	checkCLIs     bool // ask each machine's engine whether its CLIs have newer versions
+	zen           bool // the timeline folds each turn's work into a line
 
 	checking bool
 }
@@ -267,6 +273,10 @@ type app struct {
 	// sidebarTall is how tall the sidebar was as last laid out, or the
 	// window, before it was.
 	sidebarTall float32
+	// bottomBox is where the sidebar's bottom part, Working, Snoozed and
+	// Settled, was as last laid out: zero before it was, and while none
+	// shows.
+	bottomBox ui.Rect
 	// sidebarRows are the threads in the rows of each part of the
 	// sidebar's body, as last built.
 	sidebarRows map[string]map[api.ID]bool
@@ -376,6 +386,7 @@ type app struct {
 	// The inbox: the project it's filtered to, and its closed sections.
 	projectFilter map[projectKey]bool // the projects the sidebar shows; none is all
 	sectionClosed map[category]bool
+	sectionFold   map[category]*sectionFold // how far open each shows as it opens and shuts (foldSections)
 	// rowFx is the joke playing on a thread's row, by thread.
 	rowFx map[api.ID]rowGagFx
 	// attachments go with the next message; pastes counts pasted images,
@@ -479,6 +490,8 @@ type app struct {
 	leavingFullScreen func()
 	// lists are the threads' timelines, by thread.
 	lists map[api.ID]*ui.ListState
+	// listed are, by thread, what its timeline listed last (timelineMemo).
+	listed map[api.ID]*timelineMemo
 	// markers are, by thread, what its turn markers keep from frame to
 	// frame.
 	markers     map[api.ID]*markerState
@@ -657,6 +670,16 @@ type app struct {
 	cmdkOpens int
 	cmdkList  ui.ListState
 
+	svcStatus  service.Status
+	svcRead    time.Time // zero till the first read
+	svcLoading bool
+	svcDoing   svcSwitch
+	svcSets    int // switches of the service, so a read begun before one is dropped
+	svcErr     string
+	// svcHandOver: the switch installed the service, so the engine
+	// embedded here goes to it once no agent runs here.
+	svcHandOver bool
+
 	glassOffset ui.Point
 	checkUntil  time.Time
 
@@ -769,6 +792,7 @@ func newApp(dir string, engine func(*daemon.Config), detect func(context.Context
 		sidebarWidth:   272,
 		collapsed:      map[string]bool{},
 		sectionClosed:  map[category]bool{catWorking: true, catSnoozed: true, catSettled: true},
+		sectionFold:    map[category]*sectionFold{},
 		sidebarRows:    map[string]map[api.ID]bool{},
 		sidebarPages:   map[string]int{},
 		sidebarKept:    map[api.ID]bool{},
@@ -781,6 +805,7 @@ func newApp(dir string, engine func(*daemon.Config), detect func(context.Context
 		steers:         map[api.ID]steer{},
 		post:           post,
 		lists:          map[api.ID]*ui.ListState{},
+		listed:         map[api.ID]*timelineMemo{},
 		markers:        map[api.ID]*markerState{},
 		rows:           map[api.ID]*rowsCache{},
 		files:          map[string][]string{},
@@ -839,7 +864,7 @@ func newApp(dir string, engine func(*daemon.Config), detect func(context.Context
 			fn()
 			a.changed()
 		})
-	}, Asked: a.notifyAsked, Engine: engine, Detect: detect})
+	}, Asked: a.notifyAsked, Engine: engine, Detect: detect, Served: servedByService(dir)})
 	return a
 }
 
@@ -956,6 +981,7 @@ func (a *app) view(c *ui.Context) {
 	a.pruneDiffs()
 	a.pruneThreadState()
 	a.paceContinues()
+	a.handOverWhenIdle()
 	// A steer to a server removed since never lands.
 	maps.DeleteFunc(a.steers, func(_ api.ID, s steer) bool { return !slices.Contains(a.backend.Envs(), s.env) })
 	// Jokes over are gone, whether or not their rows show: a row in a
@@ -1183,6 +1209,17 @@ func main() {
 		}
 		return
 	}
+	// Background service mode (glitched/Glitched serve -dir DIR).
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		if err := serveHeadless(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "glitched:", err)
+			if errors.Is(err, daemon.ErrLocked) {
+				os.Exit(3)
+			}
+			os.Exit(1)
+		}
+		return
+	}
 	var a *app
 	// What's posted before the window exists, as a plugin's timer can,
 	// waits for it.
@@ -1322,6 +1359,33 @@ func (a *app) contentInner(w float32) float32 {
 // leaves, clear at Clear.
 func (a *app) glassTint() ui.Color {
 	return palette.bg.Alpha(float32(1 - a.settings.vibrancy))
+}
+
+func serveHeadless(args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	dir := fs.String("dir", stateDir(), "state directory")
+	waitLock := fs.Bool("wait-lock", false, "while another engine holds the lock, wait for it to let go instead of exiting")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	config := func() (daemon.Config, error) {
+		cfg, err := daemon.Defaults(*dir)
+		if err == nil {
+			cfg.WithAgents()
+		}
+		return cfg, err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	start := daemon.StartWhenFree
+	if !*waitLock {
+		start = daemon.StartNow
+	}
+	d, err := start(ctx, config)
+	if err != nil {
+		return err
+	}
+	return d.Wait()
 }
 
 // windowQueue holds what's posted to the window until it exists.

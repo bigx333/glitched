@@ -40,7 +40,9 @@ func (e usageError) Error() string { return string(e) }
 
 var commands = map[string]func(context.Context, []string) error{
 	"serve":       serve,
+	"service":     serviceCmd,
 	"status":      status,
+	"doctor":      doctor,
 	"pair":        pair,
 	"link":        link,
 	"run":         run,
@@ -54,7 +56,9 @@ const usage = `usage: glitched <command> [flags]
 
   serve     run the host engine, and the hub role unless -hub=false; the next serve
             on -dir, and the GUI's own engine, run as it did unless a flag says otherwise
+  service   install, uninstall, or inspect the launchd / systemd user background service
   status    whether an engine serves -dir, its hub, its tailnet listeners and its tokens
+  doctor    check state dir, config, databases, tailscale, and provider CLIs
   pair      mint a token for a client on the tailnet: glitched pair -name LABEL [-link] | -list | -remove LABEL
   link      add a machine whose engine minted this one a link: glitched link -add LABEL -server ADDR -token TOKEN | -list | -remove LABEL
   run       send a message and stream the turn: glitched run [-thread ID] [-provider claude] [-yes] text...
@@ -148,6 +152,7 @@ func serve(ctx context.Context, args []string) error {
 	def := eng.DefaultLimits
 	maxWorking := fs.Int("max-working", def.Working, "the most child threads agents run under one thread at once")
 	maxChildren := fs.Int("max-children", def.All, "the most child threads one thread has, not counting deleted ones")
+	waitLock := fs.Bool("wait-lock", false, "while another engine, such as the app's own, holds -dir's lock, wait for it to let go instead of exiting "+strconv.Itoa(exitLocked))
 	maxDepth := fs.Int("max-depth", def.Depth, fmt.Sprintf("how far below a thread of yours agents start child threads, 1 to %d", api.MaxDepth))
 	fs.Parse(args)
 
@@ -166,12 +171,9 @@ func serve(ctx context.Context, args []string) error {
 	case *maxDepth < 1 || *maxDepth > api.MaxDepth:
 		return usageError(fmt.Sprintf("serve: -max-depth is 1 to %d", api.MaxDepth))
 	}
-	cfg, err := daemon.Defaults(*dir)
-	if err != nil {
-		return err
-	}
 	// Kept for the next start, which may run from elsewhere.
 	if *hubDir != "" {
+		var err error
 		if *hubDir, err = filepath.Abs(*hubDir); err != nil {
 			return err
 		}
@@ -205,13 +207,23 @@ func serve(ctx context.Context, args []string) error {
 			cfg.Children.Depth = *maxDepth
 		}
 	}
-	flags(&cfg)
-	cfg.WithAgents()
-	d, err := daemon.Start(ctx, cfg)
+	config := func() (daemon.Config, error) {
+		cfg, err := daemon.Defaults(*dir)
+		if err == nil {
+			flags(&cfg)
+			cfg.WithAgents()
+		}
+		return cfg, err
+	}
+	start := daemon.StartWhenFree
+	if !*waitLock {
+		start = daemon.StartNow
+	}
+	d, err := start(ctx, config)
 	if err != nil {
 		return err
 	}
-	if _, err := daemon.Edit(cfg.Dir, func(c *daemon.Config) error { flags(c); return nil }); err != nil {
+	if _, err := daemon.Edit(*dir, func(c *daemon.Config) error { flags(c); return nil }); err != nil {
 		return errors.Join(err, d.Close())
 	}
 	return d.Wait()

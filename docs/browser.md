@@ -318,16 +318,7 @@ bridge and its process model. Its CEF host is the model for a CEF adapter.
 
 ## Known issues
 
-- **`isLocal` (Nelson's, `preview.go`), older than the browser and not
-  ours to fix:** it tells local addresses by their prefixes, and reads the
-  host without taking a userinfo off it, so public hosts count as local:
-  names such as `10.com`, `192.168.com` and `127.evil.example`, and an
-  address such as `127.0.0.1@example.com`, whose host is `example.com`.
-  Typed without a scheme, each loads over plain http, to a public host
-  (and shows the dev server's "Nothing running" page when it fails).
-  Meanwhile `172.16.0.0/12` and link-local addresses don't count, and it
-  doesn't normalise a host's case or trailing dot. For Nelson; the browser
-  leaves it as it is.
+- **`isLocal` (`preview.go`) — fixed:** `isLocal` now parses URLs with `net/url` (stripping userinfo, ports, and brackets via `Hostname()`), normalizes case and trailing dots, and checks IP ranges with `net/netip` (covering loopback, RFC 1918 including `172.16.0.0/12`, IPv6 ULA, link-local, and unspecified addresses).
 
 ## Agents
 
@@ -360,19 +351,33 @@ Claude Code runs in threads get the browser as an MCP server named
   still running as the client goes, ends in the app too, and a call the
   view hasn't run yet does nothing. With no app open the tools are still listed, and each says the
   app isn't open; a socket it may not use says so instead.
-- **The app** listens on `browser.sock` as its window opens; nothing
-  authenticates a caller, so the state directory's mode (0700) is the
-  gate, as for `engine.sock`. A socket a dead app left is replaced; one
-  another app answers on is left alone.
-- **Tools:** `browser_tabs` (list, new, select, close),
-  `browser_navigate` (an http or https address, or back, forward,
-  reload), `browser_snapshot` (`full` for structure), `browser_click` and
-  `browser_type` (`submit` presses Enter) by ref. A ref names its tab by
-  its snapshot's epoch, so the act tools take no tab. Each tool that loads
-  or acts shows the pane and its tab, so the user sees what the agent
-  does, waits for the page to load (15 seconds at most), and answers with
-  the page's next snapshot. They go through Claude Code's permissions, as
-  `mcp__glitched-browser__browser_*`: in Ask mode, the thread's approval card.
+- **The app** listens on `browser.sock` as its window opens and writes a
+  per-launch `0600` token (`browser.token`); `browsermcp.Accept` verifies
+  both OS Unix peer credentials (`LOCAL_PEERCRED` / `SO_PEERCRED`) and
+  the token alongside the `0700` state directory. A socket a dead app
+  left is replaced; one another app answers on is left alone.
+- **Tools:** `browser_tabs` (list, new, select, close, release — with
+  per-thread tab leasing driven by `GLITCHED_THREAD`), `browser_navigate`
+  (an http or https address, or back, forward, reload), `browser_snapshot`
+  (`full` for structure), `browser_screenshot` (PNG viewport capture),
+  `browser_click`, `browser_type` (`submit` presses Enter), `browser_select`
+  (pick a `<select>` option by value or label), `browser_scroll` (page or
+  element by direction/amount/ref), and `browser_wait_for` (poll text,
+  CSS selector, or URL substring with optional `gone` inversion). Each
+  mutating/display tool shows the pane and its tab, waits for the page to
+  load (15 seconds at most), and answers with the page's next snapshot.
+  They go through the agent's permissions, as `mcp__glitched-browser__browser_*`:
+  in Ask mode, the thread's approval card.
+- **Leases:** every tool that uses a tab, a snapshot or screenshot too,
+  leases it to the calling thread for five minutes from its last use,
+  and refuses a tab another thread leases: a snapshot there would
+  replace the refs the owner acts on. A call naming no tab uses the tab
+  shown when it is unleased or the caller's, so it follows the tab the
+  user picks; when another thread leases the shown tab, it uses the
+  caller's last-used leased tab instead, and a navigate with none opens
+  a new tab. A call naming no thread leases
+  nothing and may use only unleased tabs. `release` with no tab drops
+  only the caller's leases.
 - **Actions** run in the page script (`act`), the same on every engine.
   It resolves the ref and checks the element is still the role and name
   the snapshot gave it, shown and enabled, and not what a user couldn't
@@ -421,19 +426,18 @@ Claude Code runs in threads get the browser as an MCP server named
   the page's own elements; and what a page says reaches the agent as a
   tool result, which can be text written to steer it.
 
+- **Document-start preload & SPA tracking** (`PreloadScript` + `sysweb`):
+  `snapshot.js` now installs at document start via `PageOptions.PreloadScript`
+  with a closed-over per-run `secret` and wraps `history.pushState`,
+  `replaceState`, `popstate`, and `hashchange` to invalidate stale refs on
+  SPA route transitions and keep `browserTab.url` synced.
+
 ## Next
 
-1. **More tools:** `browser_select`, `browser_scroll`, `browser_wait_for`,
-   `browser_screenshot`; a tab leased to the thread that opened it, as
-   T3 Code's preview automation pins a session to its host; trusted input
-   on WebView2 and CEF through DevTools.
+1. **Trusted input:** trusted input on WebView2 and CEF through DevTools.
 2. **Isolation** of the script and of the wrapper `EvalContext` runs it in,
-   in a world of their own, as above, which agents act without for now.
-   MyGo needs a hook for it (WKWebView's content worlds, WebView2's DevTools).
-3. **Single-page apps:** MyGo reports no `history.pushState`,
-   `replaceState` or fragment navigation, so the address goes stale in a
-   Vite app moving between routes, and refs survive them (above). A
-   document-start script reporting them, or MyGo events, fixes both: the
-   tab hears of the route, and the page script drops its refs.
-4. **Cross-origin frames**, through the engine's frame tree where it has
+   in an isolated world of their own (`WKContentWorld` on macOS,
+   `Page.createIsolatedWorld` via DevTools on WebView2/CEF), once MyGo
+   exposes a content-world API.
+3. **Cross-origin frames**, through the engine's frame tree where it has
    one.

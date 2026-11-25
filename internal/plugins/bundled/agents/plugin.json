@@ -3,7 +3,7 @@
   "name": "Agents panel",
   "description": "The agents panel's rows: the threads under the one shown, with their runs' dots, titles and ages, and More past the first five. Built into Glitched; make a copy in Settings › Plugins to change it.",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "main.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": ["ui.place", "ui.replace", "threads:read"],

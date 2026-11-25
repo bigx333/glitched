@@ -3,6 +3,8 @@ package browsermcp
 import (
 	"bufio"
 	"context"
+	cryptorand "crypto/rand"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -20,12 +24,16 @@ import (
 
 // The bridge is how the server reaches the app: a unix socket in the
 // state directory both share, one call a connection, a line of JSON each
-// way. Nothing authenticates a caller on it, so the directory's mode is
-// its gate, as for the engine's socket (daemon.Start makes it 0700).
+// way. Each app launch writes a 0600 per-launch token to browser.token
+// and Accept checks both OS peer credentials and the token.
 
 // Socket is the path of the app's browser socket in the state directory
 // dir.
 func Socket(dir string) string { return filepath.Join(dir, "browser.sock") }
+
+// TokenPath is the path of the per-launch token file authenticating
+// callers on the app's browser socket in the state directory dir.
+func TokenPath(dir string) string { return filepath.Join(dir, "browser.token") }
 
 // Command is the command line, of the program running, that serves the
 // browser of the app on the state directory dir to an agent: both the
@@ -47,13 +55,14 @@ func Command(dir string) []string {
 func Main(ctx context.Context, args []string, in io.Reader, out io.Writer) error {
 	fs := flag.NewFlagSet("browser-mcp", flag.ContinueOnError)
 	dir := fs.String("dir", "", "the app's state directory")
+	thread := fs.String("thread", os.Getenv("GLITCHED_THREAD"), "the calling thread id")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *dir == "" || fs.NArg() > 0 {
-		return errors.New("usage: browser-mcp -dir DIR")
+		return errors.New("usage: browser-mcp [-thread ID] -dir DIR")
 	}
-	return Serve(ctx, in, out, Dial(*dir))
+	return Serve(ctx, in, out, DialWithThread(*dir, *thread))
 }
 
 // Server is the browser of the app on the state directory dir as a run's
@@ -77,56 +86,88 @@ const ServerName = "glitched-browser"
 var ErrNoApp = errors.New("The Glitched app isn't open on this machine, so its browser can't be reached. Ask the user to open Glitched, then try again.")
 
 type bridgeRequest struct {
-	Tool string          `json:"tool"`
-	Args json.RawMessage `json:"args"`
+	Token  string          `json:"token,omitempty"`
+	Thread string          `json:"thread,omitempty"`
+	Tool   string          `json:"tool"`
+	Args   json.RawMessage `json:"args"`
 }
 
 type bridgeReply struct {
-	Text  string `json:"text,omitempty"`
-	Error string `json:"error,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Image    []byte `json:"image,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+var (
+	tokensMu     sync.RWMutex
+	bridgeTokens = map[string]string{}
+)
+
+type tokenListener struct {
+	net.Listener
+	sockPath  string
+	tokenPath string
+}
+
+func (l *tokenListener) Close() error {
+	tokensMu.Lock()
+	delete(bridgeTokens, l.sockPath)
+	tokensMu.Unlock()
+	_ = os.Remove(l.tokenPath)
+	return l.Listener.Close()
 }
 
 // Dial is a Call through the socket of the app on the state directory dir.
-func Dial(dir string) Call {
-	return func(ctx context.Context, tool string, args json.RawMessage) (string, error) {
+func Dial(dir string) Call { return DialWithThread(dir, "") }
+
+// DialWithThread is a Call through the socket of the app on the state
+// directory dir, identifying calls as belonging to thread.
+func DialWithThread(dir, thread string) Call {
+	return func(ctx context.Context, tool string, args json.RawMessage) (Reply, error) {
 		var d net.Dialer
 		conn, err := d.DialContext(ctx, "unix", Socket(dir))
 		switch {
 		case err == nil:
 		case ctx.Err() != nil:
-			return "", ctx.Err()
+			return Reply{}, ctx.Err()
 		case denied(err):
-			return "", fmt.Errorf("The Glitched app's browser can't be reached: %w", err)
+			return Reply{}, fmt.Errorf("The Glitched app's browser can't be reached: %w", err)
 		case err != nil:
-			return "", ErrNoApp
+			return Reply{}, ErrNoApp
 		}
 		defer conn.Close()
 		stop := context.AfterFunc(ctx, func() { conn.SetDeadline(time.Now()) })
 		defer stop()
-		if err := json.NewEncoder(conn).Encode(bridgeRequest{tool, args}); err != nil {
+		var token string
+		if raw, err := os.ReadFile(TokenPath(dir)); err == nil {
+			token = strings.TrimSpace(string(raw))
+		}
+		if err := json.NewEncoder(conn).Encode(bridgeRequest{Token: token, Thread: thread, Tool: tool, Args: args}); err != nil {
 			if ctx.Err() != nil {
-				return "", ctx.Err()
+				return Reply{}, ctx.Err()
 			}
-			return "", fmt.Errorf("browser: %w", err)
+			return Reply{}, fmt.Errorf("browser: %w", err)
 		}
 		var r bridgeReply
 		dec := json.NewDecoder(bufio.NewReaderSize(conn, 64<<10))
 		if err := dec.Decode(&r); err != nil {
 			if ctx.Err() != nil {
-				return "", ctx.Err()
+				return Reply{}, ctx.Err()
 			}
-			return "", errors.New("The Glitched app closed before it answered.")
+			return Reply{}, errors.New("The Glitched app closed before it answered.")
 		}
 		if r.Error != "" {
-			return "", errors.New(r.Error)
+			return Reply{}, errors.New(r.Error)
 		}
-		return r.Text, nil
+		return Reply{Text: r.Text, Image: r.Image, MimeType: r.MimeType}, nil
 	}
 }
 
-// Listen listens on the browser socket of the state directory dir. A
-// socket file an app left as it died is removed; one another app still
-// answers on is an error.
+// Listen listens on the browser socket of the state directory dir and
+// writes a per-launch authentication token to browser.token. A socket
+// file an app left as it died is removed; one another app still answers
+// on is an error.
 func Listen(dir string) (net.Listener, error) {
 	path := Socket(dir)
 	if conn, err := net.DialTimeout("unix", path, time.Second); err == nil {
@@ -140,19 +181,63 @@ func Listen(dir string) (net.Listener, error) {
 	}
 	// Only this user reaches it, as the engine's socket. Windows has no
 	// modes: the directory's ACL is the gate there.
-	if runtime.GOOS == "windows" {
-		return ln, nil
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(path, 0o600); err != nil {
+			ln.Close()
+			return nil, err
+		}
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	token := cryptorand.Text()
+	tokenPath := TokenPath(dir)
+	if err := writeTokenFile(tokenPath, token); err != nil {
 		ln.Close()
 		return nil, err
 	}
-	return ln, nil
+	tokensMu.Lock()
+	bridgeTokens[ln.Addr().String()] = token
+	tokensMu.Unlock()
+	return &tokenListener{Listener: ln, sockPath: ln.Addr().String(), tokenPath: tokenPath}, nil
+}
+
+func writeTokenFile(path, token string) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".browser.token.*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if runtime.GOOS != "windows" {
+		if err := tmp.Chmod(0o600); err != nil {
+			tmp.Close()
+			return err
+		}
+	}
+	if _, err := io.WriteString(tmp, token+"\n"); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }
 
 // Accept answers calls on ln with call until ln closes, each connection
 // on its own. A call's ctx ends as the connection's caller hangs up.
 func Accept(ln net.Listener, call Call) error {
+	tokensMu.RLock()
+	expectedToken := bridgeTokens[ln.Addr().String()]
+	tokensMu.RUnlock()
 	var delay time.Duration
 	for {
 		conn, err := ln.Accept()
@@ -172,7 +257,7 @@ func Accept(ln net.Listener, call Call) error {
 			return err
 		}
 		delay = 0
-		go answer(conn, call)
+		go answer(conn, expectedToken, call)
 	}
 }
 
@@ -181,8 +266,12 @@ var requestTime atomic.Int64
 
 func init() { requestTime.Store(int64(10 * time.Second)) }
 
-func answer(conn net.Conn, call Call) {
+func answer(conn net.Conn, expectedToken string, call Call) {
 	defer conn.Close()
+	if err := verifyPeer(conn); err != nil {
+		_ = json.NewEncoder(conn).Encode(bridgeReply{Error: err.Error()})
+		return
+	}
 	var req bridgeRequest
 	rd := bufio.NewReaderSize(conn, 64<<10)
 	conn.SetReadDeadline(time.Now().Add(time.Duration(requestTime.Load())))
@@ -191,16 +280,23 @@ func answer(conn net.Conn, call Call) {
 		return
 	}
 	conn.SetReadDeadline(time.Time{})
+	if expectedToken != "" && subtle.ConstantTimeCompare([]byte(req.Token), []byte(expectedToken)) != 1 {
+		_ = json.NewEncoder(conn).Encode(bridgeReply{Error: "browser: unauthorized"})
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	if req.Thread != "" {
+		ctx = WithThread(ctx, req.Thread)
+	}
 	// The caller sends nothing more that matters: its connection
 	// ending is it hanging up.
 	go func() {
 		io.Copy(io.Discard, rd)
 		cancel()
 	}()
-	text, err := call(ctx, req.Tool, req.Args)
-	r := bridgeReply{Text: text}
+	reply, err := call(ctx, req.Tool, req.Args)
+	r := bridgeReply{Text: reply.Text, Image: reply.Image, MimeType: reply.MimeType}
 	if err != nil {
 		r = bridgeReply{Error: err.Error()}
 	}

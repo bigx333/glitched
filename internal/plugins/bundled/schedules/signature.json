@@ -2,9 +2,9 @@
   "format": "glitched-plugin-signature:v1",
   "key": "dj7v6ruVjh7tTklNCssj6SWwWpzkD0Xc9J6Jy0sFzgw=",
   "files": {
-    "main.js": "5300be7644cf44be2142c81e69291f16e4a191d1a4e8703e776dc989de847f5b",
-    "plugin.json": "ac906c64f163f08671f10e4e149be5dce04bab22a9a40ee36f29f390182bd54a",
-    "service.js": "8a917e1b27e00c23c299ac0477588fc4061965cf10e5f99a89a5542f1a115e93"
+    "main.ts": "317e7d501d3a6a138f3a2710d29360fbf0700194809d9f450a9cdb7ffe81d4d8",
+    "plugin.json": "e4c45c774d575a8dbbf934053df31290eec0743e2ffbf08a1b91b6ff7b99bb3c",
+    "service.ts": "31cd4ebbd242b3ccd1ad43f09c04068daf322739747097d12fff46a33b3d768c"
   },
-  "sig": "LsNL7QqyYCHKlXP2IGepdUgae4TjPBH2s07ivG8O3d+W5oyYAZLtTAti+uqyIlI1k4ZlQXlEUFSS+iN3ornPAw=="
+  "sig": "0kcVqEExnVA7HojWHe2UzGqCnCNVLTvivdeu69DQOx852JpuC0mAwt0Nvmp6oHVlFh+fys07RlV92NHzJWfGBg=="
 }

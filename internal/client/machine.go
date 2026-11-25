@@ -158,7 +158,8 @@ func (m *Manager) RemoveToken(label string) error {
 // old engine has released the directory. Called again before the new
 // engine starts, it restarts that one too, as it may have read
 // engine.json before a change. It does nothing to an engine another
-// process runs.
+// process runs. With a background service for the directory (Served), the
+// service's engine takes the directory over instead.
 func (m *Manager) Restart() {
 	switch {
 	case m.closed:
@@ -185,7 +186,7 @@ func (m *Manager) Restart() {
 }
 
 func (m *Manager) newLocal() *local {
-	l := &local{dir: m.cfg.Dir, engine: m.cfg.Engine, done: make(chan struct{})}
+	l := &local{dir: m.cfg.Dir, engine: m.cfg.Engine, served: m.cfg.Served, done: make(chan struct{})}
 	l.hosted = func(d *daemon.Daemon) {
 		m.post(m.ctx, func() {
 			if m.local != l {
