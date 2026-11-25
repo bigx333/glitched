@@ -139,7 +139,8 @@ func fmtTokens(n int64) string {
 }
 
 // pruneThreadState drops what the app keeps by thread for threads no
-// longer there: the sidebar's open children and the composers seen.
+// longer there: the sidebar's open children and the composers seen. Rows
+// derived from a transcript the manager no longer holds go too.
 func (a *app) pruneThreadState() {
 	gone := func(id api.ID, _ bool) bool {
 		_, ok := a.find(id)
@@ -147,7 +148,10 @@ func (a *app) pruneThreadState() {
 	}
 	maps.DeleteFunc(a.childrenOpen, gone)
 	maps.DeleteFunc(a.composerSeen, gone)
-	maps.DeleteFunc(a.rows, func(id api.ID, _ *rowsCache) bool { return gone(id, false) })
+	maps.DeleteFunc(a.rows, func(id api.ID, c *rowsCache) bool {
+		t, ok := a.find(id)
+		return !id.IsZero() && (!ok || t.Transcript != c.tr)
+	})
 	maps.DeleteFunc(a.markers, func(id api.ID, _ *markerState) bool { return gone(id, false) })
 }
 
