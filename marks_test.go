@@ -1289,3 +1289,106 @@ func TestOnlyAProjectsFirstMarkIsWhereItIsNotShown(t *testing.T) {
 		t.Errorf("glitched is %v; want wind #ec4899", m)
 	}
 }
+
+func TestMarksDeletedWhileTheAppRunsKeepTheirOrderOverARestart(t *testing.T) {
+	dir := t.TempDir()
+	a := marksApp(dir, "mygo")
+	showMarks(a, "mygo", "pstack-t3")
+	showMarks(a, "mygo", "pstack-t3", "glitched")
+	before := marksDrawn(a)
+	if err := os.Remove(filepath.Join(dir, "marks.json")); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		showMarks(a, "mygo", "pstack-t3", "glitched")
+	}
+	b := marksApp(dir, "mygo", "pstack-t3", "glitched")
+	for n, m := range before {
+		if got := marksDrawn(b)[n]; got != m {
+			t.Errorf("after a restart %s moved from %v to %v", n, m, got)
+		}
+	}
+}
+
+func TestMarksDeletedWhileTheAppRunsAreWrittenOnTheNextRebuildOnce(t *testing.T) {
+	dir := t.TempDir()
+	a := marksApp(dir, "mygo")
+	showMarks(a, "mygo", "pstack-t3", "glitched")
+	held := slices.Clone(a.marks)
+	if err := os.Remove(filepath.Join(dir, "marks.json")); err != nil {
+		t.Fatal(err)
+	}
+	showMarks(a, "mygo", "pstack-t3", "glitched")
+	ms, mtime := readMarks(t, dir)
+	if !slices.Equal(ms, held) {
+		t.Errorf("marks.json holds %v; want %v", ms, held)
+	}
+	for range 4 {
+		time.Sleep(5 * time.Millisecond)
+		showMarks(a, "mygo", "pstack-t3", "glitched")
+	}
+	if again, m := readMarks(t, dir); !m.Equal(mtime) || !slices.Equal(again, ms) {
+		t.Errorf("rebuilds wrote marks.json again: %v to %v", ms, again)
+	}
+}
+
+// keptAsIs fails t if marks.json in dir isn't src.
+func keptAsIs(t *testing.T, dir, src string) {
+	t.Helper()
+	if b, _ := os.ReadFile(filepath.Join(dir, "marks.json")); string(b) != src {
+		t.Errorf("marks.json was rewritten to %s", b)
+	}
+}
+
+func TestAMarkThisVersionCantReadLeavesMarksJSONAsItIs(t *testing.T) {
+	dir := t.TempDir()
+	src := `[{"name":"pstack-t3","icon":"wind","color":"#0ea5e9"},{"name":"mygo","icon":"phone","color":"#0ea5e9"},{"name":"x","icon":5,"color":"#0ea5e9"}]`
+	if err := os.WriteFile(filepath.Join(dir, "marks.json"), []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var logged syncBuffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	a := marksApp(dir, "pstack-t3", "mygo")
+	by := marksDrawn(a)
+	if by["pstack-t3"] != (projectMark{"pstack-t3", "wind", "#0ea5e9"}) || by["mygo"] != (projectMark{"mygo", "phone", "#0ea5e9"}) {
+		t.Errorf("drawn %v; want the stored marks", by)
+	}
+	for range 3 {
+		showMarks(a, "pstack-t3", "mygo")
+	}
+	showMarks(a, "pstack-t3", "mygo", "glitched")
+	keptAsIs(t, dir, src)
+	by = marksDrawn(a)
+	if g := by["glitched"].Icon; g == "wind" || g == "phone" {
+		t.Errorf("glitched is drawn on %s: %v", g, by)
+	}
+	if n := strings.Count(logged.String(), "is not one this version writes"); n != 1 {
+		t.Errorf("logged %q", logged.String())
+	}
+}
+
+func TestMarksOfAnotherShapeAreLeftAsTheyAre(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "marks.json")
+	src := `{"version":2,"marks":[{"name":"mygo","icon":"wind","color":"#0ea5e9"}]}`
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := marksApp(dir, "glitched", "mygo")
+	showMarks(a, "glitched", "mygo", "pstack-t3")
+	keptAsIs(t, dir, src)
+	by := marksDrawn(a)
+	if g, m, p := by["glitched"].Icon, by["mygo"].Icon, by["pstack-t3"].Icon; g == m || m == p || g == p {
+		t.Errorf("drawn %v", by)
+	}
+
+	// Another window makes it one this version writes, and so it does again.
+	if err := os.WriteFile(path, []byte(`[{"name":"mygo","icon":"folder","color":"#14b8a6"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	showMarks(a, "glitched", "mygo", "pstack-t3", "sparky")
+	if ms, _ := readMarks(t, dir); len(ms) != 4 || ms[0] != (projectMark{"mygo", "folder", "#14b8a6"}) {
+		t.Errorf("marks.json holds %v", ms)
+	}
+}

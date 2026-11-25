@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"hash/fnv"
 	"log"
@@ -260,20 +261,56 @@ func (a *app) statMarks() marksFile {
 
 func (f marksFile) same(g marksFile) bool { return f.mod.Equal(g.mod) && f.size == g.size }
 
-// loadMarks takes the projects' marks as marks.json holds them.
+// decodeMarks is the marks in raw, a JSON value, in their order, and
+// whether raw is an array of marks this version writes. An entry that
+// doesn't decode is skipped. A newer version's extra fields on an entry
+// are dropped when this one writes the entry again.
+func decodeMarks(raw json.RawMessage) (ms []projectMark, ours bool) {
+	var entries []json.RawMessage
+	if raw != nil && json.Unmarshal(raw, &entries) != nil {
+		return nil, false
+	}
+	ours = true
+	for _, e := range entries {
+		var m projectMark
+		if json.Unmarshal(e, &m) != nil {
+			ours = false
+			continue
+		}
+		ms = append(ms, m)
+	}
+	return ms, ours
+}
+
+// loadMarks takes the projects' marks as marks.json holds them. One this
+// version doesn't write is never written here, till it changes.
 func (a *app) loadMarks() {
 	a.marksRead, a.marksShown = a.statMarks(), ""
-	a.marks = nil
-	if err := jsonfile.Load(a.marksPath(), &a.marks); err != nil {
+	var raw json.RawMessage
+	if err := jsonfile.Load(a.marksPath(), &raw); err != nil {
 		log.Printf("glitched: marks: %v", err)
-		a.marks = nil
 	}
+	ms, ours := decodeMarks(raw)
+	a.heldMarks(!ours)
+	a.marks = ms
 	a.drawnMarks = marksByName(a.marks)
+}
+
+// heldMarks is whether marks.json is one this version doesn't write, and
+// so the marks are held here; it says so once.
+func (a *app) heldMarks(held bool) {
+	if held && !a.marksHeld {
+		log.Printf("glitched: marks: %s is not one this version writes; marks held for this session", a.marksPath())
+	}
+	a.marksHeld = held
 }
 
 // errMarksSettled leaves marks.json as it is: what another window wrote
 // there settles the projects shown here already.
 var errMarksSettled = errors.New("marks settled")
+
+// errMarksHeld leaves marks.json as it is: another version wrote it.
+var errMarksHeld = errors.New("marks held")
 
 // settleShownMarks gives the projects the sidebar has a mark each, as
 // settleMarks does, onto what another window wrote to marks.json since,
@@ -281,9 +318,15 @@ var errMarksSettled = errors.New("marks settled")
 // hold here for as long as the app runs. With the same projects shown,
 // and the file as it was, there is nothing to do.
 func (a *app) settleShownMarks() {
-	// A file gone leaves the marks here, to write again.
-	if f := a.statMarks(); a.dir != "" && !f.same(marksFile{}) && !f.same(a.marksRead) {
-		a.loadMarks()
+	// A file gone leaves the marks here, to write again on this rebuild.
+	rewrite := false
+	if f := a.statMarks(); a.dir != "" && !f.same(a.marksRead) {
+		if f.same(marksFile{}) {
+			a.marksRead, rewrite = f, len(a.marks) > 0
+			a.heldMarks(false)
+		} else {
+			a.loadMarks()
+		}
 	}
 	var names []string
 	for _, p := range a.projects {
@@ -294,30 +337,38 @@ func (a *app) settleShownMarks() {
 	slices.Sort(names)
 	names = slices.Compact(names)
 	shown := strings.Join(names, "\x00")
-	if shown == a.marksShown && a.drawnMarks != nil {
+	if shown == a.marksShown && a.drawnMarks != nil && !rewrite {
 		return
 	}
 	a.marksShown = shown
 	before := a.marks
-	if out, changed := settleMarks(a.marks, names); changed {
+	if out, changed := settleMarks(a.marks, names); changed || rewrite {
 		a.marks = out
-		if a.dir != "" {
-			ms, err := jsonfile.EditOrReset(a.marksPath(), func(ms *[]projectMark) error {
+		if a.dir != "" && !a.marksHeld {
+			var ms []projectMark
+			_, err := jsonfile.EditOrReset(a.marksPath(), func(raw *json.RawMessage) error {
+				from, ours := decodeMarks(*raw)
+				if !ours {
+					return errMarksHeld
+				}
 				// A file gone, or made anew, leaves the marks here to keep.
-				from, lost := *ms, len(*ms) == 0 && len(before) > 0
+				lost := len(from) == 0 && len(before) > 0
 				if lost {
 					from = before
 				}
 				out, changed := settleMarks(from, names)
-				if !changed && !lost {
+				if ms = out; !changed && !lost {
 					return errMarksSettled
 				}
-				*ms = out
-				return nil
+				b, err := json.Marshal(out)
+				*raw = b
+				return err
 			})
 			switch {
 			case err == nil || errors.Is(err, errMarksSettled):
 				a.marks, a.marksRead = ms, a.statMarks()
+			case errors.Is(err, errMarksHeld):
+				// Read again, and held, on the next rebuild.
 			default:
 				log.Printf("glitched: marks: %v", err)
 			}
