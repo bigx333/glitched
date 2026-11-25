@@ -145,11 +145,11 @@ var ErrUnchanged = errors.New("daemon: engine.json unchanged")
 // jsonfile.Edit does: change gets the Config the file holds now, read as
 // Defaults reads it. It returns the Config written.
 //
-// Turning children from other machines off or on removes every link's
-// token, so each machine a link was minted for is removed: off ends them
-// all, and on starts with none. Off writes the setting first, so a link
-// minted meanwhile is removed too; on removes them first, so none left
-// over comes back.
+// Turning children from other machines on removes every link's token
+// first, so none left over comes back; and an Edit that leaves them off,
+// a retry or a change to anything else included, removes them after
+// writing, so a link minted meanwhile goes too. Off thus ends every link,
+// and on starts with none.
 func Edit(dir string, change func(*Config) error) (Config, error) {
 	var cfg Config
 	var was bool
@@ -169,8 +169,10 @@ func Edit(dir string, change func(*Config) error) (Config, error) {
 		}
 		return cfg.write(raw)
 	})
-	if err == nil && was && cfg.ChildrenFromOtherMachines == nil {
-		err = endLinks(dir)
+	if (err == nil || errors.Is(err, ErrUnchanged)) && cfg.ChildrenFromOtherMachines == nil {
+		if e := endLinks(dir); e != nil {
+			return cfg, e
+		}
 	}
 	return cfg, err
 }

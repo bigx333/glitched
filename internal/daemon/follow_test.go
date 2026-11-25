@@ -814,7 +814,7 @@ func TestRemovingThisMachineOnBLosesTheChildAfterTwoRefusedDials(t *testing.T) {
 	if err := RemoveToken(p.dirB, "a"); err != nil {
 		t.Fatal(err)
 	}
-	p.lostOnce(kid, "b removed this machine, or turned off children from other machines")
+	p.lostOnce(kid, "b no longer accepts this machine's link, as when it removed this machine or turned off children from other machines")
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	if x.refused != 2 {

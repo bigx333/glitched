@@ -162,13 +162,20 @@ func RemoveToken(dir, label string) error {
 	})
 }
 
-// endLinks removes every link's token, as turning children from other
-// machines off or on does, so no link minted before comes back.
+// endLinks removes every link's token, as children from other machines
+// off and turning them on do, so no link minted before comes back.
 func endLinks(dir string) error {
-	return edit(dir, func(ts *[]Token) error {
+	err := edit(dir, func(ts *[]Token) error {
+		if !slices.ContainsFunc(*ts, func(t Token) bool { return t.Link != nil }) {
+			return ErrUnchanged
+		}
 		*ts = slices.DeleteFunc(*ts, func(t Token) bool { return t.Link != nil })
 		return nil
 	})
+	if errors.Is(err, ErrUnchanged) {
+		return nil
+	}
+	return err
 }
 
 func Tokens(dir string) ([]Token, error) {
@@ -310,7 +317,22 @@ func (g *grants) authorize(r *http.Request, proved func(transport.Key) bool) (tr
 		return transport.Grant{}, errUnknownToken
 	}
 	slog.Info("admitted a socket", "token", match.label, "link", match.link != nil, "from", r.RemoteAddr)
-	return transport.Grant{Key: key, Done: match.ctx, Link: match.link}, nil
+	gr := transport.Grant{Key: key, Done: match.ctx, Link: match.link}
+	if match.link != nil {
+		gr.Current = func() bool { return g.current(key) }
+	}
+	return gr, nil
+}
+
+// current says whether the token whose key is key is still admitted, as
+// tokens.json and engine.json are now. A link's socket asks it at each
+// call, so a removal from another process refuses the next call at once.
+func (g *grants) current(key transport.Key) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.reload()
+	_, ok := g.live[key]
+	return ok
 }
 
 // refused logs a peer's refusal at most once a minute, however often it

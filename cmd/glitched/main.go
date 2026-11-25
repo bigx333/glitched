@@ -314,7 +314,7 @@ func pair(_ context.Context, args []string) error {
 	access := fs.String("access", "auto-edits", "with -link, the most a child the link starts may run at: ask, auto-edits or full")
 	working := fs.Int("working", 0, "with -link, how many of the link's children may work at once; 0 is this engine's child limit")
 	all := fs.Int("all", 0, "with -link, how many children the link may have; 0 is this engine's child limit")
-	children := fs.String("children", "", "set this machine's setting for children from other machines: off, or the most access any link's child may run at, ask, auto-edits or full")
+	children := fs.String("children", "", "set this machine's setting for children from other machines: off, which removes every machine a link was minted for and deletes its token (what runs here keeps running), or the most access any link's child may run at, ask, auto-edits or full")
 	if err := parseQuiet(fs, args); err != nil {
 		return err
 	}
@@ -407,7 +407,7 @@ func setChildren(dir, level string) error {
 	}
 	switch {
 	case ceiling == nil:
-		fmt.Println("Children from other machines are off.")
+		fmt.Println("Children from other machines are off. Every machine a link was minted for is removed, so turning them on again starts with no links.")
 	case *ceiling == api.AccessFull:
 		fmt.Println("Children from other machines may run at full access. An agent at full access runs as this machine's user with no prompts, so it can read every thread's credentials here.")
 	default:

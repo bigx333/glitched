@@ -457,39 +457,30 @@ func TestALinksCreateIsClosedAndChecked(t *testing.T) {
 	rejected("a repository with two checkouts", l.create(api.AccessAsk, 1), "several checkouts")
 }
 
-// A create on a link's socket that outlives its removal, as one does for
-// up to a second, is refused by its own commit, which reads tokens.json.
-func TestALinksCreateOnARemovedMachinesSocketIsRefusedAtCommit(t *testing.T) {
+// A create on a link's socket after its machine's removal returns closes
+// the socket instead of running, and makes no thread.
+func TestALinksCreateAfterItsRemovalClosesTheSocket(t *testing.T) {
 	l := newLinked(t, api.Link{Access: api.AccessAutoEdits}, false)
 	ctx := context.Background()
-	for try := 0; ; try++ {
-		if _, err := l.ep.Info(ctx); err != nil {
-			t.Fatal(err)
-		}
-		if err := RemoveToken(l.dirB, "a"); err != nil {
-			t.Fatal(err)
-		}
-		_, err := l.ep.Submit(ctx, l.create(api.AccessAsk, 1))
-		var rej *api.RejectedError
-		if errors.As(err, &rej) {
-			if !strings.Contains(rej.Reason, "removed") {
-				t.Fatalf("the create on a removed link's live socket: %v, want refused as removed", err)
-			}
-			return
-		}
-		if err == nil {
-			t.Fatal("a create on a removed link's live socket was taken")
-		}
-		// The second's reload closed the socket first: try on another.
-		if try == 5 {
-			t.Fatalf("each removed socket closed before its create: %v", err)
-		}
-		l.ep.Close()
-		label := "a"
-		if l.token, l.link, err = PairLink(l.dirB, label, api.Link{Access: api.AccessAutoEdits}); err != nil {
-			t.Fatal(err)
-		}
-		l.ep = l.client(l.token)
+	if _, err := l.ep.Info(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before, err := l.b.Endpoint().Read(ctx, api.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveToken(l.dirB, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.ep.Submit(ctx, l.create(api.AccessAsk, 1)); err == nil || !strings.Contains(err.Error(), "the token was removed") {
+		t.Fatalf("a create on a removed link's live socket: %v, want the socket closed as the token was removed", err)
+	}
+	snap, err := l.b.Endpoint().Read(ctx, api.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Threads) != len(before.Threads) {
+		t.Fatalf("b holds %d threads after a create on a removed link's socket, want %d", len(snap.Threads), len(before.Threads))
 	}
 }
 
