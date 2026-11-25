@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -114,31 +115,44 @@ func (a *app) engineCard(c *ui.Context, m client.Machine) {
 }
 
 func (a *app) refreshService() {
-	if a.svcLoading {
+	if a.svcLoading || a.svcBusy {
 		return
 	}
 	a.svcLoading = true
-	dir := a.dir
+	dir, sets := a.dir, a.svcSets
 	go func() {
 		st := service.Inspect(context.Background(), service.Options{Dir: dir})
 		a.post(func() {
 			a.svcLoading = false
+			// A switch since the read began makes what it read stale.
+			if a.svcSets != sets {
+				return
+			}
 			a.svcStatus = st
 			a.svcRead = time.Now()
 		})
 	}()
 }
 
-func (a *app) setServiceInstalled(c *ui.Context, install bool) {
+// setServiceInstalled installs or uninstalls the background service. The
+// service waits for the engine lock, so once it is installed an engine
+// embedded here hands the directory over to it.
+func (a *app) setServiceInstalled(install bool) {
 	if a.svcBusy {
 		return
 	}
 	a.svcBusy, a.svcErr = true, ""
+	a.svcSets++
 	dir := a.dir
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		// The service runs this app's own binary, which knows serve's
+		// -wait-lock, not whichever glitched is first on PATH.
 		opts := service.Options{Dir: dir}
+		if exe, err := os.Executable(); err == nil {
+			opts.Binary = exe
+		}
 		var st service.Status
 		var err error
 		if install {
@@ -152,6 +166,9 @@ func (a *app) setServiceInstalled(c *ui.Context, install bool) {
 			a.svcRead = time.Now()
 			if err != nil {
 				a.svcErr = err.Error()
+			}
+			if install && err == nil && a.backend.Machine().Embedded {
+				a.backend.HandOver()
 			}
 			a.backend.Inspect()
 		})
@@ -179,11 +196,15 @@ func (a *app) serviceRow(c *ui.Context) {
 	case st.Installed:
 		desc = "Installed (stopped). " + st.UnitPath
 	}
+	busy := a.localRuns() > 0
 	settingRow(c, "Background service", desc, func() {
-		sw := ui.Switch(c.Key("bg-service"), &on).Label("Background service").
-			Disabled(a.svcBusy || (!a.svcRead.IsZero() && !st.Supported))
+		sw := ui.Switch(c.Key("bg-service"), &on).Label("Enable background service").
+			Disabled(a.svcBusy || busy || (!a.svcRead.IsZero() && !st.Supported))
+		if busy {
+			a.tip(c, sw, stopFirst)
+		}
 		if sw.Changed() {
-			a.setServiceInstalled(c, on)
+			a.setServiceInstalled(on)
 		}
 	})
 	if a.svcErr != "" {

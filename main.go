@@ -666,6 +666,7 @@ type app struct {
 	svcRead    time.Time
 	svcLoading bool
 	svcBusy    bool
+	svcSets    int // switches of the service, so a read begun before one is dropped
 	svcErr     string
 
 	glassOffset ui.Point

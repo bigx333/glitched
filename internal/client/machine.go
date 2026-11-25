@@ -159,7 +159,19 @@ func (m *Manager) RemoveToken(label string) error {
 // engine starts, it restarts that one too, as it may have read
 // engine.json before a change. It does nothing to an engine another
 // process runs.
-func (m *Manager) Restart() {
+func (m *Manager) Restart() { m.restart(0) }
+
+// handOverTimeout is how long HandOver waits for another process's engine
+// before it embeds one again.
+const handOverTimeout = 15 * time.Second
+
+// HandOver stops the engine embedded here, as Restart does, for the
+// background service's engine, which waits for its lock, to take the
+// directory, and attaches to that engine. When none answers within
+// handOverTimeout, it embeds one again.
+func (m *Manager) HandOver() { m.restart(handOverTimeout) }
+
+func (m *Manager) restart(attachFor time.Duration) {
 	switch {
 	case m.closed:
 		return
@@ -175,6 +187,9 @@ func (m *Manager) Restart() {
 	e.unlink()
 	m.down(e, Connecting{})
 	m.local = m.newLocal()
+	if attachFor > 0 {
+		m.local.attachUntil = time.Now().Add(attachFor)
+	}
 	m.wg.Go(func() {
 		<-old.done
 		if old.err != nil {

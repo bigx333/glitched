@@ -703,6 +703,9 @@ type local struct {
 	embedded *daemon.Daemon
 	err      error         // from closing the embedded engine
 	done     chan struct{} // closed once close returns
+	// attachUntil: till then it only attaches, as another process's engine
+	// takes over from the one embedded here.
+	attachUntil time.Time
 }
 
 func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
@@ -714,6 +717,9 @@ func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 	}
 	// An engine holds the lock while it starts, and answers once it serves.
 	deadline := time.Now().Add(connectTimeout)
+	if l.attachUntil.After(time.Now()) {
+		deadline = l.attachUntil.Add(connectTimeout)
+	}
 	for {
 		c := transport.NewEndpointClient(daemon.Socket(l.dir), api.ID{})
 		probe, cancel := context.WithTimeout(ctx, probeTimeout)
@@ -725,6 +731,14 @@ func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 			return c, nil
 		}
 		c.Close()
+		if time.Now().Before(l.attachUntil) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(probeInterval):
+			}
+			continue
+		}
 		cfg, err := daemon.Defaults(l.dir)
 		if err != nil {
 			return nil, err
