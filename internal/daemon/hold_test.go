@@ -150,35 +150,53 @@ func (pr *readProbe) intercept(fn func(context.Context, api.Query) (api.Snapshot
 	pr.mu.Unlock()
 }
 
-// B's Reads failing while its child finishes keep A from knowing what
-// holds there, never from its child's done report.
-func TestAFailedReadOfWhatHoldsKeepsTheReport(t *testing.T) {
+// B's Reads failing over and over, while its stream and its replies
+// answer, keep A from knowing what holds there, never from its child or
+// the child's done report.
+func TestFailedReadsOfWhatHoldsKeepTheChildAndItsReport(t *testing.T) {
 	p := newRemotes(t, fake.New(fake.Turn(true)), "fake", engine.Limits{})
 	pr := probeLink(t, p)
 	k := p.place("report without the hold")
 	b := p.bound(k).Thread
+	send := func(intent api.Intent) api.Receipt {
+		c, err := p.b.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: b, Body: intent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	approve := func() {
+		rq := engine.View(p.onB(b)).Requests[0]
+		send(api.RequestRespond{Request: rq.ID, Generation: rq.Generation, Answer: []byte(`{"allow":true}`)})
+	}
 	until(t, "the blocked report", func() bool {
 		rs, _ := p.reports(k)
 		return len(rs) == 1 && p.placeholder(k).Remote.Slot == api.RunWaiting
 	})
+	approve()
+	until(t, "the first turn ended", func() bool { return p.placeholder(k).Remote.Ended != nil })
+	second := send(api.MessageDispatch{Text: "second task"})
+	until(t, "the second turn waiting on both machines", func() bool {
+		r := p.placeholder(k).Remote
+		return r.Run == second.Command && r.Slot == api.RunWaiting
+	})
 	var failed atomic.Int32
 	pr.intercept(func(ctx context.Context, q api.Query) (api.Snapshot, error) {
-		if failed.Add(1) <= 3 {
+		if failed.Add(1) <= 6 {
 			return api.Snapshot{}, errors.New("a brief storage error")
 		}
 		return pr.inner().Read(ctx, q)
 	})
-	rq := engine.View(p.onB(b)).Requests[0]
-	if _, err := p.b.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: b, Body: api.RequestRespond{Request: rq.ID, Generation: rq.Generation, Answer: []byte(`{"allow":true}`)}}); err != nil {
-		t.Fatal(err)
-	}
-	until(t, "A's report of how it ended", func() bool {
+	send(api.ThreadConfigure{Effort: new("high")})
+	until(t, "six failed reads", func() bool { return failed.Load() >= 6 })
+	approve()
+	until(t, "the second turn's report", func() bool {
 		rs, _ := p.reports(k)
-		return slices.ContainsFunc(rs, func(r api.ChildReported) bool { return r.Kind == api.ReportDone || r.Kind == api.ReportFailed })
+		return slices.ContainsFunc(rs, func(r api.ChildReported) bool { return r.Run == second.Command && r.Kind == api.ReportDone })
 	})
 	rs, _ := p.reports(k)
-	if !slices.ContainsFunc(rs, func(r api.ChildReported) bool { return r.Kind == api.ReportDone }) || failed.Load() < 3 {
-		t.Errorf("after %d failed reads, A reported %v and lost %q; want its child done", min(failed.Load(), 3), rs, p.placeholder(k).Remote.Lost)
+	if slices.ContainsFunc(rs, func(r api.ChildReported) bool { return r.Kind == api.ReportFailed }) || p.placeholder(k).Remote.Lost != "" {
+		t.Errorf("after failed reads, A reported %v and lost %q; want only its child done", rs, p.placeholder(k).Remote.Lost)
 	}
 }
 

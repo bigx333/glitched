@@ -457,49 +457,49 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 	// once, with its events after cursor, which this engine hasn't read:
 	// whether it holds what waits on it after a stop is that machine's to
 	// decide, from more than those events, and true only of the view of
-	// the same commit as the events read.
-	since := func(cursor api.Cursor) (events []api.Event, held bool, err error) {
+	// the same commit as the events read. ok is that it was: a machine
+	// whose log isn't cursor's, as after a restore there, says it once the
+	// stream's snapshot of that log is read.
+	since := func(cursor api.Cursor) (events []api.Event, held, ok bool, err error) {
 		rctx, cancel := context.WithTimeout(ctx, callTimeout)
 		defer cancel()
 		snap, err := m.Read(rctx, api.Query{Thread: r.Thread, After: cursor})
-		if err != nil {
-			return nil, false, err
+		if err != nil || snap.Cursor.Log != cursor.Log {
+			return nil, false, false, err
 		}
 		for _, e := range snap.Events {
-			if e.Cursor.Log == cursor.Log && e.Cursor.Seq > cursor.Seq {
+			if e.Cursor.Seq > cursor.Seq {
 				events = append(events, e)
 			}
 		}
-		return events, len(snap.Threads) == 1 && snap.Threads[0].Resumable, nil
+		return events, len(snap.Threads) == 1 && snap.Threads[0].Resumable, true, nil
 	}
-	// A child followed before this engine kept what holds there learns
-	// it now, whether or not the machine has anything new; one that has
-	// learns it with what's new, and one whose machine didn't answer
-	// learns it then.
-	if events, held, err := since(r.Cursor); err == nil && len(events) == 0 && held != r.Held {
-		o := engine.RemoteSeen{Cursor: r.Cursor, Run: r.Run, Silent: r.Silent, Slot: r.Slot, Pending: r.Pending, Taken: r.Taken, Ended: r.Ended, Model: r.Model, Access: r.Access, Turn: r.Turn, Held: held, On: label}
-		if _, err := h.store.Observe(ctx, t.ID, o, h.clock(), 0); errors.Is(err, engine.ErrRefused) {
-			return false, errObsolete
-		} else if err != nil {
-			return false, err
-		}
-		progressed = true
-		r.Held = held
-	}
+	// stale is that what holds there wasn't read with the last batch: what
+	// was read before stands until a read, a second on, says otherwise.
+	stale := false
 	now, cancel := context.WithCancel(ctx)
 	cancel()
 	for {
-		it, err := st.Next(ctx)
+		wait, cancel := ctx, context.CancelFunc(func() {})
+		if stale {
+			wait, cancel = context.WithTimeout(ctx, time.Second)
+		}
+		it, err := st.Next(wait)
+		cancel()
 		if cause := context.Cause(ctx); cause != nil && ctx.Err() != nil && errors.Is(cause, ErrNoMachine) {
 			return progressed, cause
 		}
-		if err != nil {
+		var items []api.StreamItem
+		switch {
+		case stale && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
+		case err != nil:
 			return progressed, err
+		default:
+			h.hear(t.ID)
+			items = append(items, it)
 		}
-		h.hear(t.ID)
-		items := []api.StreamItem{it}
 		var later error
-		for {
+		for len(items) > 0 {
 			it, err := st.Next(now)
 			if err != nil {
 				if !errors.Is(err, context.Canceled) {
@@ -542,15 +542,17 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 		}
 		// What the machine committed since the stream's last item is folded
 		// now, with the view it holds at once; the stream's copies of those
-		// events, later, are skipped. A machine that didn't answer leaves
-		// the child not held until it does, and the follower reconnects
-		// once what it read is committed.
-		events, held, err := since(next.Cursor)
-		if err != nil && later == nil {
+		// events, later, are skipped. A machine that didn't answer keeps
+		// what was last read of it until it does; one that refuses the link
+		// or no longer has the child ends the follower.
+		events, held, ok, err := since(next.Cursor)
+		if (errors.Is(err, api.ErrNotAllowed) || errors.Is(err, api.ErrNotFound)) && later == nil {
 			later = err
 		}
-		next.Held = held
-		if err == nil && len(events) > 0 {
+		if stale = !ok; ok {
+			next.Held = held
+		}
+		if ok && len(events) > 0 {
 			var got []engine.RemoteReport
 			var gone bool
 			if next, got, gone, err = engine.Follow(next, events, false); err != nil {
