@@ -668,7 +668,9 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // a link's messages by its settles, which a version 19 engine would let a
 // late message reopen; version 21 says in a view where a remote child runs
 // and where a link's thread came from, which a version 20 GUI would show
-// as a child it can't open and a thread of the user's.
+// as a child it can't open and a thread of the user's, and sends a link's
+// thread stream its views, without which a version 20 engine's follower
+// can't say what a stop there holds.
 const Protocol = 21
 
 type Environment struct {
