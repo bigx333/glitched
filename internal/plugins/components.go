@@ -48,6 +48,7 @@ var Components = []Component{
 	{Name: "sidebar.projects", Provides: "projectStrip", Needs: "threads:read", About: "The sidebar's project strip: All, a chip per project that filters the inbox to it, and Add project."},
 	{Name: "thread.row.actions", Provides: "rowActions", Needs: "threads:write", About: "A sidebar row's actions, shown while it's pointed at: snooze, with its popover of times, settle, or back to the inbox."},
 	{Name: "thread.panel.diff", Provides: "diffPanel", Needs: "threads:read", About: "The diff panel: its header, and its list of changed files over the native diff.body."},
+	{Name: "thread.panel.terminal", Provides: "terminalPanel", Native: true, Requires: "terminal.body", About: "The terminal drawer: its header over the native terminal.body."},
 	{Name: "thread.panel.subagent", Provides: "subagentPanel", Needs: "messages:read", About: "The panel a native subagent's step opens: its header, and what the subagent said and the steps it took, in order, and how it ended."},
 	{Name: "composer", Provides: "composer", Native: true, Requires: "composer.input", About: "The composer's layout, around the native composer.input: the card the user writes in, with its pickers, Send, and what comes and goes with it."},
 	{Name: "timeline.message", Provides: "timelineMessage", Native: true, Requires: "transcript.body", About: "A row of the chat timeline, around the native transcript.body: a message, a run's work log, or an error. Approval, question and report cards stay Glitched's."},
