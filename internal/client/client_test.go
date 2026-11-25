@@ -767,9 +767,14 @@ func TestDismissingAFailedCreateDropsItsThread(t *testing.T) {
 	if len(p) != 1 || p[0].Err == nil || p[0].Terminal() {
 		t.Fatalf("with no engine the create is %s, want failed and worth a retry", describePending(p))
 	}
+	m.OpenThread(env, id)
+	m.CloseThread(env, id)
 	m.Dismiss(env, id, p[0].Command)
 	if env.Threads[id] != nil {
 		t.Fatal("the thread whose create was dismissed is still shown")
+	}
+	if len(m.closedCache) != 0 {
+		t.Fatalf("the dismissed thread still holds a place among the cached transcripts: %v", m.closedCache)
 	}
 }
 
