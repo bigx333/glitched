@@ -45,3 +45,49 @@ func TestAPlaceholderSaysWhatAStopThereHolds(t *testing.T) {
 	until(t, "A's placeholder no longer held", func() bool { return !engine.View(p.placeholder(k)).Remote.Held })
 	folded(t, p.a.store)
 }
+
+// A report B's thread already ran a turn for holds nothing after a stop
+// there, so A's placeholder doesn't say held.
+func TestAStopAfterAReportRanHoldsNothing(t *testing.T) {
+	p := newRemotes(t, fake.New(fake.Turn(false)), "fake", engine.Limits{})
+	p.adB.Spawns(p.b.Endpoint(), "do it there", fake.Child{Title: "nested", Task: "do one piece"})
+	k := p.place("B consumes a report")
+	b := p.bound(k).Thread
+	until(t, "B's turn for its child's report ended, and A followed it", func() bool {
+		th, r := p.onB(b), p.placeholder(k).Remote
+		return len(th.Runs) >= 2 && th.Live() == nil && r.Run == th.Runs[len(th.Runs)-1].ID && r.Slot == api.RunIdle
+	})
+	c, err := p.b.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: b, Body: api.TurnInterrupt{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	until(t, "A followed the stop", func() bool { return p.placeholder(k).Remote.Cursor.Seq >= c.Committed.Seq })
+	if engine.View(p.onB(b)).Resumable {
+		t.Fatal("B holds something to resume")
+	}
+	if engine.View(p.placeholder(k)).Remote.Held {
+		t.Error("A's placeholder says held, though B holds nothing")
+	}
+}
+
+// A placeholder settled here still says held when its thread there, reopened
+// by a message deferred on B, holds it.
+func TestASettledPlaceholderSaysWhatItsReopenedThreadHolds(t *testing.T) {
+	p := newRemotes(t, fake.New(fake.Turn(false)), "fake", engine.Limits{})
+	k := p.place("hold after settle")
+	b := p.bound(k).Thread
+	until(t, "the first run done", func() bool { return p.placeholder(k).Remote.Ended != nil && p.onB(b).Live() == nil })
+	p.submitA(k, settleIt)
+	p.settledThere(b)
+	c, err := p.b.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: b, Body: api.MessageDispatch{Text: "resume this later", Mode: api.Defer}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	until(t, "A followed the deferred message", func() bool { return p.placeholder(k).Remote.Cursor.Seq >= c.Committed.Seq })
+	if !engine.View(p.onB(b)).Resumable {
+		t.Fatal("B holds nothing to resume")
+	}
+	if v := engine.View(p.placeholder(k)); !v.Remote.Held || v.Resumable {
+		t.Errorf("A's placeholder says held %v and resumable %v; want held with nothing to resume here", v.Remote.Held, v.Resumable)
+	}
+}

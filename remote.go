@@ -370,10 +370,10 @@ func (a *app) remoteState(t thread) (string, ui.Color, string) {
 		return "Needs you on " + on, palette.amber, "Its run there was cut off, as by a restart of that machine's engine. Continue it or send it a message on " + on + "."
 	case t.View.Run == api.RunWaiting:
 		return "Needs you on " + on, palette.amber, ""
-	case t.View.Working():
-		return "Working on " + on, palette.blue, ""
 	case r.Held:
 		return "Held on " + on, palette.amber, "Stopped there with messages or reports waiting. They start when someone resumes it on " + on + "; it can't be resumed here."
+	case t.View.Working():
+		return "Working on " + on, palette.blue, ""
 	}
 	return "Idle on " + on, palette.faint, ""
 }

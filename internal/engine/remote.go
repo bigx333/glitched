@@ -21,14 +21,7 @@ import (
 func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, bool, error) {
 	if fresh {
 		r.Run, r.Silent, r.Slot, r.Pending, r.Taken, r.Ended = api.ID{}, false, api.RunIdle, nil, false, nil
-		r.Model, r.Access, r.Turn, r.Hold = api.ModelRef{}, 0, nil, api.Hold{}
-	}
-	// unheld is r's hold without message m, which no longer waits.
-	unheld := func(m api.ID) {
-		drop := func(ids []api.ID) []api.ID {
-			return slices.DeleteFunc(slices.Clone(ids), func(x api.ID) bool { return x == m })
-		}
-		r.Hold.Messages, r.Hold.Wakes = drop(r.Hold.Messages), drop(r.Hold.Wakes)
+		r.Model, r.Access, r.Turn = api.ModelRef{}, 0, nil
 	}
 	var out []RemoteReport
 	add := func(p RemoteReport) {
@@ -65,9 +58,6 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 			r.Model, r.Access = b.Model, b.Access
 		case api.TurnAdmitted:
 			r.Run, r.Silent, r.Slot, r.Pending = b.Run, b.Silent, api.RunStarting, nil
-			if !b.Silent {
-				r.Hold.Stopped = false
-			}
 			r.Turn = &api.TurnResult{Run: b.Run, Model: r.Model, Access: r.Access}
 		case api.TurnStarted:
 			if b.Run == r.Run && r.Slot == api.RunStarting {
@@ -102,16 +92,9 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 			if b.Run == r.Run {
 				r.Slot = api.RunUncertain
 			}
-		case api.TurnSignalled:
-			if b.Run == r.Run && !r.Silent {
-				r.Hold.Stopped = true
-			}
 		case api.TurnEnded:
 			if b.Run != r.Run {
 				break
-			}
-			if !r.Silent && (b.Outcome == api.OutcomeInterrupted || b.Outcome == api.OutcomeAbandoned) {
-				r.Hold.Stopped = true
 			}
 			if !r.Silent {
 				end := api.TurnResult{Run: b.Run}
@@ -143,29 +126,8 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 				r.Taken = b.By.IsZero()
 			}
 			first = false
-			switch {
-			case b.Held && b.Mode == api.Defer:
-				r.Hold.Messages = append(slices.Clip(r.Hold.Messages), b.Message)
-			case b.Held:
-				r.Hold.Wakes = append(slices.Clip(r.Hold.Wakes), b.Message)
-			}
-		case api.MessageHeld:
-			unheld(b.Message)
-			r.Hold.Messages = append(slices.Clip(r.Hold.Messages), b.Message)
-		case api.MessageReleased:
-			unheld(b.Message)
-		case api.MessageClaimed:
-			unheld(b.Message)
-		case api.MessageDispatched:
-			unheld(b.Message)
-		case api.MessageCancelled:
-			unheld(b.Message)
 		case api.StopAsked:
 			r.Taken = b.By.IsZero()
-			// A stop asked of a run that had ended takes at once.
-			if b.Run == r.Run && r.Slot == api.RunIdle && !r.Silent {
-				r.Hold.Stopped = true
-			}
 		case api.ThreadDeleted:
 			gone = true
 		}

@@ -1627,10 +1627,10 @@ func (d *decision) remote(o Observation) error {
 				keys, reports = append(keys, p.Key), append(reports, p)
 			}
 		}
-		if o.Cursor == r.Cursor && o.Run == r.Run && o.Silent == r.Silent && o.Slot == r.Slot && slices.Equal(o.Pending, r.Pending) && o.Taken == r.Taken && reflect.DeepEqual(o.Ended, r.Ended) && o.Model == r.Model && o.Access == r.Access && reflect.DeepEqual(o.Turn, r.Turn) && o.Hold.Equal(r.Hold) && len(keys) == 0 {
+		if o.Cursor == r.Cursor && o.Run == r.Run && o.Silent == r.Silent && o.Slot == r.Slot && slices.Equal(o.Pending, r.Pending) && o.Taken == r.Taken && reflect.DeepEqual(o.Ended, r.Ended) && o.Model == r.Model && o.Access == r.Access && reflect.DeepEqual(o.Turn, r.Turn) && o.Held == r.Held && len(keys) == 0 {
 			return nil
 		}
-		if err := d.emit(api.RemoteSeen{Cursor: o.Cursor, Run: o.Run, Silent: o.Silent, State: o.Slot, Pending: o.Pending, Taken: o.Taken, Ended: o.Ended, Model: o.Model, Access: o.Access, Turn: o.Turn, Hold: o.Hold, Keys: keys}); err != nil {
+		if err := d.emit(api.RemoteSeen{Cursor: o.Cursor, Run: o.Run, Silent: o.Silent, State: o.Slot, Pending: o.Pending, Taken: o.Taken, Ended: o.Ended, Model: o.Model, Access: o.Access, Turn: o.Turn, Held: o.Held, Keys: keys}); err != nil {
 			return err
 		}
 		for _, p := range reports {

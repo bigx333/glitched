@@ -1095,6 +1095,9 @@ func (a *app) pages(c *ui.Context) {
 			a.chatPage(c)
 		}
 	}).Grow(1)
+	if a.router.Path() != "/settings/machine" {
+		a.minted = minted{}
+	}
 }
 
 func (a *app) shortcuts(c *ui.Context) {

@@ -126,6 +126,19 @@ func TestMintingALinkShowsItsTokenOnceAndRevokes(t *testing.T) {
 	h.tt.Advance(time.Second)
 	h.click("Revoke")
 	h.until("the revoked link's token gone", func() bool { return !h.tt.HasText(token) && h.a.minted.token == "" })
+
+	h.a.mint.label = "phone"
+	h.tt.Frame()
+	h.click("Mint a link")
+	h.until("phone's token", func() bool { return h.a.minted.token != "" && h.tt.HasText(h.a.minted.token) })
+	token = h.a.minted.token
+	h.a.router.Push("/settings/general")
+	h.tt.Frame()
+	h.a.router.Push("/settings/machine")
+	h.tt.Frame()
+	if h.tt.HasText(token) {
+		t.Error("the token shows again after leaving This machine and coming back")
+	}
 }
 
 // In the narrowest window, the setting's choices, minting and adding a
