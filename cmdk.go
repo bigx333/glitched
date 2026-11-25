@@ -10,6 +10,7 @@ import (
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/api"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/widget"
 )
@@ -90,6 +91,25 @@ func (a *app) actions() []command {
 		rm := action("project.remove:"+p.key.id(), label, "", "folder", func() { a.askRemove(p) })
 		rm.also = "workspace delete"
 		cmds = append(cmds, rm)
+	}
+	if cur := a.current(); cur.env != nil {
+		ws := cur.View.Workspace
+		if ws == "" {
+			ws = a.scratchRoot()
+		}
+		mgr := action("manager.new", "New manager thread", "", "checklist", func() {
+			id := a.backend.CreateManager(cur.env, ws, "Manager", a.modelRef(), accessOf[a.access], &api.SweepSchedule{IntervalSeconds: 1800})
+			if !id.IsZero() {
+				a.selected = id
+				a.backend.OpenThread(cur.env, id)
+				if a.router.Path() != "/" {
+					a.router.Push("/")
+				}
+				a.focusBack()
+			}
+		})
+		mgr.also = "manager workers sweep"
+		cmds = append(cmds, mgr)
 	}
 	cmds = append(cmds,
 		action("model.switch", "Switch model", "", "sparkles", a.openModelPicker),

@@ -62,6 +62,9 @@ type Thread struct {
 	Confirmed   api.Confirmed
 	Remote      *Remote // set on a remote child's placeholder, which runs nothing here
 	Origin      *Origin // set on a thread another machine's link started here
+	Role        api.ThreadRole
+	Sweep       *api.SweepSchedule
+	LastSweep   time.Time
 	Runs        []Run
 	Queue       []Message
 	Requests    []Request
@@ -353,6 +356,9 @@ func View(t Thread) api.Thread {
 		Reported:    t.Reported,
 		Confirmed:   t.Confirmed,
 		Resumable:   t.resumable(),
+		Role:        t.Role,
+		Sweep:       cloneSweep(t.Sweep),
+		LastSweep:   t.LastSweep,
 	}
 	if t.Context != (api.Context{}) {
 		c := t.Context
@@ -402,4 +408,48 @@ func View(t Thread) api.Thread {
 		}
 	}
 	return v
+}
+
+func cloneSweep(s *api.SweepSchedule) *api.SweepSchedule {
+	if s == nil {
+		return nil
+	}
+	c := *s
+	return &c
+}
+
+func normalizeSweep(s *api.SweepSchedule) *api.SweepSchedule {
+	if s == nil || s.IntervalSeconds <= 0 {
+		return nil
+	}
+	c := *s
+	return &c
+}
+
+func sweepEqual(a, b *api.SweepSchedule) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// NextSweep reports when the next scheduled sweep on a Manager thread is due,
+// or ok=false if the thread is ineligible (not a manager, sweeps disabled,
+// busy, settled, deleted, or holding queued user work).
+func NextSweep(t Thread) (time.Time, bool) {
+	if t.Role != api.RoleManager || t.Sweep == nil || t.Sweep.IntervalSeconds <= 0 ||
+		t.Deleted || t.settled() || t.Remote != nil || t.Origin != nil {
+		return time.Time{}, false
+	}
+	if t.Live() != nil || t.resumable() || t.next() != nil {
+		return time.Time{}, false
+	}
+	base := t.LastSweep
+	if t.UpdatedAt.After(base) {
+		base = t.UpdatedAt
+	}
+	if lt, ok := t.lastTurn(); ok && lt.Ended.After(base) {
+		base = lt.Ended
+	}
+	return base.Add(time.Duration(t.Sweep.IntervalSeconds) * time.Second), true
 }

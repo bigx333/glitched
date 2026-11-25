@@ -421,6 +421,9 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 			return
 		}
 		a.rowTitle(c, t)
+		if t.View.Role == api.RoleManager {
+			ui.Text(c, "M").FontSize(10).Bold().TextColor(palette.accent).Padding(1, 5).Radius(4).Background(palette.accent.Alpha(0.14)).Shrink(0)
+		}
 		a.pluginSlot(c, "thread.row", t.id().String(), &t, false, true)
 		if len(a.backend.Envs()) > 1 {
 			a.machineBadge(c, t.env)

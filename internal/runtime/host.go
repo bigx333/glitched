@@ -66,6 +66,7 @@ type Host struct {
 	limitResume   atomic.Bool
 	limitMu       sync.Mutex // orders a switch off before the worker's next continue
 	limits        chan struct{}
+	sweeps        chan struct{}
 	compactCheck  chan api.ID
 	compactRescan chan struct{}
 	compactDue    chan compactDue
@@ -195,6 +196,7 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		full:          make(chan struct{}, 1),
 		lostDone:      make(chan struct{}),
 		limits:        make(chan struct{}, 1),
+		sweeps:        make(chan struct{}, 1),
 		compactCheck:  make(chan api.ID, 64),
 		compactRescan: make(chan struct{}, 1),
 		compactDue:    make(chan compactDue, 64),
@@ -231,8 +233,9 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		h.wg.Add(1)
 		go h.continueLost()
 	}
-	h.wg.Add(1)
+	h.wg.Add(2)
 	go h.resumeLimits()
+	go h.runSweeps()
 	bound, err := st.Bound(ctx)
 	if err != nil {
 		h.Close()
@@ -368,6 +371,9 @@ func (h *Host) committed(c store.Commit) {
 	// leaves the slot does, can change which usage limit is due.
 	if slices.ContainsFunc(c.Threads, func(t api.Thread) bool { return t.LastTurn != nil && t.LastTurn.Limit != nil || !t.Live() }) {
 		h.pokeLimits()
+	}
+	if len(c.Threads) > 0 {
+		h.pokeSweeps()
 	}
 	h.poke()
 }
@@ -929,7 +935,7 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		Session: t.Session, ResumeOnly: b.ResumeOnly, CacheExpires: t.Context.CacheExpires, Tap: h.tap(thread),
 	}
 	if h.mcp != nil {
-		spec.MCP = append(spec.MCP, h.mcp.For(thread, b.Access))
+		spec.MCP = append(spec.MCP, h.mcp.ForRole(thread, b.Access, t.Role))
 	}
 	if h.vault != nil {
 		dir, err := h.vault.Prepare(thread)
@@ -986,6 +992,11 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		}
 	case session != t.Session:
 		err = h.observe(ctx, thread, engine.Bound{Run: b.Run, Session: session}, 0)
+	}
+	if t.Session == "" && b.Generation <= 1 && !b.ResumeOnly && !slashCommand(text) {
+		if docs := loadManagerDocs(b.Workspace, t.Project, t.Role, !t.Parent.IsZero()); docs != "" {
+			text = docs + text
+		}
 	}
 	// What the user did while the agent opened, or the time it took,
 	// may have made a compaction due no longer.

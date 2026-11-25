@@ -31,6 +31,7 @@ const (
 	EnvThread = "GLITCHED_THREAD"
 	EnvAccess = "GLITCHED_ACCESS"
 	EnvEngine = "GLITCHED_ENGINE"
+	EnvRole   = "GLITCHED_ROLE"
 	// EnvMachines lists, as a JSON array, the labels of the machines a
 	// child may be placed on: labels only, never a link's token.
 	EnvMachines = "GLITCHED_MACHINES"
@@ -40,7 +41,7 @@ const (
 // process the engine starts drops any it inherited, so an engine inside a
 // run never speaks for that run's thread.
 func Routing(k string) bool {
-	for _, e := range []string{EnvThread, EnvAccess, EnvEngine, EnvMachines} {
+	for _, e := range []string{EnvThread, EnvAccess, EnvEngine, EnvRole, EnvMachines} {
 		if strings.EqualFold(k, e) {
 			return true
 		}
@@ -53,6 +54,7 @@ func Routing(k string) bool {
 type Origin struct {
 	Thread api.ID
 	Access api.Access
+	Role   api.ThreadRole
 }
 
 // Launcher is how an engine's agents start glitched mcp: Command is a
@@ -68,7 +70,13 @@ type Launcher struct {
 // For is the server for an agent of thread started at access, whichever of
 // the thread's runs at that access the agent serves.
 func (l Launcher) For(thread api.ID, access api.Access) provider.MCPServer {
-	s := l.server(thread, access)
+	return l.ForRole(thread, access, api.RoleDefault)
+}
+
+// ForRole returns the glitched MCP server configuration for thread at access
+// and role.
+func (l Launcher) ForRole(thread api.ID, access api.Access, role api.ThreadRole) provider.MCPServer {
+	s := l.server(thread, access, role)
 	if l.Machines == nil {
 		return s
 	}
@@ -79,17 +87,21 @@ func (l Launcher) For(thread api.ID, access api.Access) provider.MCPServer {
 	return s
 }
 
-func (l Launcher) server(thread api.ID, access api.Access) provider.MCPServer {
+func (l Launcher) server(thread api.ID, access api.Access, role api.ThreadRole) provider.MCPServer {
+	env := map[string]string{
+		EnvThread: thread.String(),
+		EnvAccess: strconv.Itoa(int(access)),
+		EnvEngine: l.Engine,
+	}
+	if role != api.RoleDefault {
+		env[EnvRole] = string(role)
+	}
 	return provider.MCPServer{
-		Name:    "glitched",
-		Command: l.Command,
-		Args:    []string{"mcp"},
-		Env: map[string]string{
-			EnvThread: thread.String(),
-			EnvAccess: strconv.Itoa(int(access)),
-			EnvEngine: l.Engine,
-		},
-		Instructions: instructions,
+		Name:         "glitched",
+		Command:      l.Command,
+		Args:         []string{"mcp"},
+		Env:          env,
+		Instructions: instructionsFor(role),
 		Trusted:      true,
 		// request_credentials waits for the user up to the engine's 30
 		// minutes, past which the engine answers it itself.
@@ -141,5 +153,5 @@ func fromEnv() (Origin, string, error) {
 	if err != nil || aerr != nil || engine == "" {
 		return Origin{}, "", fmt.Errorf("mcp: %s, %s and %s name the agent's thread and access, and glitched sets them for each agent it starts", EnvThread, EnvAccess, EnvEngine)
 	}
-	return Origin{Thread: thread, Access: api.Access(access)}, engine, nil
+	return Origin{Thread: thread, Access: api.Access(access), Role: api.ThreadRole(os.Getenv(EnvRole))}, engine, nil
 }

@@ -288,6 +288,8 @@ func (d *decision) local(id api.ID, b api.Intent) error {
 		err = d.steer(b)
 	case api.ResumeCancel:
 		err = d.cancelResume(b)
+	case api.WakeDismiss:
+		err = d.dismissWake(b)
 	default:
 		err = rejected("unknown intent")
 	}
@@ -437,6 +439,18 @@ func (d *decision) create(id api.ID, c api.ThreadCreate) error {
 	if c.Access > api.AccessFull {
 		return rejected("unknown access level")
 	}
+	if c.Role != api.RoleDefault && c.Role != api.RoleManager {
+		return rejected("unknown thread role")
+	}
+	if c.Role == api.RoleManager && (!c.Parent.IsZero() || c.Origin != nil || c.Remote != "") {
+		return rejected("only a top-level thread can be a manager")
+	}
+	if c.Sweep != nil && c.Sweep.IntervalSeconds < 0 {
+		return rejected("sweep interval must be non-negative")
+	}
+	if c.Sweep != nil && c.Sweep.IntervalSeconds > 0 && c.Role != api.RoleManager {
+		return rejected("only a manager thread can schedule sweeps")
+	}
 	if !c.Run.IsZero() && c.Parent.IsZero() {
 		return rejected("a run starts only a child thread")
 	}
@@ -455,7 +469,7 @@ func (d *decision) create(id api.ID, c api.ThreadCreate) error {
 	if c.Remote != "" {
 		return d.placeRemote(id, c)
 	}
-	if err := d.emit(api.ThreadCreated{Workspace: c.Workspace, Project: c.Project, Branch: c.Branch, Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent, Fork: c.Forked}); err != nil {
+	if err := d.emit(api.ThreadCreated{Workspace: c.Workspace, Project: c.Project, Branch: c.Branch, Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent, Fork: c.Forked, Role: c.Role, Sweep: normalizeSweep(c.Sweep)}); err != nil {
 		return err
 	}
 	if c.Text == "" {
@@ -1323,10 +1337,36 @@ func (d *decision) configure(b api.ThreadConfigure) error {
 	if m.Model == "" && d.t.Model.Model != "" {
 		return rejected("a thread needs a model")
 	}
-	if m == d.t.Model && access == d.t.Access {
+	var newSweep *api.SweepSchedule
+	sweepChanged := false
+	if b.Sweep != nil {
+		if b.Sweep.IntervalSeconds < 0 {
+			return rejected("sweep interval must be non-negative")
+		}
+		if b.Sweep.IntervalSeconds > 0 && d.t.Role != api.RoleManager {
+			return rejected("only a manager thread can schedule sweeps")
+		}
+		newSweep = normalizeSweep(b.Sweep)
+		sweepChanged = !sweepEqual(d.t.Sweep, newSweep)
+	}
+	if m == d.t.Model && access == d.t.Access && !sweepChanged {
 		return nil
 	}
-	return d.emit(api.ThreadConfigured{Model: m, Access: access})
+	return d.emit(api.ThreadConfigured{Model: m, Access: access, Sweep: newSweep, SweepSet: sweepChanged})
+}
+
+func (d *decision) dismissWake(b api.WakeDismiss) error {
+	live := d.t.Live()
+	if live == nil {
+		return rejected("no live run to dismiss")
+	}
+	if !b.Run.IsZero() && b.Run != live.ID {
+		return rejected("that run is no longer live")
+	}
+	if live.Silent {
+		return nil
+	}
+	return d.emit(api.WakeDismissed{Run: live.ID, Reason: strings.TrimSpace(b.Reason)})
 }
 
 func holds[T comparable](held *T, v T) bool { return held != nil && *held == v }
@@ -1499,6 +1539,8 @@ func (d *decision) observe(o Observation) error {
 		return d.reported(o)
 	case IdleCompact:
 		return d.idleCompact(o)
+	case SweepDue:
+		return d.sweepDue(o)
 	case WorktreeReady:
 		return d.emit(api.WorktreeReady{Workspace: o.Workspace, Branch: o.Branch})
 	case WorktreeFailed:
@@ -1606,6 +1648,41 @@ func (d *decision) idleCompact(o IdleCompact) error {
 	}
 	d.effects = append(d.effects, StartTurn{
 		Run: o.Run, Generation: gen, Text: "/compact", Workspace: d.t.Workspace, Model: d.t.Model, Access: d.t.Access, ResumeOnly: true,
+	})
+	return nil
+}
+
+// sweepDue starts a scheduled Manager sweep when the thread is idle and due.
+func (d *decision) sweepDue(o SweepDue) error {
+	at, ok := NextSweep(d.t)
+	if !ok || d.at.Before(at) || (d.t.Disposition.State == api.Snoozed && d.at.Before(d.t.Disposition.Until)) {
+		return fmt.Errorf("%w: thread is not due for a sweep", ErrRefused)
+	}
+	if o.Run.IsZero() {
+		return fmt.Errorf("%w: sweep needs a run id", ErrRefused)
+	}
+	if !d.runs() {
+		return fmt.Errorf("%w: the thread may run nothing now", ErrRefused)
+	}
+	text := strings.TrimSpace(o.Text)
+	if text == "" && d.t.Sweep != nil {
+		text = strings.TrimSpace(d.t.Sweep.Prompt)
+	}
+	if text == "" {
+		text = api.DefaultSweepPrompt
+	}
+	if err := d.emit(api.MessageQueued{Message: o.Run, Text: text, Mode: api.StartNow, Pos: d.t.pos(false), Auto: true, Sweep: true}); err != nil {
+		return err
+	}
+	gen := d.t.Generation + 1
+	if err := d.emit(api.TurnAdmitted{Run: o.Run, Generation: gen}); err != nil {
+		return err
+	}
+	if err := d.emit(api.SweepStarted{Run: o.Run}); err != nil {
+		return err
+	}
+	d.effects = append(d.effects, StartTurn{
+		Run: o.Run, Generation: gen, Text: text, Workspace: d.t.Workspace, Model: d.t.Model, Access: d.t.Access,
 	})
 	return nil
 }

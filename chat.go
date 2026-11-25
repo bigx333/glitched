@@ -214,6 +214,14 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 		if !narrow {
 			a.usagePill(c, t)
 		}
+		if t.View.Role == api.RoleManager {
+			pill(c, "Manager").Key("header-manager").Shrink(0)
+			if ui.ButtonBase(c.Key("header-sweep")).Padding(2, pillPadX).Radius(999).
+				Background(palette.hover).Border(1, palette.border).Shrink(0).Cursor(ui.CursorPointer).
+				Children(func() { ui.Text(c, sweepLabel(t.View.Sweep)).FontSize(11).TextColor(palette.muted).NoWrap() }).Clicked() {
+				a.backend.SetSweep(t.env, t.id(), nextSweepSchedule(t.View.Sweep))
+			}
+		}
 		drew := headerDrew{thread: t.id(), narrow: narrow, step: give, left: left, right: right, pills: pills}
 		drew.plan = t.Transcript != nil && t.Transcript.Plan != nil
 		drew.planV = b2i(give >= giveCompactPlan)
@@ -297,6 +305,40 @@ func (a *app) chatRoom() float32 {
 // headerTitleRoom is the most of its title's width the header keeps
 // before it gives anything else way.
 const headerTitleRoom = 160
+
+func sweepLabel(s *api.SweepSchedule) string {
+	if s == nil || s.IntervalSeconds <= 0 {
+		return "Sweep off"
+	}
+	switch secs := s.IntervalSeconds; {
+	case secs%3600 == 0:
+		return fmt.Sprintf("Sweep %dh", secs/3600)
+	case secs%60 == 0:
+		return fmt.Sprintf("Sweep %dm", secs/60)
+	default:
+		return fmt.Sprintf("Sweep %ds", secs)
+	}
+}
+
+var sweepPresets = []int64{0, 900, 1800, 3600, 14400}
+
+func nextSweepSchedule(cur *api.SweepSchedule) *api.SweepSchedule {
+	var curSecs int64
+	if cur != nil {
+		curSecs = cur.IntervalSeconds
+	}
+	var next int64 = sweepPresets[1]
+	for i, p := range sweepPresets {
+		if p == curSecs {
+			next = sweepPresets[(i+1)%len(sweepPresets)]
+			break
+		}
+	}
+	if next == 0 {
+		return &api.SweepSchedule{}
+	}
+	return &api.SweepSchedule{IntervalSeconds: next}
+}
 
 // The header's gap between its controls, and a pill's padding at its sides.
 const (

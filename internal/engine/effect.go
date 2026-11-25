@@ -423,6 +423,13 @@ func (RemoteAttempted) observed() {}
 func (RemoteBound) observed()     {}
 func (RemoteSeen) observed()      {}
 func (RemoteLost) observed()      {}
+func (SweepDue) observed()        {}
+
+// SweepDue triggers a scheduled sweep turn on a Manager thread when due.
+type SweepDue struct {
+	Run  api.ID
+	Text string
+}
 
 // RemoteAttempted is a placeholder's create, Create, about to reach its
 // machine for the first time. It is refused once the placeholder is

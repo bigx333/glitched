@@ -190,6 +190,9 @@ CREATE TABLE threads (
 	context_cache_expires INTEGER,
 	remote      TEXT,
 	origin      TEXT,
+	role        TEXT NOT NULL DEFAULT '',
+	sweep       TEXT,
+	last_sweep  INTEGER,
 	CHECK ((disposition = 1) = (until IS NOT NULL))
 ) STRICT;
 
@@ -256,7 +259,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 17
+const schemaVersion = 18
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -385,6 +388,12 @@ ALTER TABLE threads ADD COLUMN origin TEXT;
 `,
 	// Retire old outbox work without replaying changes to the worktree.
 	16: `UPDATE effects SET state = 'done' WHERE kind IN ('checkpoint.capture', 'checkpoint.drop', 'thread.revert') AND state <> 'done';`,
+	// Persistent Manager role and sweep schedule fields.
+	17: `
+ALTER TABLE threads ADD COLUMN role TEXT NOT NULL DEFAULT '';
+ALTER TABLE threads ADD COLUMN sweep TEXT;
+ALTER TABLE threads ADD COLUMN last_sweep INTEGER;
+`,
 }
 
 func (s *Store) migrate() error {

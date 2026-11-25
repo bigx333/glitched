@@ -690,10 +690,19 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 	if version < 16 {
 		sqlText = threadsV15 + sqlText
 	}
+	if version < 18 {
+		sqlText = managersV17 + sqlText
+	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
 	}
 }
+
+const managersV17 = `
+	ALTER TABLE threads DROP COLUMN role;
+	ALTER TABLE threads DROP COLUMN sweep;
+	ALTER TABLE threads DROP COLUMN last_sweep;
+`
 
 // The runs table up to version 6, before a run kept its model and access.
 const runsV6 = `
@@ -1622,5 +1631,58 @@ func TestACancelledWriteStops(t *testing.T) {
 	_, err = s.Submit(closing, settle, time.Now())
 	if took := time.Since(began); !errors.Is(err, context.Canceled) || took > time.Second {
 		t.Fatalf("a write cancelled waiting for the lock returned %v after %s, want context.Canceled at once", err, took)
+	}
+}
+
+func TestAVersion17DatabaseUpgradesForManagers(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	plain := api.NewID()
+	if _, err := s.Submit(ctx, create(plain), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	downgrade(t, path, "", 17)
+	s = open(t, path)
+	defer s.Close()
+
+	mgr := api.NewID()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if _, err := s.Submit(ctx, api.Command{
+		ID:     api.NewID(),
+		Target: mgr,
+		Body: api.ThreadCreate{
+			Workspace: "/repo",
+			Title:     "Manager",
+			Model:     api.ModelRef{Provider: "claude", Model: "sonnet"},
+			Role:      api.RoleManager,
+			Sweep:     &api.SweepSchedule{IntervalSeconds: 900},
+		},
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	runID := api.NewID()
+	if _, err := s.Observe(ctx, mgr, engine.SweepDue{Run: runID}, now.Add(901*time.Second), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Submit(ctx, api.Command{
+		ID:     api.NewID(),
+		Target: mgr,
+		Body:   api.WakeDismiss{Run: runID, Reason: "quiet"},
+	}, now.Add(902*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.Thread(ctx, mgr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Role != api.RoleManager || got.Sweep == nil || got.Sweep.IntervalSeconds != 900 || got.LastSweep.IsZero() {
+		t.Fatalf("unexpected manager thread persisted: %+v", got)
+	}
+	if live := got.Live(); live == nil || !live.Silent {
+		t.Fatalf("expected live run Silent=true persisted in runs table, got %+v", live)
 	}
 }

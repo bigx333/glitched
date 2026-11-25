@@ -96,12 +96,12 @@ func handle(ctx context.Context, tools *Tools, m message) reply {
 			"protocolVersion": version,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]any{"name": "glitched", "version": "1"},
-			"instructions":    instructions,
+			"instructions":    instructionsFor(tools.Origin.Role),
 		}
 	case "ping":
 		r.Result = struct{}{}
 	case "tools/list":
-		r.Result = map[string]any{"tools": append(append(append([]map[string]any{delegateTool(tools.Machines)}, taskCatalog...), credentialsTool), tools.pluginCatalog(ctx)...)}
+		r.Result = map[string]any{"tools": catalogFor(tools, ctx)}
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
@@ -137,6 +137,16 @@ func handle(ctx context.Context, tools *Tools, m message) reply {
 		}
 		if slices.Contains([]string{listTasks, taskStatus, taskCancel, taskSend, taskAnswer}, p.Name) {
 			v, err := tools.tasks(ctx, p.Name, p.Arguments, p.Meta.ToolUseID)
+			if err != nil {
+				r.Result = map[string]any{"content": []any{text(err.Error())}, "isError": true}
+				return r
+			}
+			b, _ := json.MarshalIndent(v, "", "  ")
+			r.Result = map[string]any{"content": []any{text(string(b))}, "structuredContent": v, "isError": false}
+			return r
+		}
+		if p.Name == dismissWake {
+			v, err := tools.dismiss(ctx, p.Arguments)
 			if err != nil {
 				r.Result = map[string]any{"content": []any{text(err.Error())}, "isError": true}
 				return r

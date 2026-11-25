@@ -700,14 +700,14 @@ func ids(ctx context.Context, q querier, query string, args ...any) ([]api.ID, e
 func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error) {
 	t := engine.Thread{ID: id}
 	var model []byte
-	var until, reported, cacheExpires sql.NullInt64
-	var report, granted, remote, origin sql.NullString
+	var until, reported, cacheExpires, lastSweep sql.NullInt64
+	var report, granted, remote, origin, sweep sql.NullString
 	var updated int64
 	err := q.QueryRowContext(ctx, `SELECT workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
-			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote, origin
+			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote, origin, role, sweep, last_sweep
 		FROM threads WHERE id = ?`, id[:]).Scan(&t.Workspace, &t.Title, &model, &t.Access, &t.Revision, &t.OwnerEpoch,
 		&t.Generation, &t.Disposition.State, &until, &updated, &t.Deleted, idScan{&t.Parent}, &t.Tokens, &reported, &report, &t.Session,
-		&t.Project, &t.Branch, &t.Context.Used, &t.Context.Window, &t.Context.Stale, &t.Context.Model, &granted, &cacheExpires, &remote, &origin)
+		&t.Project, &t.Branch, &t.Context.Used, &t.Context.Window, &t.Context.Stale, &t.Context.Model, &granted, &cacheExpires, &remote, &origin, &t.Role, &sweep, &lastSweep)
 	if errors.Is(err, sql.ErrNoRows) {
 		return engine.Thread{}, nil
 	}
@@ -750,6 +750,15 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 		if err := json.Unmarshal([]byte(origin.String), t.Origin); err != nil {
 			return t, err
 		}
+	}
+	if sweep.Valid {
+		t.Sweep = &api.SweepSchedule{}
+		if err := json.Unmarshal([]byte(sweep.String), t.Sweep); err != nil {
+			return t, err
+		}
+	}
+	if lastSweep.Valid {
+		t.LastSweep = fromNanos(lastSweep.Int64)
 	}
 
 	err = each(ctx, q, `SELECT id, generation, state, signalled, outcome, error, ended, model, access, silent, limit_resets, resume_cancelled, dropped FROM runs WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
@@ -830,13 +839,23 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 	if err != nil {
 		return err
 	}
-	var until, reported, report, granted, cacheExpires, remote, origin any
+	var until, reported, report, granted, cacheExpires, remote, origin, sweep, lastSweep any
 	if t.Origin != nil {
 		b, err := json.Marshal(t.Origin)
 		if err != nil {
 			return err
 		}
 		origin = string(b)
+	}
+	if t.Sweep != nil {
+		b, err := json.Marshal(t.Sweep)
+		if err != nil {
+			return err
+		}
+		sweep = string(b)
+	}
+	if !t.LastSweep.IsZero() {
+		lastSweep = t.LastSweep.UnixNano()
 	}
 	if t.Remote != nil {
 		b, err := json.Marshal(t.Remote)
@@ -869,8 +888,8 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 		report = string(b)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO threads (id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
-			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote, origin)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote, origin, role, sweep, last_sweep)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET workspace = excluded.workspace, title = excluded.title, model = excluded.model,
 			access = excluded.access, revision = excluded.revision, owner_epoch = excluded.owner_epoch, generation = excluded.generation,
 			disposition = excluded.disposition, until = excluded.until, updated_at = excluded.updated_at, deleted = excluded.deleted,
@@ -878,10 +897,10 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 			report = excluded.report, session = excluded.session, project = excluded.project, branch = excluded.branch,
 			context_used = excluded.context_used, context_window = excluded.context_window, context_stale = excluded.context_stale,
 			context_model = excluded.context_model, granted = excluded.granted, context_cache_expires = excluded.context_cache_expires,
-			remote = excluded.remote, origin = excluded.origin`,
+			remote = excluded.remote, origin = excluded.origin, role = excluded.role, sweep = excluded.sweep, last_sweep = excluded.last_sweep`,
 		t.ID[:], t.Workspace, t.Title, string(model), t.Access, t.Revision, t.OwnerEpoch, t.Generation, t.Disposition.State, until,
 		t.UpdatedAt.UnixNano(), t.Deleted, nullID(t.Parent), t.Tokens, reported, report, t.Session, t.Project, t.Branch,
-		t.Context.Used, t.Context.Window, t.Context.Stale, t.Context.Model, granted, cacheExpires, remote, origin); err != nil {
+		t.Context.Used, t.Context.Window, t.Context.Stale, t.Context.Model, granted, cacheExpires, remote, origin, t.Role, sweep, lastSweep); err != nil {
 		return err
 	}
 	for i, r := range t.Runs {
@@ -904,7 +923,7 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO runs (thread, ord, id, generation, state, signalled, outcome, error, ended, model, access, silent, limit_resets, resume_cancelled, dropped) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (thread, ord) DO UPDATE SET state = excluded.state, signalled = excluded.signalled, outcome = excluded.outcome,
-				error = excluded.error, ended = excluded.ended, limit_resets = excluded.limit_resets,
+				error = excluded.error, ended = excluded.ended, silent = excluded.silent, limit_resets = excluded.limit_resets,
 				resume_cancelled = excluded.resume_cancelled, dropped = excluded.dropped`,
 			t.ID[:], i, r.ID[:], r.Generation, r.State, r.Signalled, outcome, r.Error, ended, string(admitted), r.Access, r.Silent, resets, r.ResumeCancelled, r.Dropped); err != nil {
 			return fmt.Errorf("store: run %s: %w", r.ID, err)

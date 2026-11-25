@@ -71,7 +71,7 @@ func apply(t Thread, e Event) (Thread, error) {
 		if t.Exists() {
 			return t, &TransitionError{"thread", "created", "created"}
 		}
-		t = Thread{ID: e.Thread, Workspace: b.Workspace, Project: b.Project, Branch: b.Branch, Title: b.Title, Model: b.Model, Access: b.Access, OwnerEpoch: 1, Parent: b.Parent}
+		t = Thread{ID: e.Thread, Workspace: b.Workspace, Project: b.Project, Branch: b.Branch, Title: b.Title, Model: b.Model, Access: b.Access, OwnerEpoch: 1, Parent: b.Parent, Role: b.Role, Sweep: cloneSweep(b.Sweep)}
 		if r := b.Remote; r != nil {
 			t.Remote = &Remote{Engine: r.Engine, Link: r.Link, State: RemoteCreating}
 		}
@@ -167,6 +167,18 @@ func apply(t Thread, e Event) (Thread, error) {
 			t.Context.CacheExpires = time.Time{}
 		}
 		t.Model, t.Access = b.Model, b.Access
+		if b.SweepSet {
+			t.Sweep = cloneSweep(b.Sweep)
+		}
+	case api.WakeDismissed:
+		if i := t.runAt(b.Run); i >= 0 {
+			t.Runs = slices.Clone(t.Runs)
+			t.Runs[i].Silent = true
+		}
+		t.Reported = time.Time{}
+		silent = true
+	case api.SweepStarted:
+		t.LastSweep = e.At
 	case api.ChildReported:
 		t.Reported = e.At
 		t.LastReport = &api.Report{Child: b.Child, Kind: b.Kind, Cursor: api.Cursor{Seq: e.Seq}}
