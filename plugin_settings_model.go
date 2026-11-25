@@ -52,6 +52,7 @@ var partTitles = map[string]string{
 	"credentials.card":          "Credentials card",
 	"composer":                  "Composer",
 	"timeline.message":          "Timeline rows",
+	"timeline.report":           "Report card",
 	"message.toolbar":           "Message toolbar",
 	"composer.queue":            "Queue",
 	"thread.header.breadcrumb":  "Breadcrumb",
