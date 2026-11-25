@@ -10,18 +10,24 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
+	"glitched/internal/service"
 	"glitched/internal/transport"
 )
 
 // serviceStub puts a fake launchctl and systemctl first on PATH, under a
 // home of the test's, so the Background service switch never reaches the
 // machine's own service manager. It returns what they were called with.
+// While the file $SERVICE_STUB_HOLD names exists, they hold their answer
+// to whether the service runs.
 func serviceStub(t *testing.T) (home string, calls func() string) {
 	t.Helper()
 	bin := t.TempDir()
 	home = t.TempDir()
 	script := `#!/bin/sh
 echo "${0##*/} $*" >> "` + bin + `/log"
+case "$*" in
+*show*|print*) while [ -n "$SERVICE_STUB_HOLD" ] && [ -e "$SERVICE_STUB_HOLD" ]; do sleep 0.05; done ;;
+esac
 case "$*" in
 *show*) echo ActiveState=active; echo MainPID=42 ;;
 print*) echo "	state = running"; echo "	pid = 42" ;;
@@ -37,8 +43,115 @@ esac
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return home, func() string {
 		data, _ := os.ReadFile(filepath.Join(bin, "log"))
+		os.Remove(filepath.Join(bin, "log"))
 		return string(data)
 	}
+}
+
+// installService installs the service for dir, as another app or the CLI
+// would.
+func installService(t *testing.T, dir string) string {
+	t.Helper()
+	st, err := service.Install(context.Background(), service.Options{Dir: dir, Binary: "/bin/glitched", PATH: "/usr/bin:/bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st.UnitPath
+}
+
+// hold has the stub hold its answer until the returned func lets it go.
+func hold(t *testing.T) (release func()) {
+	t.Helper()
+	gate := filepath.Join(t.TempDir(), "hold")
+	if err := os.WriteFile(gate, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SERVICE_STUB_HOLD", gate)
+	release = func() { os.Remove(gate) }
+	t.Cleanup(release)
+	return release
+}
+
+// The service installed for another state directory, such as the main
+// app's seen from the dev GUI, is that directory's: the switch reads off,
+// says whose it is, and neither stops nor takes it over.
+func TestTheBackgroundServiceSwitchLeavesAnotherDirectorysServiceBe(t *testing.T) {
+	home, calls := serviceStub(t)
+	prod := filepath.Join(home, ".glitched")
+	unit := installService(t, prod)
+	before, _ := os.ReadFile(unit)
+	calls()
+
+	h := start(t, tempDir(t))
+	ticking(t, h)
+	h.click("Settings")
+	h.click("This machine")
+	h.reveal("Enable background service")
+	h.until("the service read as another directory's", func() bool {
+		return h.tt.HasText("Installed for another state directory, " + prod + ". Manage it from there.")
+	})
+	h.click("Enable background service")
+	h.tt.Frame()
+	if h.a.svcDoing != svcIdle {
+		t.Errorf("the switch acts on another directory's service: %v", h.a.svcDoing)
+	}
+	if after, _ := os.ReadFile(unit); string(after) != string(before) {
+		t.Errorf("the switch rewrote %s to\n%s", unit, after)
+	}
+	if log := calls(); strings.Contains(log, "disable") || strings.Contains(log, "bootout") || strings.Contains(log, "enable") {
+		t.Errorf("the switch called %q on another directory's service", log)
+	}
+}
+
+// Till the first read says whether the service is installed, the switch
+// says it checks and does nothing, rather than reading off.
+func TestTheBackgroundServiceSwitchWaitsForTheFirstRead(t *testing.T) {
+	_, calls := serviceStub(t)
+	dir := tempDir(t)
+	installService(t, dir)
+	release := hold(t)
+	calls()
+
+	h := start(t, dir)
+	ticking(t, h)
+	h.click("Settings")
+	h.click("This machine")
+	h.reveal("Enable background service")
+	if !h.tt.HasText("Checking the background service…") {
+		t.Errorf("before the first read the row shows %q, want it checking", h.tt.Texts())
+	}
+	h.click("Enable background service")
+	h.tt.Frame()
+	if h.a.svcDoing != svcIdle {
+		t.Errorf("the switch acted before the first read: %v", h.a.svcDoing)
+	}
+	release()
+	h.until("the first read", func() bool { return h.tt.HasText("Installed and running (PID 42).") })
+	if log := calls(); strings.Contains(log, "disable") || strings.Contains(log, "bootout") {
+		t.Errorf("the switch called %q before the first read", log)
+	}
+}
+
+// While the switch works, the row says what it does, whatever a read
+// that lands meanwhile says.
+func TestTheBackgroundServiceSwitchSaysWhatItDoes(t *testing.T) {
+	_, _ = serviceStub(t)
+	h := start(t, tempDir(t))
+	ticking(t, h)
+	h.click("Settings")
+	h.click("This machine")
+	h.reveal("Enable background service")
+	h.until("the first read", func() bool { return !h.a.svcRead.IsZero() && !h.a.svcLoading })
+	release := hold(t)
+	h.click("Enable background service")
+	h.until("the switch at work", func() bool { return h.tt.HasText("Installing background service…") })
+	h.a.svcStatus.Installed = true // as a read landing mid-install would have it
+	h.tt.Frame()
+	if !h.tt.HasText("Installing background service…") {
+		t.Errorf("mid-install the row shows %q, want it installing", h.tt.Texts())
+	}
+	release()
+	h.until("the install", func() bool { return h.a.svcDoing == svcIdle && h.tt.HasText("Installed and running (PID 42).") })
 }
 
 // Turning the background service on while the engine runs inside the app
@@ -107,23 +220,11 @@ func TestTheBackgroundServiceTakesOverTheAppsEngine(t *testing.T) {
 // The switch stops or swaps the engine, so it waits while an agent runs,
 // as Restart does.
 func TestTheBackgroundServiceSwitchWaitsForRunningAgents(t *testing.T) {
-	home, calls := serviceStub(t)
-	unit := filepath.Join(home, ".config", "systemd", "user", "glitched.service")
-	if err := os.MkdirAll(filepath.Dir(unit), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(unit, []byte("[Service]\nExecStart=\"/bin/glitched\" \"serve\"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	plist := filepath.Join(home, "Library", "LaunchAgents", "com.example.glitched.daemon.plist")
-	if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(plist, []byte("<plist><dict></dict></plist>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
+	_, calls := serviceStub(t)
 	dir := tempDir(t)
+	unit := installService(t, dir)
+	calls()
+
 	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(true)))
 	h := start(t, dir)
 	ticking(t, h)
@@ -144,7 +245,7 @@ func TestTheBackgroundServiceSwitchWaitsForRunningAgents(t *testing.T) {
 	h.tt.Frame()
 	h.reveal("Enable background service")
 	h.click("Enable background service")
-	h.until("the switch to settle", func() bool { return !h.a.svcBusy })
+	h.until("the switch to settle", func() bool { return h.a.svcDoing == svcIdle })
 	if log := calls(); strings.Contains(log, "disable") || strings.Contains(log, "bootout") {
 		t.Errorf("the switch stopped the service under a running agent: %q", log)
 	}

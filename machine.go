@@ -114,8 +114,17 @@ func (a *app) engineCard(c *ui.Context, m client.Machine) {
 	})
 }
 
+// svcSwitch is what the Background service switch is doing.
+type svcSwitch int
+
+const (
+	svcIdle svcSwitch = iota
+	svcInstalling
+	svcRemoving
+)
+
 func (a *app) refreshService() {
-	if a.svcLoading || a.svcBusy {
+	if a.svcLoading || a.svcDoing != svcIdle {
 		return
 	}
 	a.svcLoading = true
@@ -138,10 +147,13 @@ func (a *app) refreshService() {
 // service waits for the engine lock, so once it is installed an engine
 // embedded here hands the directory over to it.
 func (a *app) setServiceInstalled(install bool) {
-	if a.svcBusy {
+	if a.svcDoing != svcIdle {
 		return
 	}
-	a.svcBusy, a.svcErr = true, ""
+	a.svcDoing, a.svcErr = svcRemoving, ""
+	if install {
+		a.svcDoing = svcInstalling
+	}
 	a.svcSets++
 	dir := a.dir
 	go func() {
@@ -161,7 +173,7 @@ func (a *app) setServiceInstalled(install bool) {
 			st, err = service.Uninstall(ctx, opts)
 		}
 		a.post(func() {
-			a.svcBusy = false
+			a.svcDoing = svcIdle
 			a.svcStatus = st
 			a.svcRead = time.Now()
 			if err != nil {
@@ -179,27 +191,28 @@ func (a *app) serviceRow(c *ui.Context) {
 	if time.Since(a.svcRead) >= inspectEvery {
 		a.refreshService()
 	}
-	st := a.svcStatus
-	on := st.Installed
+	st, read := a.svcStatus, !a.svcRead.IsZero()
+	// Another state directory's service is that directory's to switch.
+	on := st.Installed && !st.Foreign
 	desc := "Keep the engine running as a user background service so agents survive closing Glitched."
 	switch {
-	case !a.svcRead.IsZero() && !st.Supported:
+	case a.svcDoing == svcInstalling:
+		on, desc = true, "Installing background service…"
+	case a.svcDoing == svcRemoving:
+		on, desc = false, "Removing background service…"
+	case !read:
+		desc = "Checking the background service…"
+	case !st.Supported:
 		desc = st.Detail
-	case a.svcBusy && on:
-		desc = "Removing background service…"
-	case a.svcBusy:
-		desc = "Installing background service…"
-	case st.Installed && st.Running && st.PID > 0:
-		desc = fmt.Sprintf("Installed and running (PID %d).", st.PID)
-	case st.Installed && st.Running:
-		desc = "Installed and running."
+	case st.Foreign:
+		desc = fmt.Sprintf("Installed for another state directory, %s. Manage it from there.", st.Dir)
 	case st.Installed:
-		desc = "Installed (stopped). " + st.UnitPath
+		desc = serviceHealth(st)
 	}
 	busy := a.localRuns() > 0
 	settingRow(c, "Background service", desc, func() {
 		sw := ui.Switch(c.Key("bg-service"), &on).Label("Enable background service").
-			Disabled(a.svcBusy || busy || (!a.svcRead.IsZero() && !st.Supported))
+			Disabled(a.svcDoing != svcIdle || busy || !read || !st.Supported || st.Foreign)
 		if busy {
 			a.tip(c, sw, stopFirst)
 		}
@@ -210,6 +223,23 @@ func (a *app) serviceRow(c *ui.Context) {
 	if a.svcErr != "" {
 		ui.Text(c, a.svcErr).Key("bg-service-err").FontSize(12).TextColor(palette.red).Padding(0, 16, 12)
 	}
+}
+
+// serviceHealth says whether the installed service runs.
+func serviceHealth(st service.Status) string {
+	switch {
+	case st.Running && st.PID > 0:
+		return fmt.Sprintf("Installed and running (PID %d).", st.PID)
+	case st.Running:
+		return "Installed and running."
+	case st.Starting && st.LastExit != "":
+		return "Installed, restarting: it last exited " + st.LastExit + "."
+	case st.Starting:
+		return "Installed and starting."
+	case st.LastExit != "":
+		return "Installed (stopped): it last exited " + st.LastExit + ". " + st.UnitPath
+	}
+	return "Installed (stopped). " + st.UnitPath
 }
 
 // limitRows are the Agents card's rows, in a.limits' order.

@@ -663,9 +663,9 @@ type app struct {
 	cmdkList  ui.ListState
 
 	svcStatus  service.Status
-	svcRead    time.Time
+	svcRead    time.Time // zero till the first read
 	svcLoading bool
-	svcBusy    bool
+	svcDoing   svcSwitch
 	svcSets    int // switches of the service, so a read begun before one is dropped
 	svcErr     string
 
