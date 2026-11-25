@@ -9,3 +9,4 @@ mygo_windows_*.syso
 # Binaries go build leaves in the module root.
 /glitched
 /glitched.exe
+.claude/

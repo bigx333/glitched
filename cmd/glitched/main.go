@@ -41,6 +41,7 @@ func (e usageError) Error() string { return string(e) }
 var commands = map[string]func(context.Context, []string) error{
 	"serve":       serve,
 	"status":      status,
+	"doctor":      doctor,
 	"pair":        pair,
 	"link":        link,
 	"run":         run,
@@ -55,6 +56,7 @@ const usage = `usage: glitched <command> [flags]
   serve     run the host engine, and the hub role unless -hub=false; the next serve
             on -dir, and the GUI's own engine, run as it did unless a flag says otherwise
   status    whether an engine serves -dir, its hub, its tailnet listeners and its tokens
+  doctor    check state dir, config, databases, tailscale, and provider CLIs
   pair      mint a token for a client on the tailnet: glitched pair -name LABEL [-link] | -list | -remove LABEL
   link      add a machine whose engine minted this one a link: glitched link -add LABEL -server ADDR -token TOKEN | -list | -remove LABEL
   run       send a message and stream the turn: glitched run [-thread ID] [-provider claude] [-yes] text...

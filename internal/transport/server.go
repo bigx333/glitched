@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"runtime/debug"
@@ -67,10 +68,14 @@ type Server struct {
 	// Tailnet server must have one.
 	Authorize func(r *http.Request, proved func(Key) bool) (Grant, error)
 
-	keepalive keepalive     // zero means defaultKeepalive
-	handshake time.Duration // how long a client has to prove its key; zero means handshakeWithin
-	idle      time.Duration // each request's read, its response's write and each keep-alive wait; zero means defaultIdle
-	limit     int64         // most bytes one message may hold; zero means maxMessage
+	keepalive      keepalive     // zero means defaultKeepalive
+	handshake      time.Duration // how long a client has to prove its key; zero means handshakeWithin
+	idle           time.Duration // each request's read, its response's write and each keep-alive wait; zero means defaultIdle
+	limit          int64         // most bytes one message may hold; zero means maxMessage
+	maxHandshakes  int           // max concurrent unauthenticated handshakes; zero means defaultMaxHandshakes
+	authBurst      int           // auth failures from a peer before backoff; zero means defaultAuthBurst
+	authBackoff    time.Duration // initial backoff after authBurst failures; zero means defaultAuthBackoff
+	maxAuthBackoff time.Duration // max backoff per peer; zero means defaultMaxAuthBackoff
 }
 
 // A Grant is what Authorize admitted a socket with.
@@ -110,6 +115,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		sockets sync.WaitGroup
 	)
 	methods := s.methods()
+	lim := s.newHandshakeLimiter()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ws", func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -121,7 +127,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		sockets.Add(1)
 		mu.Unlock()
 		defer sockets.Done()
-		s.serveSocket(ctx, w, r, methods)
+		s.serveSocket(ctx, w, r, methods, lim)
 	})
 	idle := s.idle
 	if idle == 0 {
@@ -155,11 +161,32 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	return err
 }
 
-func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http.Request, methods map[string]handler) {
+func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http.Request, methods map[string]handler, lim *handshakeLimiter) {
 	nc := r.Context().Value(connKey{}).(net.Conn)
 	if _, err := s.Transport.WhoIs(nc); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
+	}
+	var release func()
+	if s.Authorize != nil {
+		if retryAfter, ok := lim.checkPeer(r.RemoteAddr, time.Now()); !ok {
+			secs := max(1, int(math.Ceil(retryAfter.Seconds())))
+			w.Header().Set("Retry-After", strconv.Itoa(secs))
+			http.Error(w, "too many authentication failures", http.StatusTooManyRequests)
+			return
+		}
+		if !lim.acquire() {
+			http.Error(w, "too many pending handshakes", http.StatusServiceUnavailable)
+			return
+		}
+		released := false
+		release = func() {
+			if !released {
+				released = true
+				lim.release()
+			}
+		}
+		defer release()
 	}
 	theirs := protocolOf(r.Header)
 	w.Header().Set(protocolHeader, strconv.Itoa(api.Protocol))
@@ -179,13 +206,19 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 	grant := Grant{Done: context.Background()}
 	if s.Authorize != nil {
 		ws.SetReadLimit(helloLimit)
-		if grant, err = s.challenge(ctx, ws, r); err != nil {
+		grant, err = s.challenge(ctx, ws, r)
+		release()
+		if err != nil {
+			if ctx.Err() == nil {
+				lim.recordFailure(r.RemoteAddr, time.Now())
+			}
 			// Close sends the status, then waits up to 5s for the peer's
 			// close frame. A read deadline already past ends that wait.
 			nc.SetReadDeadline(time.Now())
 			ws.Close(websocket.StatusPolicyViolation, "refused")
 			return
 		}
+		lim.recordSuccess(r.RemoteAddr)
 	}
 	limit := s.limit
 	if limit == 0 {

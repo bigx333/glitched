@@ -397,3 +397,116 @@ func TestHandshakeDropsABadProofWithoutWaitingForThePeer(t *testing.T) {
 		t.Fatalf("the server's last bytes %x, want a close frame with 1008 first", got)
 	}
 }
+
+func TestHandshakeCapsConcurrentPending(t *testing.T) {
+	srv := &Server{
+		Transport:     Tailnet{},
+		Endpoint:      &fakeEndpoint{env: api.Environment{Name: "mac", Protocol: api.Protocol}},
+		maxHandshakes: 2,
+		handshake:     2 * time.Second,
+		Authorize:     admit(map[string]context.Context{"good": context.Background()}),
+	}
+	addr := serveTailnet(t, srv)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Hold 2 pending unauthenticated handshakes open.
+	ws1 := upgrade(t, ctx, addr)
+	serverNonce(t, ctx, ws1)
+	ws2 := upgrade(t, ctx, addr)
+	serverNonce(t, ctx, ws2)
+
+	// A 3rd concurrent handshake is rejected immediately with 503.
+	ws3, resp, err := websocket.Dial(ctx, "ws://"+addr+"/ws", &websocket.DialOptions{
+		HTTPHeader: http.Header{protocolHeader: {strconv.Itoa(api.Protocol)}},
+	})
+	if err == nil {
+		ws3.CloseNow()
+		t.Fatal("3rd concurrent handshake succeeded, want 503")
+	}
+	if resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+		}
+		t.Fatalf("3rd concurrent handshake status = %d (%v), want 503", status, err)
+	}
+	if resp.Body != nil {
+		resp.Body.Close()
+	}
+
+	// Closing one stalled handshake frees a slot for an authenticated client.
+	ws1.CloseNow()
+	c := NewEndpointClient(Tailnet{Address: addr, Token: "good"}, api.ID{})
+	defer c.Close()
+	var env api.Environment
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		env, err = c.Info(ctx)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("authenticated call after slot freed: %v", err)
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if env.Name != "mac" {
+		t.Fatalf("env.Name = %q, want mac", env.Name)
+	}
+}
+
+func TestHandshakeBacksOffRepeatedFailures(t *testing.T) {
+	srv := &Server{
+		Transport:      Tailnet{},
+		Endpoint:       &fakeEndpoint{env: api.Environment{Name: "mac", Protocol: api.Protocol}},
+		authBurst:      2,
+		authBackoff:    120 * time.Millisecond,
+		maxAuthBackoff: time.Second,
+		Authorize:      admit(map[string]context.Context{"good": context.Background()}),
+	}
+	addr := serveTailnet(t, srv)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Send 2 bad proofs (reaches authBurst=2).
+	for range 2 {
+		ws := upgrade(t, ctx, addr)
+		serverNonce(t, ctx, ws)
+		writeJSON(t, ctx, ws, hello{Nonce: make([]byte, nonceSize), MAC: make([]byte, sha256.Size)})
+		if _, _, err := ws.Read(ctx); websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
+			t.Fatalf("bad proof: %v, want 1008", err)
+		}
+		ws.CloseNow()
+	}
+
+	// 3rd attempt is immediately rate-limited with 429 and Retry-After.
+	ws, resp, err := websocket.Dial(ctx, "ws://"+addr+"/ws", &websocket.DialOptions{
+		HTTPHeader: http.Header{protocolHeader: {strconv.Itoa(api.Protocol)}},
+	})
+	if err == nil {
+		ws.CloseNow()
+		t.Fatal("attempt during backoff succeeded, want 429")
+	}
+	if resp == nil || resp.StatusCode != http.StatusTooManyRequests {
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+		}
+		t.Fatalf("rate-limited status = %d (%v), want 429", status, err)
+	}
+	if resp.Header.Get("Retry-After") == "" {
+		t.Error("429 response missing Retry-After header")
+	}
+	if resp.Body != nil {
+		resp.Body.Close()
+	}
+
+	// Wait out the backoff, then verify a valid token succeeds and resets peer state.
+	time.Sleep(150 * time.Millisecond)
+	c := NewEndpointClient(Tailnet{Address: addr, Token: "good"}, api.ID{})
+	defer c.Close()
+	if env, err := c.Info(ctx); err != nil || env.Name != "mac" {
+		t.Fatalf("valid token after backoff: %+v %v", env, err)
+	}
+}

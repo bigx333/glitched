@@ -142,12 +142,29 @@ jobs:
             go.mod
             go.sum
       - run: go test -race -count=1 -timeout 10m ./internal/client ./internal/daemon ./internal/transport
+      - run: go test -race -count=1 -timeout 10m ./internal/engine ./internal/store ./internal/runtime
+      - run: go test -race -count=1 -timeout 10m ./internal/provider/codex ./internal/provider/acp
       # A step of its own: the plugins' runtimes, run beside the client's
       # timed tests, would starve them of the runner's CPU.
       - run: go test -race -count=1 -timeout 10m ./internal/plugins/... ./internal/mcp
       # Verbose, so the log says whether this runner has the user systemd
       # manager these tests need, or skips them.
       - run: go test -race -count=1 -v -run 'MarkerBehind|WithoutScopes' ./internal/provider/claude
+
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: go vet ./...
+      - run: go tool mygo vet .
+      - run: go build . ./cmd/...
 
   plugins-typecheck:
     runs-on: ubuntu-latest
