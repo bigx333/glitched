@@ -23,7 +23,7 @@ func TestRowsFollowTheTranscript(t *testing.T) {
 	for seed := range uint64(4) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			r := rand.New(rand.NewPCG(seed, 7))
-			a := &app{rows: map[api.ID]*rowsCache{}, listed: map[api.ID]*timelineMemo{}, zenOpen: map[string]bool{}}
+			a := &app{rows: map[api.ID]*rowsCache{}, listed: map[api.ID]*timelineMemo{}}
 			a.settings.zen = true
 			tr := &client.Transcript{}
 			th := thread{Thread: &client.Thread{Transcript: tr}}

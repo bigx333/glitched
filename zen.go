@@ -105,28 +105,47 @@ func (v timelineView) thinkingPos(at int) int {
 	return sort.Search(len(v.items), func(j int) bool { return v.anchor(j) > at }) - 1
 }
 
-// viewOf is how the timeline lists es: in Zen mode, folded.
-func (a *app) viewOf(es []entry) timelineView {
+// viewOf is how the thread's timeline lists es: in Zen mode, folded.
+func (a *app) viewOf(id api.ID, es []entry) timelineView {
 	if !a.settings.zen {
 		return timelineView{es: es}
 	}
-	return zenView(es, a.zenOpen)
+	var open map[string]bool
+	if m := a.listed[id]; m != nil {
+		open = m.open
+	}
+	return zenView(es, open)
 }
 
 // A timelineMemo is what a thread's timeline keeps from frame to frame:
-// the view it listed last, and the Zen view of its rows with what that
-// was built from, the rows' change and the lines open, to build it again
-// only once they change, and its turns, whose folds it keeps while their
-// rows stay the same.
+// the view it listed last, the Zen lines open, by key, with a count of
+// their changes, and the Zen view of its rows with what that was built
+// from, the rows' change and the lines open, to build it again only once
+// they change, and its turns, whose folds it keeps while their rows stay
+// the same.
 type timelineMemo struct {
 	listed timelineView
+	open   map[string]bool
+	opened uint64
 	zen    timelineView
 	change uint64
 	first  *entry
 	n      int
-	open   uint64
+	built  uint64 // opened, as the view was built
 	turns  []zenTurn
 	epoch  uint64
+}
+
+// toggle opens the line with the key, or closes it.
+func (m *timelineMemo) toggle(key string) {
+	if m.open[key] {
+		delete(m.open, key)
+	} else if m.open == nil {
+		m.open = map[string]bool{key: true}
+	} else {
+		m.open[key] = true
+	}
+	m.opened++
 }
 
 func (a *app) memoOf(id api.ID) *timelineMemo {
@@ -146,14 +165,14 @@ func (a *app) viewFor(id api.ID, rs rows) timelineView {
 		return timelineView{es: es}
 	}
 	m := a.memoOf(id)
-	if m.zen.items != nil && m.change == rs.change && m.first == &es[0] && m.n == len(es) && m.open == a.zenOpened {
+	if m.zen.items != nil && m.change == rs.change && m.first == &es[0] && m.n == len(es) && m.built == m.opened {
 		return m.zen
 	}
 	if m.epoch != rs.epoch {
 		m.turns = nil
 	}
-	m.zen, m.turns = zenViewKeeping(es, a.zenOpen, m.turns, rs.stable)
-	m.change, m.first, m.n, m.open, m.epoch = rs.change, &es[0], len(es), a.zenOpened, rs.epoch
+	m.zen, m.turns = zenViewKeeping(es, m.open, m.turns, rs.stable)
+	m.change, m.first, m.n, m.built, m.epoch = rs.change, &es[0], len(es), m.opened, rs.epoch
 	return m.zen
 }
 
@@ -213,7 +232,8 @@ func sameItems(a, b timelineView) bool {
 // card, at the work card head's inset. A click opens the fold under it,
 // or closes it, with the line where it was.
 func (a *app) zenLine(c *ui.Context, t thread, f *zenFold) {
-	open := a.zenOpen[f.key]
+	m := a.memoOf(t.id())
+	open := m.open[f.key]
 	ui.Row(c).Key(f.key).AlignItems(ui.Center).Radius(6).Transition(riseIn).Children(func() {
 		if ghost(c, "head", false).Padding(8, 12, 8, 13).Grow(1).Children(func() {
 			switch {
@@ -239,12 +259,7 @@ func (a *app) zenLine(c *ui.Context, t thread, f *zenFold) {
 			}
 			chevron(c, open)
 		}).Clicked() {
-			if open {
-				delete(a.zenOpen, f.key)
-			} else {
-				a.zenOpen[f.key] = true
-			}
-			a.zenOpened++
+			m.toggle(f.key)
 			a.listFor(t.id()).HoldPlace()
 		}
 	})

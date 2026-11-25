@@ -88,7 +88,7 @@ func finishedTurn() []entry {
 func TestZenOffListsEveryRowAsItIs(t *testing.T) {
 	es := finishedTurn()
 	a := &app{}
-	v := a.viewOf(es)
+	v := a.viewOf(api.NewID(), es)
 	if v.len() != len(es) {
 		t.Fatalf("len %d, want %d", v.len(), len(es))
 	}
@@ -363,7 +363,7 @@ func TestZenNeverHidesWhatMustShow(t *testing.T) {
 		}
 		check(zenView(es, open), false)
 		check(zenView(es, all), true)
-		id := (&app{}).viewOf(es)
+		id := (&app{}).viewOf(api.NewID(), es)
 		if id.len() != len(es) {
 			t.Fatalf("case %d: identity has %d items", n, id.len())
 		}
@@ -378,7 +378,7 @@ func TestZenNeverHidesWhatMustShow(t *testing.T) {
 // The timeline's Zen view is built again only as the rows, or the lines
 // open, change; with Zen off it's each row as it is, for nothing.
 func TestZenViewIsBuiltAgainOnlyAsWhatItShowsChanges(t *testing.T) {
-	a := &app{listed: map[api.ID]*timelineMemo{}, zenOpen: map[string]bool{}}
+	a := &app{listed: map[api.ID]*timelineMemo{}}
 	a.settings.zen = true
 	id := api.NewID()
 	rs := rows{es: finishedTurn(), change: 1}
@@ -395,8 +395,7 @@ func TestZenViewIsBuiltAgainOnlyAsWhatItShowsChanges(t *testing.T) {
 		t.Fatal("the rows changed, and the view didn't")
 	}
 	v = a.viewFor(id, rs)
-	a.zenOpen[v.fold(1).key] = true
-	a.zenOpened++
+	a.memoOf(id).toggle(v.fold(1).key)
 	open := a.viewFor(id, rs)
 	wantShape(t, rs.es, open, "u", "fold(w1 a1 w2 p w3)", "w1", "a1", "w2", "p", "w3", "a2")
 	rs.es = append(rs.es, zenRow("u2", entryUser, api.NewID()))
@@ -430,7 +429,7 @@ func zenRows(n int) []entry {
 func BenchmarkZenView(b *testing.B) {
 	rs := rows{es: zenRows(5000), change: 1}
 	id := api.NewID()
-	a := &app{listed: map[api.ID]*timelineMemo{}, zenOpen: map[string]bool{}}
+	a := &app{listed: map[api.ID]*timelineMemo{}}
 	b.Run("off", func(b *testing.B) {
 		a.settings.zen = false
 		b.ReportAllocs()
@@ -441,7 +440,7 @@ func BenchmarkZenView(b *testing.B) {
 	b.Run("cold", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			zenView(rs.es, a.zenOpen)
+			zenView(rs.es, nil)
 		}
 	})
 	b.Run("kept", func(b *testing.B) {
@@ -520,7 +519,7 @@ func TestZenUpdateBuildsOnlyTheLiveTurnsAgain(t *testing.T) {
 	th := thread{Thread: &client.Thread{Transcript: &client.Transcript{Entries: zenTurns(500)}}}
 	cost := map[bool]float64{}
 	for _, zen := range []bool{false, true} {
-		a := &app{rows: map[api.ID]*rowsCache{}, listed: map[api.ID]*timelineMemo{}, zenOpen: map[string]bool{}}
+		a := &app{rows: map[api.ID]*rowsCache{}, listed: map[api.ID]*timelineMemo{}}
 		a.settings.zen = zen
 		a.viewFor(th.id(), a.rowsOf(th))
 		cost[zen] = testing.AllocsPerRun(50, func() {

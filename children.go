@@ -140,7 +140,7 @@ func fmtTokens(n int64) string {
 
 // pruneThreadState drops what the app keeps by thread for threads no
 // longer there: the sidebar's open children, the composers seen, and the
-// timeline's rows, markers and views.
+// timeline's rows, markers, and views with their open Zen lines.
 func (a *app) pruneThreadState() {
 	gone := func(id api.ID, _ bool) bool {
 		_, ok := a.find(id)

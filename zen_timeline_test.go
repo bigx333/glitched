@@ -103,8 +103,8 @@ func TestZenFoldsAFinishedTurnIntoALineThatOpens(t *testing.T) {
 	if h.tt.HasText("Looking at the code.") {
 		t.Fatalf("the line closed again shows what it folds: %q", h.tt.Texts())
 	}
-	if len(h.a.zenOpen) != 0 {
-		t.Errorf("the line closed is still kept: %v", h.a.zenOpen)
+	if open := h.a.memoOf(h.a.current().id()).open; len(open) != 0 {
+		t.Errorf("the line closed is still kept: %v", open)
 	}
 	h.click(line)
 	h.tt.Advance(time.Second)
@@ -465,7 +465,7 @@ func TestZenForgetsADeletedThreadsLines(t *testing.T) {
 	}
 	h.until("the delete", func() bool { _, ok := h.a.find(th.id()); return !ok })
 	h.tt.Advance(2 * time.Second)
-	if h.a.listed[th.id()] != nil || len(h.a.zenOpen) != 0 {
-		t.Fatalf("the deleted thread's timeline %v and open lines %v are kept", h.a.listed[th.id()], h.a.zenOpen)
+	if m := h.a.listed[th.id()]; m != nil {
+		t.Fatalf("the deleted thread's timeline and open lines %v are kept", m.open)
 	}
 }

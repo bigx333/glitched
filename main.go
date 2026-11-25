@@ -374,8 +374,6 @@ type app struct {
 	accessFor    api.ID // the thread whose access changed at accessAt, zero for the draft
 	pickersFor   api.ID // the thread whose composer the pickers are in, zero for the draft (pickersIn)
 	collapsed    map[string]bool
-	zenOpen      map[string]bool // the Zen lines unfolded, by key
-	zenOpened    uint64          // counts the changes to zenOpen
 	// The inbox: the project it's filtered to, and its closed sections.
 	projectFilter map[projectKey]bool // the projects the sidebar shows; none is all
 	sectionClosed map[category]bool
@@ -773,7 +771,6 @@ func newApp(dir string, engine func(*daemon.Config), detect func(context.Context
 		showSidebar:    true,
 		sidebarWidth:   272,
 		collapsed:      map[string]bool{},
-		zenOpen:        map[string]bool{},
 		sectionClosed:  map[category]bool{catWorking: true, catSnoozed: true, catSettled: true},
 		sidebarRows:    map[string]map[api.ID]bool{},
 		sidebarPages:   map[string]int{},
