@@ -105,7 +105,14 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 		}
 		seen[m.Name] = true
 		icon, color := drawn(m)
-		if !clash(icon, color) || frozen(m) {
+		if frozen(m) {
+			// Drawn with a pair another holds, it takes up nothing more.
+			if !pairs[[2]int{icon, color}] {
+				hold(icon, color)
+			}
+			continue
+		}
+		if !clash(icon, color) {
 			hold(icon, color)
 			continue
 		}

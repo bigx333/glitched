@@ -339,6 +339,26 @@ func TestUnknownMarksTakeUpOnlyTheIconsTheyAreDrawnWith(t *testing.T) {
 	steady(t, out, shown)
 }
 
+func TestUnknownMarksDrawnWithOnePairTakeUpThatPairOnce(t *testing.T) {
+	// Four this version can't redraw, all drawn magic-stick-3 #ec4899,
+	// and 55 more: 56 pairs for 56 drawn, so none may share.
+	var stored []projectMark
+	var shown []string
+	for i := 0; len(stored) < 4; i++ {
+		if n := fmt.Sprintf("f%d", i); hashOf(n).Icon == "magic-stick-3" {
+			stored = append(stored, projectMark{n, "rocket", "#ec4899"})
+			shown = append(shown, n)
+		}
+	}
+	var rest []string
+	for i := range 55 {
+		rest = append(rest, fmt.Sprintf("a%03d", i))
+	}
+	out, _ := settleMarks(stored, append(slices.Clone(shown), rest...))
+	distinctPairs(t, append(out[4:], projectMark{"f", "magic-stick-3", "#ec4899"}), append(slices.Clone(rest), "f"))
+	steady(t, out, append(slices.Clone(shown), rest...))
+}
+
 // drawnHere is the mark m is drawn with, worked out here and not by
 // marksByName: its own icon and color where this version knows them.
 func drawnHere(m projectMark) (d projectMark, frozen bool) {
@@ -410,6 +430,20 @@ func TestMarksSettleForAnySetOfProjects(t *testing.T) {
 					stored[i].Icon = "rocket"
 				case 1:
 					stored[i].Color = "#123456"
+				}
+			}
+		}
+		if r.IntN(4) == 0 {
+			// Some this version can't redraw, drawn with one pair.
+			icon, color := projectIcons[r.IntN(8)], projectColors[r.IntN(7)]
+			k := 2 + r.IntN(6)
+			for _, n := range pool {
+				if k > 0 && hashOf(n).Icon == icon && !slices.ContainsFunc(stored, func(m projectMark) bool { return m.Name == n }) {
+					stored = append(stored, projectMark{n, "rocket", color})
+					if !slices.Contains(shown, n) {
+						shown = append(shown, n)
+					}
+					k--
 				}
 			}
 		}
