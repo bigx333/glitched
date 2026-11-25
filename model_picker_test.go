@@ -231,6 +231,9 @@ func TestSpeedControlsFollowTheModelsProviderAndCatalog(t *testing.T) {
 			t.Errorf("Gemini offers a %s control", label)
 		}
 	}
+	if got := h.a.speedFor(h.a.model, false, true); got != api.SpeedStandard {
+		t.Errorf("ultrafast alone on Gemini chose %s, want ordinary speed", got)
+	}
 	h.a.fast = true
 	if ref := h.a.modelRef(); ref.Fast || ref.Ultrafast {
 		t.Errorf("a new Gemini thread starts at %+v, want ordinary speed", ref)
@@ -276,6 +279,9 @@ func TestSpeedControlsFollowTheModelsProviderAndCatalog(t *testing.T) {
 	pickerSettle(t, h)
 	if got := h.a.speed(); got != api.SpeedStandard {
 		t.Errorf("choosing ultrafast twice chose %s, want ordinary speed", got)
+	}
+	if got := h.a.speedFor(h.a.model, false, true); got != api.SpeedUltrafast {
+		t.Errorf("ultrafast without its compatible fast bit chose %s, want ultrafast", got)
 	}
 }
 

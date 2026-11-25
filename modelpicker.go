@@ -487,17 +487,18 @@ func (a *app) speedsFor(k modelKey) []api.Speed {
 }
 
 // speedFor is the speed fast and ultrafast choose on k, narrowed to what
-// it offers: ultrafast is fast where the model has no ultrafast, and off
-// where its provider takes neither.
+// it offers. Ultrafast implies fast, as ModelRef keeps it for older readers:
+// it is fast where the model has no ultrafast, and off where its provider
+// takes neither.
 func (a *app) speedFor(k modelKey, fast, ultrafast bool) api.Speed {
 	speeds := a.speedsFor(k)
-	if !fast || !slices.Contains(speeds, api.SpeedFast) {
-		return api.SpeedStandard
-	}
 	if ultrafast && slices.Contains(speeds, api.SpeedUltrafast) {
 		return api.SpeedUltrafast
 	}
-	return api.SpeedFast
+	if (fast || ultrafast) && slices.Contains(speeds, api.SpeedFast) {
+		return api.SpeedFast
+	}
+	return api.SpeedStandard
 }
 
 func (a *app) speed() api.Speed { return a.speedFor(a.model, a.fast, a.ultrafast) }
