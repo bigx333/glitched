@@ -1784,3 +1784,53 @@ func TestMaintainPrunesDoneEffectsOldCommandsAndCheckpointsWAL(t *testing.T) {
 		t.Fatalf("pending effect after Maintain: ok=%v err=%v", ok, err)
 	}
 }
+
+// Commands that write no event share one seq. Maintain keeps exactly the
+// newest receipts, and a command whose receipt it dropped is refused as
+// expired, not applied a second time.
+func TestMaintainKeepsTheNewestReceiptsAndRefusesAForgottenOne(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, filepath.Join(t.TempDir(), "host.db"))
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	first := api.Command{ID: api.NewID(), Target: thread, Body: api.MessageDispatch{Text: "first", Mode: api.AfterActive}}
+	if _, err := s.Submit(ctx, first, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	var renames []api.Command
+	for range 3 {
+		c := api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadRename{Title: "t"}}
+		if _, err := s.Submit(ctx, c, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		renames = append(renames, c)
+	}
+	_, before, err := s.Since(ctx, thread, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Maintain(ctx, store.MaintainOptions{KeepCommands: 2}); err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range renames {
+		done, err := s.Committed(ctx, c.ID)
+		if want := i > 0; done != want || want && err != nil {
+			t.Errorf("rename %d: Committed = %v, %v; want %v", i, done, err, want)
+		}
+	}
+	if _, err := s.Submit(ctx, first, time.Now()); !errors.Is(err, api.ErrExpired) {
+		t.Fatalf("a message whose receipt was pruned, sent again: %v, want api.ErrExpired", err)
+	}
+	if _, err := s.Committed(ctx, first.ID); !errors.Is(err, api.ErrExpired) {
+		t.Fatalf("Committed of a pruned receipt: %v, want api.ErrExpired", err)
+	}
+	if _, after, err := s.Since(ctx, thread, 0, 1000); err != nil || after != before {
+		t.Fatalf("the refused message wrote events: head %d, want %d (%v)", after, before, err)
+	}
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.TurnInterrupt{}}, time.Now()); err != nil {
+		t.Fatalf("a new command after pruning: %v", err)
+	}
+}
