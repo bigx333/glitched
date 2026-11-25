@@ -154,7 +154,7 @@ func (a *app) pluginRuns(p plugins.Plugin) bool {
 // While it doesn't, the built-in draws in its place.
 func (a *app) copyRuns(p plugins.Plugin) bool {
 	for _, q := range a.plugins.Installed() {
-		if q.ShadowedBy == "" && q.ID == strings.TrimSuffix(p.ID, plugins.FallbackSuffix) {
+		if q.Folder == p.ShadowedBy {
 			return a.pluginRuns(q)
 		}
 	}

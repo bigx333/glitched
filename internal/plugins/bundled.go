@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	plugin "github.com/yxxbc/mygo-plugin"
@@ -143,22 +144,36 @@ func (h *Host) shadowing(id string) *installed {
 // the copy's folder moves aside, under the plugins folder's .reverted,
 // so nothing the user wrote is lost, and the plugin is turned on.
 func (h *Host) Revert(id string) error {
-	in := h.shadowing(id)
+	base, in := id, h.shadowing(id)
 	if in == nil {
-		return fmt.Errorf("no copy of yours runs in place of the built-in %s", id)
+		// A copy of a renamed built-in may keep the built-in's old id.
+		for _, b := range h.list() {
+			if !b.bundled || b.shadowedBy == "" {
+				continue
+			}
+			for _, sh := range h.list() {
+				if sh.folder == b.shadowedBy && sh.manifest.ID == id {
+					base, in = strings.TrimSuffix(b.manifest.ID, FallbackSuffix), sh
+				}
+			}
+		}
+	}
+	if in == nil {
+		return fmt.Errorf("no copy of yours runs in place of the built-in %s", base)
 	}
 	h.closeAll()
 	h.stopping.Wait()
 	if err := os.MkdirAll(revertedDir(h.state), 0o755); err != nil {
 		return err
 	}
-	to := filepath.Join(revertedDir(h.state), id+"-"+strconv.FormatInt(time.Now().Unix(), 10))
+	to := filepath.Join(revertedDir(h.state), base+"-"+strconv.FormatInt(time.Now().Unix(), 10))
 	if err := os.Rename(in.folder, to); err != nil {
 		h.Reload()
 		return err
 	}
+	copyID := in.manifest.ID
 	return h.edit(func(p *prefs) {
-		p.Disabled = slices.DeleteFunc(p.Disabled, func(s string) bool { return s == id })
+		p.Disabled = slices.DeleteFunc(p.Disabled, func(s string) bool { return s == base || s == copyID })
 	})
 }
 
