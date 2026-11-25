@@ -13,6 +13,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/jsonfile"
 	"glitched/internal/provider"
@@ -215,6 +216,8 @@ func (a *app) offeredModels() []modelInfo {
 			}
 			m.cliDefault = r.Default && !slices.ContainsFunc(out, func(o modelInfo) bool { return o.key.Provider == f.provider && o.cliDefault })
 			m.defaultEffort = r.DefaultEffort
+			m.speeds = append([]api.Speed(nil), r.Speeds...)
+			m.speedsKnown = r.SpeedsKnown
 			out = append(out, m)
 		}
 	}
@@ -366,7 +369,7 @@ func (a *app) followCLI(p string) {
 	})
 	syntax, kind := (*json.SyntaxError)(nil), (*json.UnmarshalTypeError)(nil)
 	if errors.As(err, &syntax) || errors.As(err, &kind) {
-		file = choice{Model: modelKey{Provider: p}, Fast: a.fast, Access: a.access}
+		file = choice{Model: modelKey{Provider: p}, Fast: a.fast, Ultrafast: a.ultrafast, Access: a.access}
 		err = jsonfile.Write(a.composerPath(), file)
 	}
 	if err != nil {

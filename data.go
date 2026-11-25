@@ -889,8 +889,12 @@ func given(c api.ThreadConfigure) string {
 	if c.Effort != nil {
 		names = append(names, "effort")
 	}
-	if c.Fast != nil {
-		names = append(names, "fast mode")
+	if c.Fast != nil || c.Ultrafast != nil {
+		name := "fast mode"
+		if c.Ultrafast != nil && *c.Ultrafast {
+			name = "ultrafast mode"
+		}
+		names = append(names, name)
 	}
 	if c.Access != nil {
 		names = append(names, "access")

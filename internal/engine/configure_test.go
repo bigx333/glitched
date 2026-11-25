@@ -9,9 +9,9 @@ import (
 )
 
 // whole is the configure that gives all a configure can: m's name, effort
-// and fast mode, and a.
+// and speed, and a.
 func whole(m api.ModelRef, a api.Access) api.ThreadConfigure {
-	return api.ThreadConfigure{Model: new(m.Model), Effort: new(m.Effort), Fast: new(m.Fast), Access: new(a)}
+	return api.ThreadConfigure{Model: new(m.Model), Effort: new(m.Effort), Fast: new(m.Fast), Ultrafast: new(m.Ultrafast), Access: new(a)}
 }
 
 // A thread's next turn starts at the model and access a configure set.
@@ -52,6 +52,7 @@ func TestAConfigureLeavesWhatItDoesNotGive(t *testing.T) {
 		"the effort":    {api.ThreadConfigure{Effort: new("low")}, api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "low", Fast: true}, api.AccessAutoEdits},
 		"the model":     {api.ThreadConfigure{Model: new("Claude Sonnet 5.5")}, api.ModelRef{Provider: "claude", Model: "Claude Sonnet 5.5", Effort: "high", Fast: true}, api.AccessAutoEdits},
 		"fast mode off": {api.ThreadConfigure{Fast: new(false)}, api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}, api.AccessAutoEdits},
+		"ultrafast":     {api.ThreadConfigure{Ultrafast: new(true)}, api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high", Fast: true, Ultrafast: true}, api.AccessAutoEdits},
 		"the access":    {api.ThreadConfigure{Access: new(api.AccessAsk)}, opus, api.AccessAsk},
 		"no effort":     {api.ThreadConfigure{Effort: new("")}, api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Fast: true}, api.AccessAutoEdits},
 	} {

@@ -112,7 +112,7 @@ func (h *Host) linkSubmit(ctx context.Context, link api.Link, c api.Command) (ap
 		}
 	case api.ThreadConfigure:
 		narrows := fmt.Errorf("%w: a link only narrows a thread's access", api.ErrNotAllowed)
-		if b.Model != nil || b.Effort != nil || b.Fast != nil || b.Access == nil {
+		if b.Model != nil || b.Effort != nil || b.Fast != nil || b.Ultrafast != nil || b.Access == nil {
 			return api.Receipt{}, narrows
 		}
 		return h.store.SubmitChecked(ctx, c, func(t engine.Thread) error {

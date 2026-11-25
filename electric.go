@@ -64,8 +64,13 @@ const (
 	elMargin = 14
 )
 
-// boltCool is the color a spark cools to.
-var boltCool = ui.Hex("#7a4dff")
+// boltCool is the color a spark cools to. ultraHot and ultraCool are
+// ultrafast's violet-white light, against fast's electric blue.
+var (
+	boltCool  = ui.Hex("#7a4dff")
+	ultraHot  = ui.Hex("#fff5ff")
+	ultraCool = ui.Hex("#a21caf")
+)
 
 const (
 	elMaxPoints = 128
@@ -194,8 +199,9 @@ func (e *electricity) frame(total float32, t float64, still bool) {
 
 // drawElectricity draws the charged line around r, rounded by radius, its
 // outline inset by elMargin from r, t seconds in (still, a pose that
-// holds), at intensity a, on a dark background or a light one.
-func drawElectricity(p *ui.Painter, r ui.Rect, radius float32, t float64, still bool, a float32, dark bool) {
+// holds), at intensity a, on a dark background or a light one, in fast's
+// blue or ultrafast's violet.
+func drawElectricity(p *ui.Painter, r ui.Rect, radius float32, t float64, still bool, a float32, dark bool, ultra bool) {
 	w, h := r.W-2*elMargin, r.H-2*elMargin
 	rad := min(radius, w/2, h/2)
 	total := 2*(w+h-4*rad) + 2*math.Pi*rad
@@ -207,11 +213,17 @@ func drawElectricity(p *ui.Painter, r ui.Rect, radius float32, t float64, still 
 		Int(elCount, int32(e.count)).Floats(elPoints, e.points[:e.count*4]...).
 		Float(elBeads, e.beads).Float(elIntensity, a*elBrightness).
 		Floats(elSparkAt, e.sparkAt[:]...).Floats(elSparkLife, e.sparkLife[:]...).Floats(elSparkWalk, e.sparkWalk[:]...)
+	tint, hot, cool := boltGlow, boltCore, boltCool
+	lightHot := ui.Hex("#1d6fe0")
+	if ultra {
+		tint, hot, cool = ultraElectric, ultraHot, ultraCool
+		lightHot = ultraCool
+	}
 	if dark {
-		v.Float(elInk, 0).Color(elTint, boltGlow).Color(elHot, boltCore).Color(elCool, boltCool)
+		v.Float(elInk, 0).Color(elTint, tint).Color(elHot, hot).Color(elCool, cool)
 	} else {
 		// White light is lost on white: deeper colors, painted over it.
-		v.Float(elInk, 1).Color(elTint, boltGlow).Color(elHot, ui.Hex("#1d6fe0")).Color(elCool, boltCool)
+		v.Float(elInk, 1).Color(elTint, tint).Color(elHot, lightHot).Color(elCool, cool)
 	}
 	electricShader.Draw(p, r, shader.Options{Values: v})
 }

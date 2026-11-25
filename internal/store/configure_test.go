@@ -110,7 +110,7 @@ func TestAConfigureKeepsChildrenWithinTheirParent(t *testing.T) {
 	if th := threadOf(t, s, tr.ids[1]); th.Access != api.AccessAutoEdits {
 		t.Errorf("a child widened with its parent, to %v", th.Access)
 	}
-	// The top's model, effort and fast mode are its own: the threads
+	// The top's model, effort and speed are its own: the threads
 	// under it aren't decided on.
 	under := [2]engine.Thread{threadOf(t, s, tr.ids[1]), threadOf(t, s, tr.ids[2])}
 	if err := configure(s, tr.ids[0], api.ThreadConfigure{Model: new("top"), Effort: new("low"), Fast: new(true)}); err != nil {

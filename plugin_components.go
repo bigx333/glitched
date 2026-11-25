@@ -299,7 +299,7 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 		}
 		ui.Text(c, e.label).FontSize(11).FontWeight(600).TextColor(e.color)
 	case "model.zap":
-		if a.fast {
+		if a.speed() != api.SpeedStandard {
 			a.zapIcon(c, "trigger-zap", 12)
 		}
 	case "model.effort":

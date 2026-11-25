@@ -100,6 +100,7 @@ func TestAConfigureGivesOnlyWhatItNames(t *testing.T) {
 		"the effort":   {ThreadConfigure{Effort: new("low")}, `{"effort":"low"}`, ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "low", Fast: true}, AccessFull},
 		"zeros":        {ThreadConfigure{Effort: new(""), Fast: new(false), Access: new(AccessAsk)}, `{"effort":"","fast":false,"access":0}`, ModelRef{Provider: "claude", Model: "Claude Opus 5.5"}, AccessAsk},
 		"all it holds": {ThreadConfigure{Model: new("Claude Sonnet 5.5"), Effort: new("max"), Fast: new(true), Access: new(AccessAutoEdits)}, `{"model":"Claude Sonnet 5.5","effort":"max","fast":true,"access":1}`, ModelRef{Provider: "claude", Model: "Claude Sonnet 5.5", Effort: "max", Fast: true}, AccessAutoEdits},
+		"ultrafast":    {ThreadConfigure{Ultrafast: new(true)}, `{"ultrafast":true}`, ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high", Fast: true, Ultrafast: true}, AccessFull},
 	} {
 		b, err := json.Marshal(tc.c)
 		if err != nil || string(b) != tc.wire {
@@ -112,6 +113,26 @@ func TestAConfigureGivesOnlyWhatItNames(t *testing.T) {
 		if m, a := back.Onto(opus, AccessFull); m != tc.model || a != tc.access {
 			t.Errorf("%s: onto %+v at Full it makes %+v at %v, want %+v at %v", name, opus, m, a, tc.model, tc.access)
 		}
+	}
+}
+
+// Ultrafast keeps the old fast bit set, so a log or client from before it
+// still runs fast; fast off clears it, and ultrafast off is a downgrade
+// to fast rather than ordinary speed.
+func TestUltrafastIsFastToReadersBeforeIt(t *testing.T) {
+	var m ModelRef
+	m.SetSpeed(SpeedUltrafast)
+	if !m.Fast || !m.Ultrafast || m.Speed() != SpeedUltrafast {
+		t.Fatalf("ultrafast is %+v", m)
+	}
+	m, _ = (ThreadConfigure{Fast: new(false)}).Onto(m, AccessAsk)
+	if m.Fast || m.Ultrafast || m.Speed() != SpeedStandard {
+		t.Errorf("fast off made %+v, want ordinary speed", m)
+	}
+	m.SetSpeed(SpeedUltrafast)
+	m, _ = (ThreadConfigure{Ultrafast: new(false)}).Onto(m, AccessAsk)
+	if !m.Fast || m.Ultrafast || m.Speed() != SpeedFast {
+		t.Errorf("ultrafast off made %+v, want fast", m)
 	}
 }
 

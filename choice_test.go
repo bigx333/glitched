@@ -15,6 +15,7 @@ import (
 	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/plugins/widget"
+	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 )
 
@@ -595,6 +596,7 @@ func TestAFailedChoicesRowSaysWhichItWas(t *testing.T) {
 	for what, c := range map[string]api.ThreadConfigure{
 		"model":                       {Model: new("Claude Sonnet 5.5")},
 		"fast mode":                   {Fast: new(true)},
+		"ultrafast mode":              {Ultrafast: new(true)},
 		"model and fast mode":         {Model: new("Claude Sonnet 5.5"), Fast: new(false)},
 		"model, effort and fast mode": {Model: new("Claude Sonnet 5.5"), Effort: new("low"), Fast: new(false)},
 	} {
@@ -666,15 +668,16 @@ func TestAPluginConfiguresAThreadsModelButNeverItsAccess(t *testing.T) {
 	writeOwnPlugin(t, h.a, "configurer", `{"id": "configurer", "name": "Configurer", "main": "index.js", "contract": "glitched", "contractVersion": 2,
 		"capabilities": ["threads:write"], "contributes": {"commands": [{"id": "list", "title": "l"}, {"id": "configure", "title": "c"}]}}`, configurerModule)
 	settlePlugins(t, h.a, h.tt, h.p)
-	run := func(cmd string, options map[string]any) error {
+	runOn := func(cmd, thread string, options map[string]any) error {
 		t.Helper()
 		var failed error
 		ran := false
-		h.a.plugins.RunCommand("configurer", cmd, map[string]any{"thread": id.String(), "options": options}, func(err error) { failed, ran = err, true })
+		h.a.plugins.RunCommand("configurer", cmd, map[string]any{"thread": thread, "options": options}, func(err error) { failed, ran = err, true })
 		h.until(cmd+" to run", func() bool { return ran })
 		settlePlugins(t, h.a, h.tt, h.p)
 		return failed
 	}
+	run := func(cmd string, options map[string]any) error { return runOn(cmd, id.String(), options) }
 	if err := run("list", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -694,6 +697,7 @@ func TestAPluginConfiguresAThreadsModelButNeverItsAccess(t *testing.T) {
 		{"model": "Claude Sonnet 5.5", "access": "full"},
 		{"Access": "full"},
 		{"fast": true, "provider": "codex"},
+		{"ultrafast": true},
 		{"model": "GPT-5.5"},
 		{"effort": "extreme"},
 		{},
@@ -713,6 +717,27 @@ func TestAPluginConfiguresAThreadsModelButNeverItsAccess(t *testing.T) {
 		v := h.thread("Mine").View
 		return v.Model == want && v.Access == api.AccessAutoEdits
 	})
+
+	codex := api.ModelRef{Provider: "codex", Model: "gpt-5.5", Effort: "high"}
+	codexID := h.a.backend.Create(h.local(), t.TempDir(), "Codex", codex, api.AccessAutoEdits, nil)
+	reportModels(h, "codex", []provider.Model{
+		{ID: "gpt-5.5", Name: "GPT-5.5", Speeds: []api.Speed{api.SpeedFast, api.SpeedUltrafast}, SpeedsKnown: true},
+		{ID: "gpt-fast", Name: "GPT fast only", Speeds: []api.Speed{api.SpeedFast}, SpeedsKnown: true},
+	})
+	if err := runOn("configure", codexID.String(), map[string]any{"ultrafast": true}); err != nil {
+		t.Fatal(err)
+	}
+	wantUltra := api.ModelRef{Provider: "codex", Model: "gpt-5.5", Effort: "high", Fast: true, Ultrafast: true}
+	h.until("the Codex thread's ultrafast", func() bool { return h.thread("Codex").View.Model == wantUltra })
+	if err := runOn("configure", codexID.String(), map[string]any{"model": "gpt-fast"}); err == nil {
+		t.Error("moved an ultrafast thread to a fast-only Codex model")
+	}
+
+	gemini := api.ModelRef{Provider: "gemini", Model: "gemini-3-pro", Effort: "high"}
+	geminiID := h.a.backend.Create(h.local(), t.TempDir(), "Gemini", gemini, api.AccessAutoEdits, nil)
+	if err := runOn("configure", geminiID.String(), map[string]any{"fast": true}); err == nil {
+		t.Error("configured fast mode on Gemini, which offers no speed tier")
+	}
 
 	writeOwnPlugin(t, h.a, "providers", replacing("providers", "settings.providers"), `export function place({ items }) { return items.map(() => ({ type: "text", text: "Mine" })) }`)
 	h.a.plugins.SetGranted("providers", "ui.replace", true)

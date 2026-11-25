@@ -187,8 +187,11 @@ func (g *Agent) start(ctx context.Context, text string) error {
 		"summary":           "auto",
 		"serviceTier":       nil,
 	}
-	if g.spec.Model.Fast {
+	switch g.spec.Model.Speed() {
+	case api.SpeedFast:
 		params["serviceTier"] = fastTier
+	case api.SpeedUltrafast:
+		params["serviceTier"] = ultrafastTier
 	}
 	if m := g.spec.Model.Model; m != "" {
 		params["model"] = m
@@ -232,9 +235,12 @@ func (g *Agent) start(ctx context.Context, text string) error {
 	return nil
 }
 
-// fastTier is the service tier of Glitched's Fast: every model Codex
-// lists offers it, by this id.
-const fastTier = "priority"
+// fastTier and ultrafastTier are the service tiers of Glitched's Fast
+// and Ultrafast, by the ids Codex's model list names them.
+const (
+	fastTier      = "priority"
+	ultrafastTier = "ultrafast"
+)
 
 // watch fails the turn when app-server goes before it ends.
 func (g *Agent) watch() {

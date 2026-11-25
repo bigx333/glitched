@@ -8,6 +8,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/api"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/widget"
 )
@@ -26,6 +27,8 @@ type modelInfo struct {
 	// it is given none, as its engine reported (provider.Model).
 	cliDefault    bool
 	defaultEffort string
+	speeds        []api.Speed
+	speedsKnown   bool
 }
 
 // family is how the picker shows the models of a provider, which names
@@ -167,8 +170,10 @@ var effortStops = []ui.GradientStop{
 
 var (
 	maxPixels = []ui.Color{ui.Hex("#fecaca"), ui.Hex("#fda4af"), ui.Hex("#ffffff"), ui.Hex("#fca5a5"), ui.Hex("#f9a8d4")}
-	// electric is fast mode's color: its lightning, its filled icon.
-	electric = ui.Hex("#60c3ff")
+	// electric is fast mode's color, ultraElectric ultrafast's: their
+	// lightning and filled icons.
+	electric      = ui.Hex("#60c3ff")
+	ultraElectric = ui.Hex("#d946ef")
 )
 
 // effortLevel is the chosen effort's place among the model's efforts:
@@ -182,7 +187,7 @@ func (a *app) effortLevel() int {
 // modelPicker is the composer's model button, and the popover it opens:
 // the families of models beside the models of the one pointed at, as a
 // submenu, and the effort slider. High effort lights a glow around the
-// button, and fast mode runs electricity around it in the glow's place.
+// button, and a speed mode runs electricity around it in the glow's place.
 // What the button shows and what the popover holds are composer.model's
 // two copies, a plugin's or Glitched's own: Glitched keeps the button, its
 // glow and electricity, the popover, and what a row does (modelListRow).
@@ -200,7 +205,7 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 	if b.Children(func() {
 		a.unconfirmedMark(c, p)
 		a.pickerGlow(c, b, effort)
-		if a.fast {
+		if a.speed() != api.SpeedStandard {
 			a.electricBorder(c)
 		}
 		a.pluginComponent(c, "composer.model", &t, componentCopy{
@@ -215,7 +220,7 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 				if !a.cliEffort(t) && runs.label != "" {
 					ui.Text(c, runs.label).FontSize(11).FontWeight(600).TextColor(runs.color).Shrink(0)
 				}
-				if a.fast {
+				if a.speed() != api.SpeedStandard {
 					a.zapIcon(c, "trigger-zap", 12)
 				}
 				ui.Icon(c, icChevronD).FontSize(11)
@@ -297,10 +302,11 @@ type composerModel struct {
 	Part string `json:"part"`
 	// Model and Effort are what the button shows of the chosen model and
 	// effort; Key is the row key of the model.
-	Model  string `json:"model"`
-	Key    string `json:"key"`
-	Effort string `json:"effort"`
-	Fast   bool   `json:"fast"`
+	Model     string `json:"model"`
+	Key       string `json:"key"`
+	Effort    string `json:"effort"`
+	Fast      bool   `json:"fast"`
+	Ultrafast bool   `json:"ultrafast,omitempty"`
 	// FamilyKey is the provider whose models the popover shows, and
 	// LockKey the only one it offers, a thread's provider, or "" for
 	// every one; Family and Lock are their families' names, as a copy
@@ -343,7 +349,8 @@ type modelChoice struct {
 func (a *app) composerModelOf(c *ui.Context, t thread, r plugins.ThreadRecord, part string) composerModel {
 	size := c.Theme().FontSize
 	m := a.shownModel(t)
-	out := composerModel{Thread: r, Part: part, Model: m.name, Key: a.pickedIn(t).String(), Effort: a.efforts()[a.effortLevel()].label, Fast: a.fast, FamilyKey: a.pickerFamily, LockKey: a.pickerLock,
+	speed := a.speed()
+	out := composerModel{Thread: r, Part: part, Model: m.name, Key: a.pickedIn(t).String(), Effort: a.efforts()[a.effortLevel()].label, Fast: speed != api.SpeedStandard, Ultrafast: speed == api.SpeedUltrafast, FamilyKey: a.pickerFamily, LockKey: a.pickerLock,
 		FamilyRowHeight: familyRowHeight(c),
 		ModelRowHeight:  modelRowHeight(c, size),
 		ModelsMaxHeight: a.modelsMaxHeight(c),
@@ -458,18 +465,100 @@ func (a *app) modelListRow(list, key string, e ui.Element) {
 	}
 }
 
-// fastButton turns fast mode on and off, beside the effort in the
-// picker: just its lightning, which strikes as it comes on.
-func (a *app) fastButton(c *ui.Context) {
-	label := "Fast mode: off"
-	if a.fast {
-		label = "Fast mode: on"
+// providerSpeeds are the speed tiers a provider is known to accept,
+// before its engine's model list narrows them by model. Claude Code
+// takes fastMode in its settings; Codex takes a fast service tier on
+// every model it lists, but ultrafast only where its catalog says so.
+func providerSpeeds(provider string) []api.Speed {
+	switch provider {
+	case "claude", "codex":
+		return []api.Speed{api.SpeedFast}
 	}
-	b := a.tip(c, ghost(c, "fast", false).Padding(6).Role(ui.RoleSwitch).Checked(a.fast).Label("Fast mode"), label)
-	if b.Children(func() { a.zapIcon(c, "fast-zap", 14) }).Clicked() {
-		a.fast = !a.fast
-		if a.fast {
-			a.fastAt = c.Now()
+	return nil
+}
+
+// speedsFor are the speed tiers k offers: what its engine reported,
+// else what its provider accepts.
+func (a *app) speedsFor(k modelKey) []api.Speed {
+	if m, offered := a.modelOf(k); offered && m.speedsKnown {
+		return m.speeds
+	}
+	return providerSpeeds(k.Provider)
+}
+
+// speedFor is the speed fast and ultrafast choose on k, narrowed to what
+// it offers: ultrafast is fast where the model has no ultrafast, and off
+// where its provider takes neither.
+func (a *app) speedFor(k modelKey, fast, ultrafast bool) api.Speed {
+	speeds := a.speedsFor(k)
+	if !fast || !slices.Contains(speeds, api.SpeedFast) {
+		return api.SpeedStandard
+	}
+	if ultrafast && slices.Contains(speeds, api.SpeedUltrafast) {
+		return api.SpeedUltrafast
+	}
+	return api.SpeedFast
+}
+
+func (a *app) speed() api.Speed { return a.speedFor(a.model, a.fast, a.ultrafast) }
+
+func (a *app) setSpeed(s api.Speed, at time.Time) {
+	a.fast = s != api.SpeedStandard
+	a.ultrafast = s == api.SpeedUltrafast
+	if a.fast {
+		a.fastAt = at
+	}
+}
+
+// speedButtons are the speed controls the model offers, beside the
+// effort in the picker: fast alone for Claude, fast and ultrafast for a
+// Codex model whose catalog offers both, neither where the provider
+// takes no speed tier.
+func (a *app) speedButtons(c *ui.Context) {
+	speeds := a.speedsFor(a.model)
+	if !slices.Contains(speeds, api.SpeedFast) {
+		return
+	}
+	ui.Row(c).Gap(2).Children(func() {
+		a.speedButton(c, api.SpeedFast)
+		if slices.Contains(speeds, api.SpeedUltrafast) {
+			a.speedButton(c, api.SpeedUltrafast)
+		}
+	})
+}
+
+// speedButton turns one speed on and off. The two are states of the same
+// choice: choosing one leaves the other, and choosing the one on leaves
+// ordinary speed.
+func (a *app) speedButton(c *ui.Context, speed api.Speed) {
+	label, key := "Fast mode", "fast"
+	if speed == api.SpeedUltrafast {
+		label, key = "Ultrafast mode", "ultrafast"
+	}
+	current := a.speed()
+	on := current == speed
+	if speed == api.SpeedFast {
+		// Ultrafast is a faster fast: its fast switch is on too, and
+		// turning that one off first steps down to fast.
+		on = current != api.SpeedStandard
+	}
+	state := "off"
+	if on {
+		state = "on"
+	}
+	b := a.tip(c, ghost(c, key, false).Padding(6).Role(ui.RoleSwitch).Checked(on).Label(label), label+": "+state)
+	shown := api.SpeedStandard
+	if on {
+		shown = speed
+	}
+	if b.Children(func() { a.zapIconMode(c, key+"-zap", 14, shown) }).Clicked() {
+		switch {
+		case speed == api.SpeedFast && current == api.SpeedUltrafast:
+			a.setSpeed(api.SpeedFast, c.Now())
+		case on:
+			a.setSpeed(api.SpeedStandard, c.Now())
+		default:
+			a.setSpeed(speed, c.Now())
 		}
 	}
 }
@@ -483,13 +572,13 @@ func modelTile(c *ui.Context, icon *ui.SVG, color ui.Color, size float32) {
 
 // pickerGlow is a soft glow around the model button, in the effort's
 // colors from High up: borders of a gradient, a
-// sharp one and blurred ones stacked. At Max it slowly turns. Fast mode's
+// sharp one and blurred ones stacked. At Max it slowly turns. A speed mode's
 // electricity takes its place. Without a GPU only the sharp one shows: a
 // blurred layer is drawn anew every frame, and the glass composer under it
 // with it.
 func (a *app) pickerGlow(c *ui.Context, b ui.Element, effort effortInfo) {
 	on := effort.glow
-	if a.fast {
+	if a.speed() != api.SpeedStandard {
 		on = 0
 	}
 	// The glow fades in and out as the settings change.
@@ -613,7 +702,7 @@ func (a *app) effortSlider(c *ui.Context) {
 			// The new level rises in as it changes.
 			ui.Text(c, es[level].label).Key(es[level].id).FontWeight(600).TextColor(es[level].color).Transition(riseIn).Margin(0, 0, 0, 8)
 			ui.Spacer(c)
-			a.fastButton(c)
+			a.speedButtons(c)
 		})
 		v := float64(level)
 		// One effort is a track with its one stop, at the start.
@@ -759,31 +848,59 @@ func drawEffortTrack(p *ui.Painter, r ui.Rect, pos float32, es []effortInfo, lev
 	return animating || float32(level) != pos
 }
 
-// zapIcon is the lightning of fast mode: an outline while it's off,
-// filled electric blue while it's on. As it comes on, lightning strikes out of
-// it: forking bolts that flicker a few times, new each flicker, the icon
-// flashing white.
+// zapIcon is the lightning of the speed mode: an outline while it's off,
+// filled electric blue for fast. Ultrafast is a forked pair in violet,
+// the second bolt its deeper cooling color. As either comes on, lightning
+// strikes out of it: forking bolts that flicker a few times, new each
+// flicker, the icon flashing white.
 func (a *app) zapIcon(c *ui.Context, key string, size float32) {
+	a.zapIconMode(c, key, size, a.speed())
+}
+
+// zapIconMode is zapIcon drawn as speed, whether or not that's the one
+// chosen now: a speed control that's off is the outline of its own.
+func (a *app) zapIconMode(c *ui.Context, key string, size float32, speed api.Speed) {
 	icon, col := icZap, palette.muted
-	if a.fast {
+	if speed != api.SpeedStandard {
 		icon, col = icZapFilled, electric
 	}
+	if speed == api.SpeedUltrafast {
+		col = ultraElectric
+	}
 	at := a.fastAt
-	striking := a.fast && !at.IsZero() && c.Now().Sub(at) < strikeTime
-	box := ui.Box(c).Key(key).Size(size, size).Children(func() {
-		z := ui.Icon(c, icon)
-		flash := z.Keyframes("flash", []ui.Keyframe{
-			{Value: 0},
-			{At: 30 * time.Millisecond, Value: 1, Ease: easeOut},
-			{At: strikeTime, Value: 0, Ease: easeOut},
-		}, ui.KeyframeOptions{Run: uint64(at.UnixNano())})
-		if !striking {
-			flash = 0
+	striking := speed != api.SpeedStandard && !at.IsZero() && c.Now().Sub(at) < strikeTime
+	width := size
+	if speed == api.SpeedUltrafast {
+		width += 3 // the pair's second bolt
+	}
+	box := ui.Box(c).Key(key).Size(width, size).Children(func() {
+		flashOf := func(z ui.Element) float32 {
+			flash := z.Keyframes("flash", []ui.Keyframe{
+				{Value: 0},
+				{At: 30 * time.Millisecond, Value: 1, Ease: easeOut},
+				{At: strikeTime, Value: 0, Ease: easeOut},
+			}, ui.KeyframeOptions{Run: uint64(at.UnixNano())})
+			if !striking {
+				return 0
+			}
+			return flash
 		}
-		z.FontSize(size).TextColor(col.Mix(boltCore, flash))
+		if speed == api.SpeedUltrafast {
+			back := ui.Icon(c, icon).Absolute().Left(-1).Top(0)
+			back.FontSize(size).TextColor(boltCool.Mix(boltCore, flashOf(back)))
+			front := ui.Icon(c, icon).Absolute().Right(-1).Top(0)
+			front.FontSize(size).TextColor(col.Mix(boltCore, flashOf(front)))
+			return
+		}
+		z := ui.Icon(c, icon)
+		z.FontSize(size).TextColor(col.Mix(boltCore, flashOf(z)))
 	})
 	if !striking {
 		return
+	}
+	glow := boltGlow
+	if speed == api.SpeedUltrafast {
+		glow = ultraElectric
 	}
 	box.DrawOver(func(p *ui.Painter, r ui.Rect) {
 		since := p.Now().Sub(at)
@@ -793,9 +910,13 @@ func (a *app) zapIcon(c *ui.Context, key string, size float32) {
 		k := float32(since) / float32(strikeTime)
 		lit := strobe(k)
 		cx, cy := r.X+r.W/2, r.Y+r.H/2
-		drawGlow(p, cx, cy, size*2.2, boltGlow, 0.7*lit)
+		drawGlow(p, cx, cy, size*2.2, glow, 0.7*lit)
 		flicker := int(since / (45 * time.Millisecond))
-		for i := range 4 {
+		bolts := 4
+		if speed == api.SpeedUltrafast {
+			bolts = 6
+		}
+		for i := range bolts {
 			angle := (float32(i)+0.6*hash(i, flicker, 9))*math.Pi/2 + 0.4
 			drawBolt(p, cx, cy, angle, size*(1.3+0.7*hash(i, flicker, 10)), 1.3, i*131+flicker*17, lit)
 		}
@@ -803,10 +924,11 @@ func (a *app) zapIcon(c *ui.Context, key string, size float32) {
 	})
 }
 
-// electricBorder runs a charged line around the model button while fast
-// mode is on, flashing brighter as the zap strikes it on. Where the
-// desktop asks for less motion, or the window draws without a GPU, the
-// line holds still.
+// electricBorder runs a charged line around the model button while a
+// speed mode is on, flashing brighter as the zap strikes it on. Fast's is
+// electric blue; ultrafast's is violet-white, brighter and faster. Where
+// the desktop asks for less motion, or the window draws without a GPU,
+// the line holds still.
 func (a *app) electricBorder(c *ui.Context) {
 	at := a.fastAt
 	reduce := c.Preferences().ReduceMotion
@@ -822,7 +944,14 @@ func (a *app) electricBorder(c *ui.Context) {
 		if !at.IsZero() && since < strikeTime {
 			k += 0.6 * strobe(float32(since)/float32(strikeTime))
 		}
-		drawElectricity(p, r, 7, since.Seconds(), still, k, dark)
+		ultra := a.speed() == api.SpeedUltrafast
+		seconds := since.Seconds()
+		if ultra {
+			// The ultrafast line is hotter and runs visibly faster.
+			seconds *= 1.7
+			k *= 1.15
+		}
+		drawElectricity(p, r, 7, seconds, still, k, dark, ultra)
 		if !still {
 			p.AnimationFrame()
 		}
