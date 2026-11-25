@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"maps"
 	"math/rand/v2"
@@ -18,6 +19,8 @@ import (
 
 	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
+
+	"github.com/egoist/mygo/ui"
 )
 
 // The hash picks below are written out, not computed by the code under test:
@@ -1444,5 +1447,314 @@ func TestMarksMadeUnreadableAtTheSameStatAreHeldOnce(t *testing.T) {
 	}
 	if n := strings.Count(logged.String(), "is not one this version writes"); n != 1 {
 		t.Errorf("logged %q", logged.String())
+	}
+}
+
+// Two servers' projects and this computer's: nine in all, eight or fewer
+// with either server alone.
+var (
+	hereProjects  = []string{"api", "site", "tools"}
+	firstServer   = []string{"db", "ops", "b", "docs", "sparky"}
+	secondServer  = []string{"bot"}
+	withFirst     = slices.Concat(hereProjects, firstServer)
+	withSecond    = slices.Concat(hereProjects, secondServer)
+	withBothNine  = slices.Concat(hereProjects, firstServer, secondServer)
+	serverByTurns = [][]string{withBothNine, withFirst, withSecond}
+)
+
+func TestMarksSettleInARoundAsServersGoOfflineAndComeBack(t *testing.T) {
+	// All nine, then one server offline, then the other, and so on.
+	var s []projectMark
+	for _, shown := range serverByTurns {
+		s, _ = settleMarks(s, shown)
+	}
+	for round := range 4 {
+		for _, shown := range serverByTurns {
+			next, changed := settleMarks(s, shown)
+			if changed {
+				t.Fatalf("round %d: %d shown changed %v to %v", round+2, len(shown), s, next)
+			}
+		}
+	}
+}
+
+func TestTwoWindowsShowingOverlappingProjectsWriteMarksTwice(t *testing.T) {
+	// marks.json was settled with all nine shown. Each window shows eight
+	// or fewer: neither may keep moving a mark the other moved back.
+	dir := t.TempDir()
+	ms, _ := settleMarks(nil, withBothNine)
+	b, _ := json.Marshal(ms)
+	if err := os.WriteFile(filepath.Join(dir, "marks.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	one, two := marksApp(dir), marksApp(dir)
+	n := writes(t, dir, func(step func()) {
+		for range 20 {
+			time.Sleep(2 * time.Millisecond)
+			showMarks(one, withFirst...)
+			step()
+			time.Sleep(2 * time.Millisecond)
+			showMarks(two, withSecond...)
+			step()
+		}
+	})
+	if n > 2 {
+		t.Errorf("marks.json written %d times over 40 rebuilds", n)
+	}
+}
+
+func TestFourProjectsSettleInARound(t *testing.T) {
+	// Each was seen alone before, on its hash mark: glitched32 and
+	// pstack-t332 share global.
+	stored := []projectMark{
+		{"glitched32", "global", "#8b5cf6"},
+		{"mygo29", "terminal", "#eab308"},
+		{"pstack-t332", "global", "#22c55e"},
+	}
+	settlesInARound(t, stored, []string{"pstack-t332", "openbot24"}, []string{"glitched32", "mygo29", "pstack-t332"})
+}
+
+func TestANewProjectPastEightKeepsOffPairsThoseNotShownHaveOnItsHashIcon(t *testing.T) {
+	// Seven not shown have every pair on phone, openbot's hash icon; nine
+	// shown, none on phone, leave pairs free elsewhere.
+	var stored []projectMark
+	absent := map[projectMark]bool{}
+	for c, color := range projectColors {
+		m := projectMark{fmt.Sprintf("gone%d", c), "phone", color}
+		stored = append(stored, m)
+		absent[projectMark{"", m.Icon, m.Color}] = true
+	}
+	var shown []string
+	for i := 0; len(shown) < 9; i++ {
+		if m := hashOf(fmt.Sprintf("s%d", i)); m.Icon != "phone" {
+			stored = append(stored, m)
+			shown = append(shown, m.Name)
+		}
+	}
+	shown = append(shown, "openbot")
+	out, _ := settleMarks(stored, shown)
+	m := markOf(t, out, "openbot")
+	if absent[projectMark{"", m.Icon, m.Color}] {
+		t.Errorf("openbot is %v, a pair one not shown has", m)
+	}
+	for _, n := range shown[:9] {
+		if o := markOf(t, out, n); o.Icon == m.Icon && o.Color == m.Color {
+			t.Errorf("openbot is %v, as %s is", m, n)
+		}
+	}
+	steady(t, out, shown)
+}
+
+func TestMarksThisVersionWouldWriteOtherwiseLeaveMarksJSONAsItIs(t *testing.T) {
+	for _, c := range []struct {
+		what, src string
+		drawn     []projectMark
+	}{
+		{"null", `null`, nil},
+		{"an icon that is null", `[{"name":"pstack-t3","icon":"code","color":"#0ea5e9"},{"name":"mygo","icon":null,"color":"#14b8a6"}]`,
+			[]projectMark{{"pstack-t3", "code", "#0ea5e9"}, {"mygo", "wind", "#14b8a6"}}},
+		{"no icon", `[{"name":"pstack-t3","icon":"code","color":"#0ea5e9"},{"name":"mygo","color":"#14b8a6"}]`,
+			[]projectMark{{"pstack-t3", "code", "#0ea5e9"}, {"mygo", "wind", "#14b8a6"}}},
+		{"a field this version doesn't know", `[{"name":"pstack-t3","icon":"code","color":"#0ea5e9","badge":"star"},{"name":"mygo","icon":"phone","color":"#14b8a6"}]`,
+			[]projectMark{{"pstack-t3", "code", "#0ea5e9"}, {"mygo", "phone", "#14b8a6"}}},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "marks.json"), []byte(c.src), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			log.SetOutput(io.Discard)
+			t.Cleanup(func() { log.SetOutput(os.Stderr) })
+			a := marksApp(dir, "pstack-t3", "mygo")
+			showMarks(a, "pstack-t3", "mygo", "glitched")
+			keptAsIs(t, dir, c.src)
+			by := marksDrawn(a)
+			for _, m := range c.drawn {
+				if by[m.Name] != m {
+					t.Errorf("%s draws %v; want %v", m.Name, by[m.Name], m)
+				}
+			}
+		})
+	}
+}
+
+func TestAMarkAnotherWindowReplacedAtTheSameSizeAndTimeIsDrawn(t *testing.T) {
+	dir := t.TempDir()
+	a := marksApp(dir, "glitched", "mygo", "pstack-t3")
+	path := filepath.Join(dir, "marks.json")
+	old, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, mtime := readMarks(t, dir)
+	// Another window writes a file of its own, as many bytes, and moves it
+	// over marks.json within the same tick.
+	src := bytes.Replace(old, []byte(`"#ec4899"`), []byte(`"#14b8a6"`), 1)
+	if bytes.Equal(src, old) {
+		t.Fatalf("glitched isn't #ec4899: %s", old)
+	}
+	tmp := filepath.Join(dir, "marks.json.other")
+	if err := os.WriteFile(tmp, src, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Chtimes(tmp, mtime, mtime)
+	if err := os.Rename(tmp, path); err != nil {
+		t.Fatal(err)
+	}
+	showMarks(a, "glitched", "mygo", "pstack-t3")
+	if got := marksDrawn(a)["glitched"]; got != (projectMark{"glitched", "wind", "#14b8a6"}) {
+		t.Errorf("glitched draws %v; another window wrote wind #14b8a6", got)
+	}
+}
+
+func TestMarksThatCouldntBeSavedAreSavedInTheOrderSeen(t *testing.T) {
+	dir := t.TempDir()
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	a := marksApp(dir, "mygo")
+	// marks.json's lock can't be taken for a while: pstack-t3, then
+	// glitched, both hashing to mygo's wind, are marked here alone.
+	lock := filepath.Join(dir, "marks.json.lock")
+	os.Remove(lock)
+	if err := os.Mkdir(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	showMarks(a, "mygo", "pstack-t3")
+	showMarks(a, "mygo", "pstack-t3", "glitched")
+	before := marksDrawn(a)
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	showMarks(a, "mygo", "pstack-t3", "glitched", "sparky")
+	after := marksDrawn(a)
+	for n, m := range before {
+		if after[n] != m {
+			t.Errorf("%s moved from %v to %v", n, m, after[n])
+		}
+	}
+	ms, _ := readMarks(t, dir)
+	var order []string
+	for _, m := range ms {
+		order = append(order, m.Name)
+	}
+	if want := []string{"mygo", "pstack-t3", "glitched", "sparky"}; !slices.Equal(order, want) {
+		t.Errorf("marks.json holds %v; want them in the order %v", ms, want)
+	}
+}
+
+func TestMarksMadeUnreadableWhileTheAppRunsAreWrittenAgainAsTheyWere(t *testing.T) {
+	dir := t.TempDir()
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	a := marksApp(dir, "mygo")
+	showMarks(a, "mygo", "pstack-t3")
+	showMarks(a, "mygo", "pstack-t3", "glitched")
+	before, held := marksDrawn(a), slices.Clone(a.marks)
+	if err := os.WriteFile(filepath.Join(dir, "marks.json"), []byte("\x00not json{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	showMarks(a, "mygo", "pstack-t3", "glitched")
+	if after := marksDrawn(a); !maps.Equal(after, before) {
+		t.Errorf("drawn %v; before %v", after, before)
+	}
+	if ms, _ := readMarks(t, dir); !slices.Equal(ms, held) {
+		t.Errorf("marks.json holds %v; want %v", ms, held)
+	}
+}
+
+func TestAProjectKeepsItsMarkWhenItsThreadsArriveAfterTheAddedProjects(t *testing.T) {
+	// glitched and mygo, added, hash to wind; openbot, whose thread the
+	// engine has, alone to phone. Before the upgrade each was drawn on its
+	// hash icon; openbot stays on phone though the added projects show
+	// first, while this machine's engine is still reached.
+	dir, _ := marksDir(t, "openbot")
+	rememberedState(t, dir, []string{"/work/glitched", "/work/mygo"}, "")
+	p := &posts{wake: make(chan struct{}, 1)}
+	a := testApp(t, dir, nil, p.post)
+	if err := a.backend.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.backend.Close() })
+	a.sortThreads()
+	tt := ui.NewTester(a.view, 1320, 860)
+	settlers.Store(tt, func() { settlePlugins(t, a, tt, p) })
+	t.Cleanup(func() { settlers.Delete(tt) })
+	h := &harness{t, a, tt, p}
+	got := h.listed("glitched", "mygo", "openbot")
+	if got["openbot"] != (projectMark{"openbot", "phone", "#22c55e"}) {
+		t.Errorf("openbot is %v; want its hash mark, phone #22c55e", got["openbot"])
+	}
+	if got["glitched"].Icon == got["mygo"].Icon || got["mygo"].Icon == "phone" {
+		t.Errorf("listed %v", got)
+	}
+}
+
+// otherWindowMarks has another window write marks.json, with name's mark
+// changed to m, as a later write than the last.
+func otherWindowMarks(t *testing.T, dir, name string, m projectMark) {
+	t.Helper()
+	ms, mtime := readMarks(t, dir)
+	i := slices.IndexFunc(ms, func(o projectMark) bool { return o.Name == name })
+	ms[i] = m
+	b, _ := json.Marshal(ms)
+	path := filepath.Join(dir, "marks.json")
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Chtimes(path, mtime.Add(time.Second), mtime.Add(time.Second))
+}
+
+// quickMarks is each of quick ask's projects' marks, by name.
+func quickMarks(a *app) map[string]projectMark {
+	by := map[string]projectMark{}
+	for _, p := range a.localProjects() {
+		icon, color := p.markNames()
+		by[p.name()] = projectMark{p.name(), icon, color}
+	}
+	return by
+}
+
+func TestQuickAskDrawsMarksAsTheyAreSettled(t *testing.T) {
+	dir, d := marksDir(t, "glitched", "mygo", "pstack-t3")
+	h := start(t, dir)
+	h.listed("glitched", "mygo", "pstack-t3")
+
+	// A new project's thread arrives with the window hidden: no frame runs.
+	seed(t, d, "/work/sparky", "A thread in sparky")
+	deadline := time.Now().Add(30 * time.Second)
+	for !slices.ContainsFunc(h.a.recent(), func(th thread) bool { return th.View.Title == "A thread in sparky" }) {
+		if time.Now().After(deadline) {
+			t.Fatal("sparky's thread never arrived")
+		}
+		h.p.run()
+		time.Sleep(5 * time.Millisecond)
+	}
+	quick := quickMarks(h.a)
+	h.tt.Frame()
+	got := h.listed("glitched", "mygo", "pstack-t3", "sparky")
+	for n, m := range got {
+		if quick[n] != m {
+			t.Errorf("quick ask draws %s as %v; listed %v", n, quick[n], m)
+		}
+	}
+
+	// Another window changes glitched's mark.
+	want := projectMark{"glitched", "wind", "#14b8a6"}
+	otherWindowMarks(t, dir, "glitched", want)
+	if got := quickMarks(h.a)["glitched"]; got != want {
+		t.Errorf("quick ask draws glitched as %v; another window wrote %v", got, want)
+	}
+}
+
+func TestProjectsListedByAnIdleWindowHaveTheMarksAnotherWrote(t *testing.T) {
+	dir, _ := marksDir(t, "glitched", "mygo", "pstack-t3")
+	h := start(t, dir)
+	h.listed("glitched", "mygo", "pstack-t3")
+	want := projectMark{"glitched", "wind", "#14b8a6"}
+	otherWindowMarks(t, dir, "glitched", want)
+	for _, r := range h.a.projectRecords() {
+		if r.Name == "glitched" && (projectMark{r.Name, r.Icon, r.Color}) != want {
+			t.Errorf("projects.list gives glitched %s %s; another window wrote %v", r.Icon, r.Color, want)
+		}
 	}
 }
