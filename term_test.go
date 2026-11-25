@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"strings"
@@ -9,6 +10,10 @@ import (
 
 	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
+
+	"glitched/internal/client"
+	"glitched/internal/daemon"
+	"glitched/internal/provider/fake"
 )
 
 // The drawer's terminal runs a real shell through libghostty-vt: typed
@@ -47,4 +52,40 @@ func TestProjectDir(t *testing.T) {
 	if d := projectDir("~/definitely/not/here"); d == "" || strings.Contains(d, "definitely") {
 		t.Errorf("missing project dir %q, want the home directory", d)
 	}
+}
+
+func TestRemoteThreadShowsTerminalDrawer(t *testing.T) {
+	rdir := tempDir(t)
+	token, err := daemon.Pair(rdir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := engine(t, daemon.Config{Dir: rdir, Listen: []string{"127.0.0.1:0"}}, fake.New(fake.Turn(false)))
+	seed(t, d, "/srv/api", "Remote terminal thread", "Hello remote")
+	addr := d.Addrs()[0].String()
+
+	h := start(t, tempDir(t))
+	var addErr error
+	added := false
+	h.a.backend.AddServer(client.Server{Label: "remotebox", Addr: addr, Token: token}, func(err error) {
+		addErr, added = err, true
+	})
+	h.until("remote server added", func() bool { return added })
+	if addErr != nil {
+		t.Fatalf("AddServer: %v", addErr)
+	}
+	h.until("remotebox online", func() bool {
+		return len(h.a.backend.Envs()) > 1 && h.a.backend.Envs()[1].Status == client.Status(client.Online{})
+	})
+
+	th := h.thread("Remote terminal thread")
+	h.tt.Advance(time.Second)
+	h.click(th.View.Title)
+	h.tt.Advance(time.Second)
+	h.a.showTerminal = true
+	h.tt.Frame()
+	if !h.tt.HasText("remotebox") || !h.tt.HasText("zsh") {
+		t.Fatalf("expected remote terminal drawer showing remotebox and zsh header, got %q", h.tt.Texts())
+	}
+	_ = context.Background()
 }

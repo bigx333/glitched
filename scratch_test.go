@@ -204,7 +204,7 @@ func TestADraftWithNoProjectShowsNoFolder(t *testing.T) {
 	}
 	h.a.showTerminal = true
 	h.tt.Advance(time.Second)
-	if _, ok := h.a.shells[d.View.Workspace]; ok {
+	if _, ok := h.a.shells[shellKey{d.env.ID, d.View.Workspace}]; ok {
 		t.Fatal("a shell opened in the scratch root")
 	}
 }

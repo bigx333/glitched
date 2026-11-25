@@ -96,11 +96,12 @@ type Manager struct {
 	restarting, again bool
 	// embedded is the engine embedded here, once it reported in.
 	embedded *daemon.Daemon
+	clientID string
 }
 
 func New(cfg Config) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{cfg: cfg, ctx: ctx, cancel: cancel}
+	return &Manager{cfg: cfg, ctx: ctx, cancel: cancel, clientID: api.NewID().String()}
 }
 
 // Start reaches the local engine and the servers gui.json in Dir lists.

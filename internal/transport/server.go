@@ -60,6 +60,8 @@ type Server struct {
 	// Replies says what a run said last, for a link following a thread it
 	// started here, or any client the server admits.
 	Replies Replies
+	// Terminals serves engine-owned workspace PTYs for any admitted client.
+	Terminals Terminals
 	// Authorize admits a socket whose client proved, in the handshake, that
 	// it holds one of the keys Authorize knows. proved reports whether the
 	// proof was made with a key; Authorize asks it of every key it knows,
@@ -198,6 +200,13 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 	if grant.Link != nil {
 		ctx = api.WithLink(ctx, *grant.Link)
 	}
+	tc := &termClients{}
+	ctx = context.WithValue(ctx, termClientsKey{}, tc)
+	defer func() {
+		if s.Terminals != nil {
+			tc.releaseAll(s.Terminals)
+		}
+	}()
 	k := s.keepalive
 	if k == (keepalive{}) {
 		k = defaultKeepalive
@@ -377,6 +386,53 @@ type Plugins interface {
 // its parent.
 type Replies interface {
 	ChildReply(ctx context.Context, q api.ChildReplyQuery) (api.ChildReply, error)
+}
+
+// Terminals serves engine-owned PTYs for admitted clients.
+type Terminals interface {
+	OpenTerminal(ctx context.Context, req api.TerminalOpen) (api.TerminalStream, error)
+	TerminalInput(ctx context.Context, req api.TerminalInput) error
+	TerminalResize(ctx context.Context, req api.TerminalResize) error
+	TerminalClaim(ctx context.Context, req api.TerminalClaim) (api.TerminalLease, error)
+	ReleaseTerminalClient(client string)
+}
+
+type termClientsKey struct{}
+
+type termClients struct {
+	mu  sync.Mutex
+	ids map[string]struct{}
+}
+
+func (tc *termClients) record(ctx context.Context, id string) {
+	if id == "" || tc == nil {
+		return
+	}
+	tc.mu.Lock()
+	if tc.ids == nil {
+		tc.ids = map[string]struct{}{}
+	}
+	tc.ids[id] = struct{}{}
+	tc.mu.Unlock()
+}
+
+func (tc *termClients) releaseAll(t Terminals) {
+	tc.mu.Lock()
+	ids := tc.ids
+	tc.ids = nil
+	tc.mu.Unlock()
+	for id := range ids {
+		t.ReleaseTerminalClient(id)
+	}
+}
+
+func recordTermClient(ctx context.Context, id string) {
+	if id == "" {
+		return
+	}
+	if tc, _ := ctx.Value(termClientsKey{}).(*termClients); tc != nil {
+		tc.record(ctx, id)
+	}
 }
 
 // Asks are what glitched mcp asks of the engine for request_credentials.
@@ -717,6 +773,24 @@ func (s *Server) methods() map[string]handler {
 	}
 	if r := s.Replies; r != nil {
 		m["child.reply"] = callHandler(r.ChildReply)
+	}
+	if tm := s.Terminals; tm != nil {
+		m["terminal.open"] = streamHandler(func(ctx context.Context, req api.TerminalOpen) (source[api.TerminalItem], error) {
+			recordTermClient(ctx, req.Client)
+			return tm.OpenTerminal(ctx, req)
+		})
+		m["terminal.input"] = callHandler(func(ctx context.Context, req api.TerminalInput) (struct{}, error) {
+			recordTermClient(ctx, req.Client)
+			return struct{}{}, tm.TerminalInput(ctx, req)
+		})
+		m["terminal.resize"] = callHandler(func(ctx context.Context, req api.TerminalResize) (struct{}, error) {
+			recordTermClient(ctx, req.Client)
+			return struct{}{}, tm.TerminalResize(ctx, req)
+		})
+		m["terminal.claim"] = callHandler(func(ctx context.Context, req api.TerminalClaim) (api.TerminalLease, error) {
+			recordTermClient(ctx, req.Client)
+			return tm.TerminalClaim(ctx, req)
+		})
 	}
 	if h := s.Hub; h != nil {
 		m["hub.append"] = callHandler(h.Append)
