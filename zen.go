@@ -125,6 +125,10 @@ func (a *app) viewOf(id api.ID, es []entry) timelineView {
 // the same.
 type timelineMemo struct {
 	listed timelineView
+	// top is the place at the top of what it listed, noted before the
+	// rows change, as noted says.
+	top    place
+	noted  bool
 	open   map[string]bool
 	opened uint64
 	zen    timelineView
@@ -176,6 +180,41 @@ func (a *app) viewFor(id api.ID, rs rows) timelineView {
 	return m.zen
 }
 
+// A place is where a listed view showed at its top: the item there, by
+// index and key, and the row it shows, or its fold's first, by index and
+// key; ok is whether it showed one.
+type place struct {
+	ok    bool
+	first int
+	key   any
+	at    int
+	row   string
+}
+
+// top is the place at the top of l, which listed v.
+func (v timelineView) top(l *ui.ListState) place {
+	first, last := l.Visible()
+	if first > last || first >= v.len() {
+		return place{}
+	}
+	i := v.anchor(first)
+	return place{ok: true, first: first, key: v.key(first), at: i, row: v.es[i].key}
+}
+
+// notePlace notes the place at the top of the thread's timeline as its
+// rows are about to change: the rows the timeline listed share their array
+// with those derived again, which write over them.
+func (a *app) notePlace(id api.ID) {
+	m := a.listed[id]
+	if m == nil || m.noted {
+		return
+	}
+	m.top, m.noted = place{}, true
+	if l := a.lists[id]; l != nil {
+		m.top = m.listed.top(l)
+	}
+}
+
 // listReach is how far from where it was MyGo's list looks for the key of
 // the item at its top as its items change (its listSearch).
 const listReach = 1000
@@ -189,27 +228,24 @@ const listReach = 1000
 // At the end, the list follows the end.
 func (a *app) keepPlace(id api.ID, l *ui.ListState, v timelineView) {
 	m := a.memoOf(id)
-	was := m.listed
-	m.listed = v
-	if sameItems(was, v) || l.AtEnd() {
+	was, top := m.listed, m.top
+	if !m.noted {
+		top = was.top(l)
+	}
+	m.listed, m.top, m.noted = v, place{}, false
+	if sameItems(was, v) || l.AtEnd() || !top.ok {
 		return
 	}
-	first, last := l.Visible()
-	if first > last || first >= was.len() {
-		return
-	}
-	key, row := was.key(first), was.anchor(first)
-	i := row
-	if i >= len(v.es) || v.es[i].key != was.es[row].key {
-		k := was.es[row].key
-		if i = slices.IndexFunc(v.es, func(e entry) bool { return e.key == k }); i < 0 {
+	i := top.at
+	if i >= len(v.es) || v.es[i].key != top.row {
+		if i = slices.IndexFunc(v.es, func(e entry) bool { return e.key == top.row }); i < 0 {
 			return
 		}
 	}
 	// An open fold's line is just above its first row.
 	j := v.pos(i)
 	for _, k := range []int{j, j - 1} {
-		if k >= 0 && v.key(k) == key && max(k-first, first-k) <= listReach {
+		if k >= 0 && v.key(k) == top.key && max(k-top.first, top.first-k) <= listReach {
 			return
 		}
 	}
@@ -314,7 +350,7 @@ func zenViewKeeping(es []entry, open map[string]bool, kept []zenTurn, stable int
 // addTurn lists a turn's rows, or those before the first message, each
 // fold's line over its first.
 func (v *timelineView) addTurn(t zenTurn, open map[string]bool) {
-	// Till listed, at holds the fold of each row, 1 on.
+	// Until a row is listed, at holds its fold's index plus one.
 	for k, f := range t.folds {
 		for _, i := range f.rows {
 			v.at[i] = k + 1
@@ -371,8 +407,7 @@ func turnFolds(es []entry, start, end int) []*zenFold {
 	for _, r := range runs {
 		// The run's last reply shows if it's being written or asks, unless
 		// the run has its final reply, which shows.
-		last, final := -1, false
-		n := 0
+		last, n, final := -1, 0, false
 		for i := start; i < end; i++ {
 			if e := es[i]; e.run == r && foldable(e.kind) {
 				last, n = i, n+1

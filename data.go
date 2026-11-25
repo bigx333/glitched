@@ -401,11 +401,13 @@ func (a *app) rowsOf(t thread) rows {
 		a.rows[t.id()] = c
 	}
 	if c.live == nil || c.tr != t.Transcript || c.posts != a.posts {
+		a.notePlace(t.id())
 		c.derive(t.Transcript)
 		c.posts, c.joined = a.posts, false
 	}
 	tail := pendingEntries(t.Pending, c.live.isListed)
 	if !c.joined || !sameRows(tail, c.tail) {
+		a.notePlace(t.id())
 		c.tail, c.joined = tail, true
 		c.es = append(c.head, tail...)
 		rowsChanges++
