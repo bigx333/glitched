@@ -3,6 +3,7 @@ package store_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -1785,64 +1786,176 @@ func TestMaintainPrunesDoneEffectsOldCommandsAndCheckpointsWAL(t *testing.T) {
 	}
 }
 
-// Commands that write no event share one seq. Maintain keeps exactly the
-// receipts of the highest command IDs, and a command whose receipt it
-// dropped is refused as expired, not applied a second time.
-func TestMaintainKeepsTheNewestReceiptsAndRefusesAForgottenOne(t *testing.T) {
+// seedReceipts writes n receipts, under the IDs id gives, straight into the
+// commands table: the receipts a long-lived engine holds.
+func seedReceipts(t *testing.T, path string, n int, id func(i int) api.ID) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	for i := range n {
+		c := id(i)
+		if _, err := tx.Exec(`INSERT INTO commands (id, hash, seq, revision) VALUES (?, zeroblob(32), 1, NULL)`, c[:]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// hashID is an ID as MCP delegation and linked machines derive one: a hash,
+// whose order says nothing about when it was made.
+func hashID(i int) api.ID {
+	sum := sha256.Sum256(fmt.Appendf(nil, "parent/delegate/child/%d", i))
+	return api.ID(sum[:16])
+}
+
+// renamed is how far thread's log reached after a rename to title under id.
+func renamed(t *testing.T, s *store.Store, thread, id api.ID, title string) {
+	t.Helper()
 	ctx := context.Background()
-	s := open(t, filepath.Join(t.TempDir(), "host.db"))
-	// IDs made in one millisecond order at random: a millisecond each
-	// orders them as made.
-	at := time.Now()
-	next := func() api.ID {
-		at = at.Add(time.Millisecond)
-		id, err := api.IDAt(at, [10]byte{})
+	_, before, err := s.Since(ctx, thread, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Submit(ctx, api.Command{ID: id, Target: thread, Body: api.ThreadRename{Title: title}}, time.Now()); err != nil {
+		t.Fatalf("rename to %q: %v", title, err)
+	}
+	if _, after, err := s.Since(ctx, thread, 0, 1000); err != nil || after <= before {
+		t.Fatalf("rename to %q wrote no event: head %d, was %d (%v)", title, after, before, err)
+	}
+}
+
+// Receipts under hash-derived IDs outnumber what any retention would keep:
+// after Maintain, a GUI's fresh command and a fresh hash-derived one both
+// run, and every receipt still answers its retry.
+func TestMaintainLetsAFreshCommandRunAmongHashOrderedReceipts(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	const seeded = 10200
+	seedReceipts(t, path, seeded, hashID)
+	if _, err := s.Maintain(ctx, store.MaintainOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	renamed(t, s, thread, api.NewID(), "from the GUI")
+	renamed(t, s, thread, api.ID{}, "a hash below every other")
+	for _, i := range []int{0, seeded / 2, seeded - 1} {
+		if done, err := s.Committed(ctx, hashID(i)); err != nil || !done {
+			t.Errorf("receipt %d after Maintain: Committed = %v, %v; want true", i, done, err)
+		}
+	}
+}
+
+// A command minted long before it reaches the engine, as a sleeping GUI's
+// or a plugin's with an older At, runs the first time it arrives.
+func TestMaintainLetsALateFirstSubmissionRun(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	seedReceipts(t, path, 10200, func(i int) api.ID {
+		id, err := api.IDAt(now.Add(time.Duration(i)*time.Millisecond), [10]byte{byte(i), byte(i >> 8)})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return id
+	})
+	if _, err := s.Maintain(ctx, store.MaintainOptions{}); err != nil {
+		t.Fatal(err)
 	}
+	late, err := api.IDAt(now.Add(-time.Hour), [10]byte{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed(t, s, thread, late, "minted an hour ago")
+}
+
+// A retried command gets its receipt back after Maintain and is not
+// applied again.
+func TestMaintainKeepsARecentCommandsReceipt(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
 	thread := api.NewID()
-	if _, err := s.Submit(ctx, api.Command{ID: next(), Target: thread, Body: api.ThreadCreate{Workspace: "w", Title: "t", Model: api.ModelRef{Provider: "fake"}}}, time.Now()); err != nil {
+	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	first := api.Command{ID: next(), Target: thread, Body: api.MessageDispatch{Text: "first", Mode: api.AfterActive}}
-	if _, err := s.Submit(ctx, first, time.Now()); err != nil {
+	seedReceipts(t, path, 10200, hashID)
+	msg := api.Command{ID: api.NewID(), Target: thread, Body: api.MessageDispatch{Text: "once", Mode: api.AfterActive}}
+	first, err := s.Submit(ctx, msg, time.Now())
+	if err != nil {
 		t.Fatal(err)
-	}
-	var renames []api.Command
-	for range 3 {
-		c := api.Command{ID: next(), Target: thread, Body: api.ThreadRename{Title: "t"}}
-		if _, err := s.Submit(ctx, c, time.Now()); err != nil {
-			t.Fatal(err)
-		}
-		renames = append(renames, c)
 	}
 	_, before, err := s.Since(ctx, thread, 0, 1000)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if _, err := s.Maintain(ctx, store.MaintainOptions{KeepCommands: 2}); err != nil {
+	if _, err := s.Maintain(ctx, store.MaintainOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	for i, c := range renames {
-		done, err := s.Committed(ctx, c.ID)
-		if want := i > 0; done != want || want && err != nil {
-			t.Errorf("rename %d: Committed = %v, %v; want %v", i, done, err, want)
-		}
-	}
-	if _, err := s.Submit(ctx, first, time.Now()); !errors.Is(err, api.ErrExpired) {
-		t.Fatalf("a message whose receipt was pruned, sent again: %v, want api.ErrExpired", err)
-	}
-	if _, err := s.Committed(ctx, first.ID); !errors.Is(err, api.ErrExpired) {
-		t.Fatalf("Committed of a pruned receipt: %v, want api.ErrExpired", err)
+	again, err := s.Submit(ctx, msg, time.Now())
+	if err != nil || !reflect.DeepEqual(again, first) {
+		t.Fatalf("the retry after Maintain: %+v, %v; want %+v", again, err, first)
 	}
 	if _, after, err := s.Since(ctx, thread, 0, 1000); err != nil || after != before {
-		t.Fatalf("the refused message wrote events: head %d, want %d (%v)", after, before, err)
+		t.Fatalf("the retry wrote events: head %d, want %d (%v)", after, before, err)
 	}
-	if _, err := s.Submit(ctx, api.Command{ID: next(), Target: thread, Body: api.TurnInterrupt{}}, time.Now()); err != nil {
-		t.Fatalf("a new command after pruning: %v", err)
+	if done, err := s.Committed(ctx, msg.ID); err != nil || !done {
+		t.Fatalf("Committed after Maintain = %v, %v; want true", done, err)
+	}
+}
+
+// A database an earlier build of this change left at version 18, with an
+// index on commands.seq and a pruned-receipt watermark, loses both, and a
+// command the watermark covered runs.
+func TestAVersion18DatabaseLosesTheReceiptPruningLeftovers(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	downgrade(t, path, `
+		CREATE INDEX commands_by_seq ON commands (seq);
+		INSERT INTO meta (key, value) VALUES ('commands_pruned', x'ffffffffffffffffffffffffffffffff');
+	`, 18)
+
+	s = open(t, path)
+	renamed(t, s, thread, api.NewID(), "after the upgrade")
+	s.Close()
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version, index, mark int
+	if err := db.QueryRow(`SELECT (SELECT user_version FROM pragma_user_version),
+		(SELECT COUNT(*) FROM sqlite_master WHERE name = 'commands_by_seq'),
+		(SELECT COUNT(*) FROM meta WHERE key = 'commands_pruned')`).Scan(&version, &index, &mark); err != nil {
+		t.Fatal(err)
+	}
+	if version != 19 || index != 0 || mark != 0 {
+		t.Fatalf("after the upgrade: user_version %d, commands_by_seq %d, watermark %d; want 19, 0, 0", version, index, mark)
 	}
 }
 
