@@ -453,23 +453,30 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 		return false, err
 	}
 	defer st.Close()
-	// held is whether the child there holds what waits on it after a
-	// stop, as that machine's own view says: what holds there is that
-	// machine's to decide, from more than the events this engine reads.
-	held := func() (bool, error) {
+	// since reads the child there as its machine's own view has it at
+	// once, with its events after cursor, which this engine hasn't read:
+	// whether it holds what waits on it after a stop is that machine's to
+	// decide, from more than those events, and true only of the view of
+	// the same commit as the events read.
+	since := func(cursor api.Cursor) (events []api.Event, held bool, err error) {
 		rctx, cancel := context.WithTimeout(ctx, callTimeout)
 		defer cancel()
-		snap, err := m.Read(rctx, api.Query{Thread: r.Thread})
+		snap, err := m.Read(rctx, api.Query{Thread: r.Thread, After: cursor})
 		if err != nil {
-			return false, err
+			return nil, false, err
 		}
-		return len(snap.Threads) == 1 && snap.Threads[0].Resumable, nil
+		for _, e := range snap.Events {
+			if e.Cursor.Log == cursor.Log && e.Cursor.Seq > cursor.Seq {
+				events = append(events, e)
+			}
+		}
+		return events, len(snap.Threads) == 1 && snap.Threads[0].Resumable, nil
 	}
 	// A child followed before this engine kept what holds there learns
-	// it now, whether or not the machine has anything new.
-	if held, err := held(); err != nil {
-		return false, err
-	} else if held != r.Held {
+	// it now, whether or not the machine has anything new; one that has
+	// learns it with what's new, and one whose machine didn't answer
+	// learns it then.
+	if events, held, err := since(r.Cursor); err == nil && len(events) == 0 && held != r.Held {
 		o := engine.RemoteSeen{Cursor: r.Cursor, Run: r.Run, Silent: r.Silent, Slot: r.Slot, Pending: r.Pending, Taken: r.Taken, Ended: r.Ended, Model: r.Model, Access: r.Access, Turn: r.Turn, Held: held, On: label}
 		if _, err := h.store.Observe(ctx, t.ID, o, h.clock(), 0); errors.Is(err, engine.ErrRefused) {
 			return false, errObsolete
@@ -511,6 +518,8 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			case it.Kind == api.StreamSnapshot && it.Snapshot != nil:
 				events, fresh, snapshot = it.Snapshot.Events, true, true
 				next.Cursor = it.Snapshot.Cursor
+			case it.Kind == api.StreamEvent && it.Event != nil && it.Event.Cursor.Log == next.Cursor.Log && it.Event.Cursor.Seq <= next.Cursor.Seq:
+				continue
 			case it.Kind == api.StreamEvent && it.Event != nil:
 				events = []api.Event{*it.Event}
 				next.Cursor = it.Event.Cursor
@@ -522,6 +531,32 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			if next, got, gone, err = engine.Follow(next, events, fresh); err != nil {
 				return progressed, fmt.Errorf("%w: %w", errDefect, err)
 			}
+			for _, p := range got {
+				if !slices.ContainsFunc(reports, func(q engine.RemoteReport) bool { return q.Key == p.Key }) {
+					reports = append(reports, p)
+				}
+			}
+			if gone {
+				later = api.ErrNotFound
+			}
+		}
+		// What the machine committed since the stream's last item is folded
+		// now, with the view it holds at once; the stream's copies of those
+		// events, later, are skipped. A machine that didn't answer leaves
+		// the child not held until it does, and the follower reconnects
+		// once what it read is committed.
+		events, held, err := since(next.Cursor)
+		if err != nil && later == nil {
+			later = err
+		}
+		next.Held = held
+		if err == nil && len(events) > 0 {
+			var got []engine.RemoteReport
+			var gone bool
+			if next, got, gone, err = engine.Follow(next, events, false); err != nil {
+				return progressed, fmt.Errorf("%w: %w", errDefect, err)
+			}
+			next.Held, next.Cursor = held, events[len(events)-1].Cursor
 			for _, p := range got {
 				if !slices.ContainsFunc(reports, func(q engine.RemoteReport) bool { return q.Key == p.Key }) {
 					reports = append(reports, p)
@@ -545,9 +580,6 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 				return progressed, err
 			}
 			reports[i].Reply = reply.Text
-		}
-		if next.Held, err = held(); err != nil {
-			return progressed, err
 		}
 		if snapshot || next.Held != r.Held || next.Run != r.Run || next.Silent != r.Silent || next.Slot != r.Slot || !slices.Equal(next.Pending, r.Pending) || next.Taken != r.Taken || next.Ended != r.Ended || next.Model != r.Model || next.Access != r.Access || next.Turn != r.Turn || len(reports) > 0 {
 			_, listed, err := h.dial(at)
