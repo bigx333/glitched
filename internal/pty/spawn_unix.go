@@ -4,6 +4,7 @@ package pty
 
 import (
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,25 +15,22 @@ import (
 	"time"
 
 	creackpty "github.com/creack/pty"
+	"golang.org/x/sys/unix"
 )
-
-type proc interface {
-	Read(p []byte) (int, error)
-	Write(p []byte) (int, error)
-	Resize(cols, rows int) error
-	Wait() (int, error)
-	Close() error
-}
 
 type unixProc struct {
 	ptmx *os.File
 	cmd  *exec.Cmd
 
+	code    int
+	waitCh  chan struct{} // closed once the shell exited and code is set
+	readEOF chan struct{} // closed once Read reached the end of the output
+
+	eofOnce   sync.Once
+	closeOnce sync.Once // closes ptmx
+
 	mu     sync.Mutex
 	closed bool
-	waited bool
-	code   int
-	waitCh chan struct{}
 }
 
 func startProc(dir string, command []string, cols, rows int) (proc, error) {
@@ -40,44 +38,111 @@ func startProc(dir string, command []string, cols, rows int) (proc, error) {
 	if err != nil {
 		return nil, err
 	}
+	master, tty, err := creackpty.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer tty.Close() // the shell has its own copies
+	ptmx, err := pollable(master)
+	if err != nil {
+		return nil, err
+	}
+	if err := setSize(ptmx, cols, rows); err != nil {
+		ptmx.Close()
+		return nil, err
+	}
 	cmd := exec.Command(bin, args[1:]...)
 	cmd.Args = args
 	cmd.Dir = spawnDir(dir)
 	cmd.Env = shellEnv()
-	ptmx, err := creackpty.StartWithSize(cmd, &creackpty.Winsize{
-		Cols: uint16(max(cols, 1)),
-		Rows: uint16(max(rows, 1)),
-	})
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+	if err := cmd.Start(); err != nil {
+		ptmx.Close()
+		return nil, err
+	}
+	p := &unixProc{
+		ptmx:    ptmx,
+		cmd:     cmd,
+		waitCh:  make(chan struct{}),
+		readEOF: make(chan struct{}),
+	}
+	go p.wait()
+	return p, nil
+}
+
+// pollable returns a non-blocking copy of f that the runtime's poller
+// waits on, and closes f. creack/pty calls f.Fd, which leaves f blocking
+// for good: a Read then holds a thread until output comes, and Close
+// waits for that Read.
+func pollable(f *os.File) (*os.File, error) {
+	defer f.Close()
+	syscall.ForkLock.RLock()
+	fd, err := syscall.Dup(int(f.Fd()))
+	if err == nil {
+		syscall.CloseOnExec(fd)
+	}
+	syscall.ForkLock.RUnlock()
 	if err != nil {
 		return nil, err
 	}
-	up := &unixProc{
-		ptmx:   ptmx,
-		cmd:    cmd,
-		waitCh: make(chan struct{}),
+	if err := syscall.SetNonblock(fd, true); err != nil {
+		syscall.Close(fd)
+		return nil, err
 	}
-	go func() {
-		err := cmd.Wait()
-		code := 0
-		if err != nil {
-			var ee *exec.ExitError
-			if errors.As(err, &ee) {
-				code = ee.ExitCode()
-			} else {
-				code = -1
-			}
-		}
-		up.mu.Lock()
-		up.waited = true
-		up.code = code
-		up.mu.Unlock()
-		close(up.waitCh)
-	}()
-	return up, nil
+	return os.NewFile(uintptr(fd), f.Name()), nil
+}
+
+func (p *unixProc) wait() {
+	err := p.cmd.Wait()
+	if ee, ok := errors.AsType[*exec.ExitError](err); ok {
+		p.code = ee.ExitCode()
+	} else if err != nil {
+		p.code = -1
+	}
+	close(p.waitCh)
+	select {
+	case <-p.readEOF:
+	case <-time.After(drainTime):
+	}
+	p.closeMaster()
+}
+
+func (p *unixProc) closeMaster() {
+	p.closeOnce.Do(func() { p.ptmx.Close() })
 }
 
 func (p *unixProc) Read(b []byte) (int, error) {
-	return p.ptmx.Read(b)
+	for {
+		n, err := p.ptmx.Read(b)
+		if n > 0 || err == nil {
+			return n, nil
+		}
+		// A master the poller could not take says it has no output yet.
+		if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EINTR) {
+			if err = p.waitReadable(); err == nil {
+				continue
+			}
+		}
+		p.eofOnce.Do(func() { close(p.readEOF) })
+		// EIO: no process has the terminal open any more.
+		if errors.Is(err, syscall.EIO) || errors.Is(err, os.ErrClosed) || errors.Is(err, io.EOF) {
+			return 0, io.EOF
+		}
+		return 0, err
+	}
+}
+
+// waitReadable waits up to 100ms for output on a master the poller could
+// not take.
+func (p *unixProc) waitReadable() error {
+	return control(p.ptmx, func(fd int) error {
+		_, err := unix.Poll([]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}, 100)
+		if errors.Is(err, unix.EINTR) {
+			return nil
+		}
+		return err
+	})
 }
 
 func (p *unixProc) Write(b []byte) (int, error) {
@@ -85,44 +150,72 @@ func (p *unixProc) Write(b []byte) (int, error) {
 }
 
 func (p *unixProc) Resize(cols, rows int) error {
-	return creackpty.Setsize(p.ptmx, &creackpty.Winsize{
-		Cols: uint16(max(cols, 1)),
-		Rows: uint16(max(rows, 1)),
-	})
+	return setSize(p.ptmx, cols, rows)
 }
 
 func (p *unixProc) Wait() (int, error) {
 	<-p.waitCh
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	return p.code, nil
 }
 
+// Close hangs up the terminal and ends the shell's process group and the
+// one in its foreground, killing them if they outlast killTime.
 func (p *unixProc) Close() error {
 	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
+	again := p.closed
+	p.closed = true
+	p.mu.Unlock()
+	select {
+	case <-p.waitCh:
+		p.closeMaster()
+		return nil
+	default:
+	}
+	if again {
 		<-p.waitCh
 		return nil
 	}
-	p.closed = true
-	pid := 0
-	if p.cmd.Process != nil {
-		pid = p.cmd.Process.Pid
+	pid := p.cmd.Process.Pid
+	fg := 0
+	_ = control(p.ptmx, func(fd int) (err error) {
+		fg, err = unix.IoctlGetInt(fd, unix.TIOCGPGRP)
+		return err
+	})
+	p.closeMaster()
+	if fg > 0 && fg != pid {
+		_ = syscall.Kill(-fg, syscall.SIGTERM)
 	}
-	p.mu.Unlock()
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	select {
+	case <-p.waitCh:
+	case <-time.After(killTime):
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		<-p.waitCh
+	}
+	return nil
+}
 
-	err := p.ptmx.Close()
-	if pid > 0 {
-		_ = syscall.Kill(-pid, syscall.SIGTERM)
-		select {
-		case <-p.waitCh:
-		case <-time.After(300 * time.Millisecond):
-			_ = syscall.Kill(-pid, syscall.SIGKILL)
-			<-p.waitCh
-		}
+// control runs fn on f's descriptor without f.Fd, which would make f
+// blocking.
+func control(f *os.File, fn func(fd int) error) error {
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return err
 	}
-	return err
+	var ferr error
+	if err := rc.Control(func(fd uintptr) { ferr = fn(int(fd)) }); err != nil {
+		return err
+	}
+	return ferr
+}
+
+func setSize(f *os.File, cols, rows int) error {
+	return control(f, func(fd int) error {
+		return unix.IoctlSetWinsize(fd, unix.TIOCSWINSZ, &unix.Winsize{
+			Col: uint16(max(cols, 1)),
+			Row: uint16(max(rows, 1)),
+		})
+	})
 }
 
 func resolveCommand(cmd []string) (string, []string, error) {
@@ -143,19 +236,6 @@ func resolveCommand(cmd []string) (string, []string, error) {
 		}
 	}
 	return sh, []string{"-" + filepath.Base(sh)}, nil
-}
-
-func spawnDir(dir string) string {
-	dir = normalizeWorkspace(dir)
-	if dir != "" {
-		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
-			return dir
-		}
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return home
-	}
-	return "/"
 }
 
 func shellEnv() []string {

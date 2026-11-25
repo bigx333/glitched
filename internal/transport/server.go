@@ -78,6 +78,11 @@ type Server struct {
 	authBurst      int           // auth failures from a peer before backoff; zero means defaultAuthBurst
 	authBackoff    time.Duration // initial backoff after authBurst failures; zero means defaultAuthBackoff
 	maxAuthBackoff time.Duration // max backoff per peer; zero means defaultMaxAuthBackoff
+
+	// termRefs counts the open sockets that used each terminal client ID:
+	// a client's leases outlast a socket while another of its sockets lives.
+	termMu   sync.Mutex
+	termRefs map[string]int
 }
 
 // A Grant is what Authorize admitted a socket with.
@@ -233,13 +238,9 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 	if grant.Link != nil {
 		ctx = api.WithLink(ctx, *grant.Link)
 	}
-	tc := &termClients{}
+	tc := &termClients{srv: s}
 	ctx = context.WithValue(ctx, termClientsKey{}, tc)
-	defer func() {
-		if s.Terminals != nil {
-			tc.releaseAll(s.Terminals)
-		}
-	}()
+	defer tc.releaseAll()
 	k := s.keepalive
 	if k == (keepalive{}) {
 		k = defaultKeepalive
@@ -432,30 +433,50 @@ type Terminals interface {
 
 type termClientsKey struct{}
 
+// termClients are the terminal client IDs one socket used.
 type termClients struct {
+	srv *Server
 	mu  sync.Mutex
 	ids map[string]struct{}
 }
 
-func (tc *termClients) record(ctx context.Context, id string) {
-	if id == "" || tc == nil {
+func (tc *termClients) record(id string) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if _, ok := tc.ids[id]; ok {
 		return
 	}
-	tc.mu.Lock()
 	if tc.ids == nil {
 		tc.ids = map[string]struct{}{}
 	}
 	tc.ids[id] = struct{}{}
-	tc.mu.Unlock()
+	s := tc.srv
+	s.termMu.Lock()
+	if s.termRefs == nil {
+		s.termRefs = map[string]int{}
+	}
+	s.termRefs[id]++
+	s.termMu.Unlock()
 }
 
-func (tc *termClients) releaseAll(t Terminals) {
+// releaseAll releases the leases of the client IDs no other open socket
+// uses, once the socket closed.
+func (tc *termClients) releaseAll() {
 	tc.mu.Lock()
 	ids := tc.ids
 	tc.ids = nil
 	tc.mu.Unlock()
+	s := tc.srv
+	s.termMu.Lock()
+	defer s.termMu.Unlock()
 	for id := range ids {
-		t.ReleaseTerminalClient(id)
+		if s.termRefs[id]--; s.termRefs[id] > 0 {
+			continue
+		}
+		delete(s.termRefs, id)
+		if s.Terminals != nil {
+			s.Terminals.ReleaseTerminalClient(id)
+		}
 	}
 }
 
@@ -464,7 +485,7 @@ func recordTermClient(ctx context.Context, id string) {
 		return
 	}
 	if tc, _ := ctx.Value(termClientsKey{}).(*termClients); tc != nil {
-		tc.record(ctx, id)
+		tc.record(id)
 	}
 }
 

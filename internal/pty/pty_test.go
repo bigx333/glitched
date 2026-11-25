@@ -178,7 +178,7 @@ func TestFlowControlPauseAndResume(t *testing.T) {
 		end := sess.ring.write(chunk)
 		start := end - uint64(len(chunk))
 		if !sub.paused {
-			sub.enqueueBytesLocked(chunk, start, false, false, sess.cols, sess.rows, sess.leaseClient)
+			sub.enqueueBytesLocked(chunk, start, false, false)
 			sub.signalLocked()
 		}
 		sess.mu.Unlock()

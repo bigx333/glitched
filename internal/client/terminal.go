@@ -44,6 +44,8 @@ type TerminalConn struct {
 	offset      uint64
 	cols        int
 	rows        int
+	ptyCols     int // the PTY's size the engine last reported; 0 before
+	ptyRows     int
 	leaseHolder string
 	heldByOther bool
 	exited      bool
@@ -244,23 +246,25 @@ func (tc *TerminalConn) Read(p []byte) (int, error) {
 		if err != nil {
 			_ = st.Close()
 			tc.mu.Lock()
-			if tc.stream == st {
+			current := tc.stream == st
+			if current {
 				tc.stream = nil
+				tc.target = termTarget{}
 			}
-			done := tc.exited || tc.closed || errors.Is(err, io.EOF)
+			done := tc.exited || tc.closed
 			tc.mu.Unlock()
-			if done {
+			switch {
+			case done:
 				return 0, io.EOF
-			}
-			if errors.Is(err, transport.ErrUnknownMethod) || errors.Is(err, api.ErrNotAllowed) {
+			case !current: // Write reconnected meanwhile
+				continue
+			case errors.Is(err, io.EOF):
+				return 0, io.EOF
+			case errors.Is(err, transport.ErrUnknownMethod) || errors.Is(err, api.ErrNotAllowed):
 				return 0, err
-			}
-			if tc.ctx.Err() != nil {
+			case tc.ctx.Err() != nil:
 				return 0, io.EOF
 			}
-			tc.mu.Lock()
-			tc.target = termTarget{}
-			tc.mu.Unlock()
 			select {
 			case <-time.After(backoff):
 				backoff = min(backoff*2, 2*time.Second)
@@ -272,11 +276,16 @@ func (tc *TerminalConn) Read(p []byte) (int, error) {
 		backoff = 250 * time.Millisecond
 
 		tc.mu.Lock()
-		if !item.Session.IsZero() {
+		fresh := !item.Session.IsZero() && item.Session != tc.session
+		if fresh {
 			tc.session = item.Session
-		}
-		if item.Offset > tc.offset || (item.Truncated && item.Offset > 0) {
 			tc.offset = item.Offset
+			tc.ptyCols, tc.ptyRows = 0, 0
+		} else if item.Offset > tc.offset || (item.Truncated && item.Offset > 0) {
+			tc.offset = item.Offset
+		}
+		if item.Cols > 0 && item.Rows > 0 {
+			tc.ptyCols, tc.ptyRows = item.Cols, item.Rows
 		}
 		newHeld := item.LeaseClient != "" && item.LeaseClient != tc.m.clientID
 		changed := tc.leaseHolder != item.LeaseClient || tc.heldByOther != newHeld
@@ -296,6 +305,9 @@ func (tc *TerminalConn) Read(p []byte) (int, error) {
 		if changed {
 			tc.notifyStatus()
 		}
+		if fresh {
+			tc.syncSize()
+		}
 		if n > 0 {
 			return n, nil
 		}
@@ -305,48 +317,113 @@ func (tc *TerminalConn) Read(p []byte) (int, error) {
 	}
 }
 
+// Write types p into the PTY. While the engine is out of reach it gives up
+// after a few seconds and drops p rather than failing, as a failed write
+// would end the terminal's input for good; Read reconnects meanwhile.
 func (tc *TerminalConn) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
 	ctx, cancel := context.WithTimeout(tc.ctx, 5*time.Second)
 	defer cancel()
-
-	_, tg, sess, err := tc.ensureStream(ctx)
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			return 0, io.ErrClosedPipe
+	data := bytes.Clone(p)
+	for retried := false; ; retried = true {
+		st, tg, sess, err := tc.ensureStream(ctx)
+		if err == nil {
+			err = tg.fn.TerminalInput(ctx, api.TerminalInput{
+				Workspace: tc.workspace,
+				Session:   sess,
+				Client:    tc.m.clientID,
+				Data:      data,
+			})
 		}
-		return 0, err
+		switch {
+		case err == nil:
+			tc.mu.Lock()
+			changed := tc.heldByOther || tc.leaseHolder != tc.m.clientID
+			tc.heldByOther = false
+			tc.leaseHolder = tc.m.clientID
+			tc.mu.Unlock()
+			if changed {
+				tc.notifyStatus()
+				tc.syncSize()
+			}
+			return len(p), nil
+		case errors.Is(err, api.ErrLeaseHeld):
+			tc.mu.Lock()
+			changed := !tc.heldByOther
+			tc.heldByOther = true
+			tc.mu.Unlock()
+			if changed {
+				tc.notifyStatus()
+			}
+			return len(p), nil
+		case errors.Is(err, transport.ErrUnknownMethod) || errors.Is(err, api.ErrNotAllowed):
+			return 0, err
+		case tc.ended():
+			return 0, io.ErrClosedPipe
+		case retried || st == nil || ctx.Err() != nil:
+			return len(p), nil
+		}
+		tc.forget(st, sess, err)
 	}
-	err = tg.fn.TerminalInput(ctx, api.TerminalInput{
+}
+
+// ended reports whether the conn is closed or its session exited.
+func (tc *TerminalConn) ended() bool {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	return tc.closed || tc.exited || tc.ctx.Err() != nil
+}
+
+// forget drops st, whose call failed with err, so that the next call
+// reconnects, and sess with it when the engine no longer has it.
+func (tc *TerminalConn) forget(st api.TerminalStream, sess api.ID, err error) {
+	tc.mu.Lock()
+	current := tc.stream == st
+	if current {
+		tc.stream = nil
+		tc.target = termTarget{}
+	}
+	if errors.Is(err, api.ErrNotFound) && tc.session == sess {
+		tc.session = api.ID{}
+		tc.offset = 0
+	}
+	tc.mu.Unlock()
+	if current {
+		_ = st.Close()
+	}
+}
+
+// syncSize resizes the PTY to this view when this client holds the input
+// lease and the engine reported another size. It runs as this client takes
+// the lease or learns the session, which a resize before it skipped.
+func (tc *TerminalConn) syncSize() {
+	tc.mu.Lock()
+	tg, sess, cols, rows := tc.target, tc.session, tc.cols, tc.rows
+	need := !tc.closed && !tc.exited && tg.fn != nil &&
+		!tc.heldByOther && tc.leaseHolder == tc.m.clientID &&
+		tc.ptyCols > 0 && (tc.ptyCols != cols || tc.ptyRows != rows)
+	tc.mu.Unlock()
+	if !need {
+		return
+	}
+	ctx, cancel := context.WithTimeout(tc.ctx, 2*time.Second)
+	defer cancel()
+	err := tg.fn.TerminalResize(ctx, api.TerminalResize{
 		Workspace: tc.workspace,
 		Session:   sess,
 		Client:    tc.m.clientID,
-		Data:      bytes.Clone(p),
+		Cols:      cols,
+		Rows:      rows,
 	})
-	if errors.Is(err, api.ErrLeaseHeld) {
+	if err == nil {
 		tc.mu.Lock()
-		changed := !tc.heldByOther
-		tc.heldByOther = true
-		tc.mu.Unlock()
-		if changed {
-			tc.notifyStatus()
+		if tc.session == sess {
+			tc.ptyCols, tc.ptyRows = cols, rows
 		}
-		return len(p), nil
+		tc.mu.Unlock()
 	}
-	if err != nil {
-		return 0, err
-	}
-	tc.mu.Lock()
-	changed := tc.heldByOther || tc.leaseHolder != tc.m.clientID
-	tc.heldByOther = false
-	tc.leaseHolder = tc.m.clientID
-	tc.mu.Unlock()
-	if changed {
-		tc.notifyStatus()
-	}
-	return len(p), nil
 }
 
 func (tc *TerminalConn) Resize(cols, rows int) error {
@@ -412,6 +489,7 @@ func (tc *TerminalConn) TakeControl() {
 		tc.heldByOther = lease.Client != "" && lease.Client != tc.m.clientID
 		tc.mu.Unlock()
 		tc.notifyStatus()
+		tc.syncSize()
 	})
 }
 

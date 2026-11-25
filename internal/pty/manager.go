@@ -106,7 +106,6 @@ type session struct {
 }
 
 func normalizeWorkspace(ws string) string {
-	ws = strings.TrimSpace(ws)
 	if ws == "" || ws == "~" {
 		if home, err := os.UserHomeDir(); err == nil && home != "" {
 			return filepath.Clean(home)
@@ -191,12 +190,9 @@ func (m *Manager) OpenTerminal(ctx context.Context, req api.TerminalOpen) (api.T
 
 	now := m.now()
 	sess.mu.Lock()
-	defer sess.mu.Unlock()
 
 	after := req.After
-	if req.Session != (api.ID{}) && req.Session != sess.id {
-		after = 0
-	} else if req.Session == (api.ID{}) && after > sess.ring.end() {
+	if req.Session != (api.ID{}) && req.Session != sess.id || after > sess.ring.end() {
 		after = 0
 	}
 
@@ -211,10 +207,21 @@ func (m *Manager) OpenTerminal(ctx context.Context, req api.TerminalOpen) (api.T
 		}
 	}
 
+	// The lease holder's view sets the size, as a resize from it would.
+	resized := !sess.exited && req.Client != "" && sess.leaseClient == req.Client &&
+		req.Cols > 0 && req.Rows > 0 && (req.Cols != sess.cols || req.Rows != sess.rows)
+	if resized {
+		sess.cols, sess.rows = req.Cols, req.Rows
+		for other := range sess.subs {
+			other.notifyLeaseLocked(sess)
+		}
+	}
+
 	sess.subs[sub] = struct{}{}
 	data, end, truncated := sess.ring.readFrom(after)
 	startOff := end - uint64(len(data))
 	sub.resumeOffset = startOff
+	sub.historyEnd = end
 	if len(data) == 0 {
 		sub.pushItemLocked(api.TerminalItem{
 			Session:     sess.id,
@@ -225,7 +232,7 @@ func (m *Manager) OpenTerminal(ctx context.Context, req api.TerminalOpen) (api.T
 			LeaseClient: sess.leaseClient,
 		})
 	} else {
-		sub.enqueueBytesLocked(data, startOff, truncated, true, sess.cols, sess.rows, sess.leaseClient)
+		sub.enqueueBytesLocked(data, startOff, truncated, true)
 	}
 	if sess.exited && !sub.paused && sub.resumeOffset >= sess.ring.end() && !sub.sentExit {
 		sub.sentExit = true
@@ -240,6 +247,12 @@ func (m *Manager) OpenTerminal(ctx context.Context, req api.TerminalOpen) (api.T
 		})
 	}
 	sub.signalLocked()
+	p := sess.proc
+	sess.mu.Unlock()
+
+	if resized {
+		_ = p.Resize(req.Cols, req.Rows)
+	}
 	return sub, nil
 }
 
@@ -443,7 +456,7 @@ func (s *session) readLoop() {
 				if sub.paused {
 					continue
 				}
-				sub.enqueueBytesLocked(chunk, start, false, false, s.cols, s.rows, s.leaseClient)
+				sub.enqueueBytesLocked(chunk, start, false, false)
 				sub.signalLocked()
 			}
 			s.mu.Unlock()
@@ -454,6 +467,7 @@ func (s *session) readLoop() {
 	}
 
 	code, _ := s.proc.Wait()
+	_ = s.proc.Close()
 	s.mu.Lock()
 	s.exited = true
 	s.exitCode = code
@@ -487,6 +501,9 @@ type subStream struct {
 	closed       bool
 	wake         chan struct{}
 	done         chan struct{}
+	// historyEnd is where the replay this subscriber got ends: the output
+	// before it is sent without the queries a terminal would answer again.
+	historyEnd uint64
 }
 
 func (sub *subStream) signalLocked() {
@@ -515,37 +532,47 @@ func (sub *subStream) notifyLeaseLocked(s *session) {
 	sub.signalLocked()
 }
 
-func (sub *subStream) enqueueBytesLocked(p []byte, startOff uint64, truncated bool, withMeta bool, cols, rows int, leaseClient string) {
-	high := sub.sess.mgr.highWatermark
+// enqueueBytesLocked queues p, the ring's output from startOff, until the
+// subscriber's buffer is full; the first item carries truncated, and the
+// size too when withMeta.
+func (sub *subStream) enqueueBytesLocked(p []byte, startOff uint64, truncated, withMeta bool) {
+	s := sub.sess
+	var edits []edit
+	if startOff < sub.historyEnd {
+		edits = replayEdits(p[:min(uint64(len(p)), sub.historyEnd-startOff)])
+	}
+	high := s.mgr.highWatermark
 	stepCap := min(chunkSize, max(1, high/2))
-	first := true
-	for len(p) > 0 {
+	for pos := 0; pos < len(p); {
 		avail := high - sub.queuedBytes
 		if avail <= 0 {
 			sub.paused = true
 			return
 		}
-		n := min(len(p), min(stepCap, avail))
-		cp := make([]byte, n)
-		copy(cp, p[:n])
-		startOff += uint64(n)
-		sub.resumeOffset = startOff
-		it := api.TerminalItem{
-			Session: sub.sess.id,
-			Offset:  startOff,
-			Data:    cp,
+		end := pos + min(len(p)-pos, stepCap, avail)
+		for _, e := range edits {
+			if e.start >= end {
+				break
+			}
+			end = max(end, e.end)
 		}
-		if first {
+		var data []byte
+		data, edits = splice(p, pos, end, edits)
+		sub.resumeOffset = startOff + uint64(end)
+		it := api.TerminalItem{
+			Session:     s.id,
+			Offset:      sub.resumeOffset,
+			Data:        data,
+			LeaseClient: s.leaseClient,
+		}
+		if pos == 0 {
 			it.Truncated = truncated
 			if withMeta {
-				it.Cols = cols
-				it.Rows = rows
-				it.LeaseClient = leaseClient
+				it.Cols, it.Rows = s.cols, s.rows
 			}
-			first = false
 		}
 		sub.pushItemLocked(it)
-		p = p[n:]
+		pos = end
 		if sub.queuedBytes >= high {
 			sub.paused = true
 			return
@@ -574,9 +601,10 @@ func (sub *subStream) Next(ctx context.Context) (api.TerminalItem, error) {
 				tail, tailEnd, truncated := s.ring.readFrom(sub.resumeOffset)
 				if truncated {
 					sub.resumeOffset = tailEnd - uint64(len(tail))
+					sub.historyEnd = tailEnd
 				}
 				if len(tail) > 0 {
-					sub.enqueueBytesLocked(tail, sub.resumeOffset, truncated, true, s.cols, s.rows, s.leaseClient)
+					sub.enqueueBytesLocked(tail, sub.resumeOffset, truncated, true)
 				} else if truncated {
 					sub.pushItemLocked(api.TerminalItem{
 						Session:     s.id,
