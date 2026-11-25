@@ -76,7 +76,7 @@ func TestTheMessageToolbarIsABuiltInPluginYoursCanReplace(t *testing.T) {
 }
 
 // Glitched draws the built-in toolbar's own drawing while the plugin has
-// drawn none: its main.js and messageToolbarRow draw every toolbar alike,
+// drawn none: its main.ts and messageToolbarRow draw every toolbar alike,
 // a plugin's commands in it too.
 func TestGlitchedWaitsForTheBuiltInToolbarWithItsOwnDrawing(t *testing.T) {
 	h, th := checked(t)

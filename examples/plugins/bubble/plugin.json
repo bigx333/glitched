@@ -3,7 +3,7 @@
   "name": "Square bubble",
   "description": "Restyles your messages' bubble: square corners, an accent outline, and at most 60% of the timeline wide.",
   "version": "0.1.0",
-  "main": "index.js",
+  "main": "index.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": ["ui.place", "ui.replace", "messages:read"],

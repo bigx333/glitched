@@ -59,7 +59,7 @@ cp -R examples/plugins/snippets ~/.glitched/plugins/
   "id": "focus-timer",
   "name": "Focus timer",
   "version": "0.1.0",
-  "main": "index.js",
+  "main": "index.ts",
   "contract": "glitched",
   "contractVersion": 1,
   "capabilities": ["ui.place", "notify"],
@@ -76,7 +76,7 @@ cp -R examples/plugins/snippets ~/.glitched/plugins/
     "settings": [{ "id": "length", "kind": "number", "label": "Length", "min": 5, "max": 90, "default": 25 }],
     "tools": [{ "name": "count_words", "description": "…", "input": { "type": "object" } }],
     "programs": ["git"],
-    "service": "service.js",
+    "service": "service.ts",
     "shortcuts": [{ "command": "start", "key": "cmd+shift+f" }]
   }
 }

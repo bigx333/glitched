@@ -3,7 +3,7 @@
   "name": "Timeline rows",
   "description": "Each row of the chat timeline, in widgets around Glitched's native transcript.body: your message's bubble and note, a reply, a run's work log, or an error's outline. Built into Glitched; make a copy in Settings › Plugins to restyle it.",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "main.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": ["ui.place", "ui.replace", "messages:read"],

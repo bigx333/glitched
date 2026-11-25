@@ -204,11 +204,11 @@ func TestYourBreadcrumbMustPlaceTheTitle(t *testing.T) {
 // the header wide.
 func TestACopiedBreadcrumbIsNarrowFromItsFirstFrame(t *testing.T) {
 	h := childThreadsShown(t, "Run them")
-	js, err := os.ReadFile("internal/plugins/bundled/child-threads/main.js")
+	js, err := os.ReadFile("internal/plugins/bundled/child-threads/main.ts")
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest := strings.Replace(replacing("your-crumbs", "thread.header.breadcrumb"), `"ui.replace"]`, `"ui.replace", "threads:read"]`, 1)
+	manifest := strings.Replace(strings.Replace(replacing("your-crumbs", "thread.header.breadcrumb"), `"index.js"`, `"index.ts"`, 1), `"ui.replace"]`, `"ui.replace", "threads:read"]`, 1)
 	writeOwnPlugin(t, h.a, "your-crumbs", manifest, string(js))
 	for _, c := range []string{"ui.replace", "threads:read"} {
 		h.a.plugins.SetGranted("your-crumbs", c, true)

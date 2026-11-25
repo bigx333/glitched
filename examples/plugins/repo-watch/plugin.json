@@ -3,7 +3,7 @@
   "name": "Repo watch",
   "description": "Watches a repository in the background: its branch and changes, checked each minute.",
   "version": "0.1.0",
-  "main": "index.js",
+  "main": "index.ts",
   "contract": "glitched",
   "contractVersion": 1,
   "capabilities": ["service", "programs"],
@@ -12,7 +12,7 @@
     "pages": [{ "id": "home", "title": "Repo watch", "icon": "git-branch" }]
   },
   "glitched": {
-    "service": "service.js",
+    "service": "service.ts",
     "programs": ["git"],
     "timers": [{ "id": "check", "every": 60 }],
     "settings": [

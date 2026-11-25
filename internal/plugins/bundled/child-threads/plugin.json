@@ -3,7 +3,7 @@
   "name": "Child threads",
   "description": "A child thread's way back up in the header, and the header's meter of how full the thread's context is, or its pill of tokens with children's rolled up. Built into Glitched; make a copy in Settings › Plugins to change them.",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "main.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": ["ui.place", "ui.replace", "threads:read"],

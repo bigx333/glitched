@@ -2,8 +2,8 @@
   "format": "glitched-plugin-signature:v1",
   "key": "dj7v6ruVjh7tTklNCssj6SWwWpzkD0Xc9J6Jy0sFzgw=",
   "files": {
-    "main.js": "a35bab94f3ed9119f63fda2700555a06b5dbbaa3059f159457baafa715e88856",
-    "plugin.json": "ee82d8ef3d31927cf08f437623d5aec64441cee864f904123f6e3dee15fabea5"
+    "main.ts": "dbdd047fd8123cb51d72ee79abe2c5fb379185d87c253f4319335a83f9e15db4",
+    "plugin.json": "d9af434a52fc815fccff0bcd1fc5541c5ed29b6e3278542ccb0a57a56bfd153f"
   },
-  "sig": "i4F0AXFnNgzszVJgFk+AoXOkjZYDSzpcDrN6J88pJCYpo8D0VcXw884u8u2mI6Yvdoo0uX5BnXJV1iX66DZuDA=="
+  "sig": "aNSR0IoQh8L3XgD9AkLSiNMyqOE7YTt1tgO5JRZzOBGIJnbgQVKU9GyHykk2L/8i3WfIxf8TG6JpOOlqIbcOBQ=="
 }

@@ -908,7 +908,7 @@ var (
 )
 
 // timelineRow is the built-in Timeline rows plugin's drawing of the row m,
-// as its main.js draws it. Glitched draws the same while no plugin has
+// as its main.ts draws it. Glitched draws the same while no plugin has
 // drawn the row, so that the body keeps its state, as a selection, when
 // the plugin's drawing comes.
 func timelineRow(m timelineMessage) *widget.Node {

@@ -750,7 +750,7 @@ func TestSidebarFoldShowsASectionOpenAtLaunchAtOnce(t *testing.T) {
 // place's answer passed through edit.
 func yourCopy(t *testing.T, edit string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("internal", "plugins", "bundled", "sidebar", "main.js"))
+	b, err := os.ReadFile(filepath.Join("internal", "plugins", "bundled", "sidebar", "main.ts"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -766,7 +766,7 @@ func yourCopy(t *testing.T, edit string) string {
 // sidebar, mine, and waits for it to draw the bottom part.
 func installYourCopy(t *testing.T, h *harness, edit string) {
 	t.Helper()
-	writeOwnPlugin(t, h.a, "mine", sidebarManifest, yourCopy(t, edit))
+	writeOwnPlugin(t, h.a, "mine", strings.Replace(sidebarManifest, `"index.js"`, `"index.ts"`, 1), yourCopy(t, edit))
 	h.a.plugins.SetGranted("mine", "ui.replace", true)
 	h.a.plugins.SetGranted("mine", "threads:read", true)
 	for range 40 {

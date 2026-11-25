@@ -148,3 +148,13 @@ jobs:
       # Verbose, so the log says whether this runner has the user systemd
       # manager these tests need, or skips them.
       - run: go test -race -count=1 -v -run 'MarkerBehind|WithoutScopes' ./internal/provider/claude
+
+  plugins-typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: voidzero-dev/setup-vp@v1.22.0
+        with:
+          cache: true
+      - run: vp check --no-fmt --no-lint internal/plugins/bundled examples/plugins

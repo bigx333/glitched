@@ -3,7 +3,7 @@
   "name": "Queue",
   "description": "The messages of yours that wait their turn, over the composer: each with Send now, Edit, Up, Down and Remove. Built into Glitched; make a copy in Settings › Plugins to change it.",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "main.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": ["ui.place", "ui.replace"],

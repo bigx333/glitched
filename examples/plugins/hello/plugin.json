@@ -3,7 +3,7 @@
   "name": "Hello",
   "description": "A sample plugin: one page, and a command that counts greetings.",
   "version": "0.1.0",
-  "main": "index.js",
+  "main": "index.ts",
   "contract": "glitched",
   "contractVersion": 1,
   "permissions": {},
