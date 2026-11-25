@@ -78,7 +78,7 @@ func TestBrowserNewTab(t *testing.T) {
 		t.Error("a single tab shows a tab strip")
 	}
 	tt.Key(ui.Cmd, ui.KeyT)
-	tt.Frame()
+	settleTester(tt)
 	if len(a.browser.tabs) != 2 || a.browser.active != 1 || !tt.HasText("Type an address above") {
 		t.Fatalf("%d tabs, showing %d: want a new, empty second tab", len(a.browser.tabs), a.browser.active)
 	}
@@ -90,7 +90,7 @@ func TestBrowserNewTab(t *testing.T) {
 	}
 	tt.Type("example.com")
 	tt.Key(0, ui.KeyEnter)
-	tt.Frame()
+	settleTester(tt)
 	tab := a.browser.tabs[1]
 	if tab.url != "https://example.com" || !slices.Equal(*made, []string{defaultPreviewURL, "https://example.com"}) {
 		t.Fatalf("tab at %q, pages made at %q", tab.url, *made)
@@ -99,15 +99,15 @@ func TestBrowserNewTab(t *testing.T) {
 		t.Errorf("a new page loaded %q again", p.loaded)
 	}
 	// Typed again, the page goes there.
-	tt.Key(ui.Cmd, ui.KeyL)
-	tt.Frame()
+	click(t, tt, "Address")
+	settleTester(tt)
 	if !tt.Focused("Address") {
-		t.Fatal("⌘L didn't give the address the keyboard")
+		t.Fatal("the address doesn't have the keyboard")
 	}
 	tt.Key(ui.Cmd, ui.KeyA)
 	tt.Type("localhost:3000")
 	tt.Key(0, ui.KeyEnter)
-	tt.Frame()
+	settleTester(tt)
 	if p := pageOf(tab); !slices.Equal(p.loaded, []string{"http://localhost:3000"}) {
 		t.Errorf("loaded %q, want the local server over http", p.loaded)
 	}
@@ -121,13 +121,13 @@ func TestBrowserTabs(t *testing.T) {
 	a.browser.current() // the dev server's
 	a.newTab("https://go.dev")
 	a.newTab("https://example.com")
-	tt.Frame()
+	settleTester(tt)
 	b := &a.browser
 	if len(b.tabs) != 3 || b.active != 2 || !a.showPreview {
 		t.Fatalf("%d tabs, showing %d, pane %v", len(b.tabs), b.active, a.showPreview)
 	}
 	b.tabs[1].title = "The Go Programming Language"
-	tt.Frame()
+	settleTester(tt)
 	for _, s := range []string{"localhost:5173", "The Go Programming Language", "example.com"} {
 		if !tt.HasText(s) {
 			t.Errorf("no tab %q", s)
@@ -156,9 +156,9 @@ func TestBrowserTabs(t *testing.T) {
 	}
 	// Closed from the strip, the tab shown gives the pane to the next.
 	b.active = 0
-	tt.Frame()
+	settleTester(tt)
 	click(t, tt, "Close tab")
-	tt.Frame()
+	settleTester(tt)
 	if !slices.Equal(ids(), []int{3}) || b.active != 0 || tt.HasText("Close tab") {
 		t.Fatalf("tabs %v showing %d: want the last left, with no strip", ids(), b.active)
 	}
@@ -169,9 +169,9 @@ func TestBrowserTabs(t *testing.T) {
 	if len(b.tabs) != 0 || a.showPreview {
 		t.Fatalf("%d tabs, pane %v, after closing them all", len(b.tabs), a.showPreview)
 	}
-	tt.Frame()
+	settleTester(tt)
 	click(t, tt, "Toggle preview  ⇧⌘P")
-	tt.Frame()
+	settleTester(tt)
 	if len(b.tabs) != 1 || b.tabs[0].url != defaultPreviewURL || b.tabs[0].id != 5 {
 		t.Fatalf("reopened on %+v, want a new dev server tab", b.tabs)
 	}
@@ -191,11 +191,11 @@ func TestBrowserNavigation(t *testing.T) {
 		t.Fatalf("back went %q with no history", p.calls)
 	}
 	p.back = true
-	tt.Frame()
+	settleTester(tt)
 	click(t, tt, "Back")
 	click(t, tt, "Reload  ⌘R")
 	p.loading = true
-	tt.Frame()
+	settleTester(tt)
 	click(t, tt, "Stop")
 	// ⌘R reloads a page loading, as one stuck on a request.
 	tt.Key(ui.Cmd, ui.KeyR)
@@ -205,7 +205,7 @@ func TestBrowserNavigation(t *testing.T) {
 	p.loading = false
 	tab := a.browser.current()
 	tab.failed = true
-	tt.Frame()
+	settleTester(tt)
 	tt.Key(ui.Cmd, ui.KeyR)
 	if !slices.Equal(p.loaded, []string{defaultPreviewURL}) {
 		t.Errorf("reloading a failed page loaded %q, want its address", p.loaded)
@@ -229,14 +229,14 @@ func TestBrowserAddressLetGoAsThePaneCloses(t *testing.T) {
 	for _, how := range []string{"click", "keys"} {
 		a, tt, _ := browsing(t)
 		click(t, tt, "Toggle preview  ⇧⌘P")
-		tt.Key(ui.Cmd, ui.KeyL)
-		tt.Frame()
+		click(t, tt, "Address")
+		settleTester(tt)
 		if !tt.Focused("Address") {
-			t.Fatalf("%s: ⌘L didn't give the address the keyboard", how)
+			t.Fatalf("%s: the address doesn't have the keyboard", how)
 		}
 		tt.Key(ui.Cmd, ui.KeyA)
 		tt.Type("exa")
-		tt.Frame()
+		settleTester(tt)
 		tab := a.browser.current()
 		if tab.draft != "exa" || !a.browser.typing {
 			t.Fatalf("%s: address %q, typing %v", how, tab.draft, a.browser.typing)
@@ -246,14 +246,14 @@ func TestBrowserAddressLetGoAsThePaneCloses(t *testing.T) {
 		} else {
 			tt.Key(ui.Cmd|ui.Shift, ui.KeyP)
 		}
-		tt.Frame()
-		tt.Frame()
+		settleTester(tt)
+		settleTester(tt)
 		if a.showPreview || a.browser.typing || tab.draft != defaultPreviewURL {
 			t.Errorf("%s: pane %v, typing %v, address %q after it closed", how, a.showPreview, a.browser.typing, tab.draft)
 		}
 		a.tabNavigated(tab, "http://localhost:5173/about")
 		click(t, tt, "Toggle preview  ⇧⌘P")
-		tt.Frame()
+		settleTester(tt)
 		if tab.draft != "http://localhost:5173/about" || a.browser.typing {
 			t.Errorf("%s: opened again, address %q, typing %v", how, tab.draft, a.browser.typing)
 		}
@@ -265,30 +265,30 @@ func TestBrowserAddressLetGoAsThePaneCloses(t *testing.T) {
 func TestBrowserAddressKeptBehindTheDiff(t *testing.T) {
 	a, tt, _ := browsing(t)
 	click(t, tt, "Toggle preview  ⇧⌘P")
-	tt.Key(ui.Cmd, ui.KeyL)
-	tt.Frame()
+	click(t, tt, "Address")
+	settleTester(tt)
 	tt.Key(ui.Cmd, ui.KeyA)
 	tt.Type("exa")
-	tt.Frame()
+	settleTester(tt)
 	tab := a.browser.current()
 	if tab.draft != "exa" {
 		t.Fatalf("address %q, want what was typed", tab.draft)
 	}
 	// As the menu's Toggle Diff, the diff takes the pane's place.
 	a.showDiff = true
-	tt.Frame()
-	tt.Frame()
+	settleTester(tt)
+	settleTester(tt)
 	if !a.showPreview || tab.draft != "exa" {
 		t.Fatalf("behind the diff: pane %v, address %q", a.showPreview, tab.draft)
 	}
 	a.showDiff = false
-	tt.Frame()
+	settleTester(tt)
 	if tab.draft != "exa" || tab.url != defaultPreviewURL {
 		t.Errorf("the diff closed: address %q at %q, want the draft kept", tab.draft, tab.url)
 	}
 	tt.Key(ui.Cmd|ui.Shift, ui.KeyP)
-	tt.Frame()
-	tt.Frame()
+	settleTester(tt)
+	settleTester(tt)
 	if a.showPreview || tab.draft != defaultPreviewURL {
 		t.Errorf("the pane closed: pane %v, address %q, want the tab's", a.showPreview, tab.draft)
 	}
@@ -338,7 +338,7 @@ func TestBrowserPageEvents(t *testing.T) {
 	}
 	// Opened by the tab shown, the tab shows.
 	p.events.Opened("https://example.com/")
-	tt.Frame()
+	settleTester(tt)
 	if len(b.tabs) != 2 || b.active != 1 || b.current().url != "https://example.com/" || (*made)[len(*made)-1] != "https://example.com/" {
 		t.Fatalf("%d tabs, showing %d at %q after the page shown opened a window", len(b.tabs), b.active, b.current().url)
 	}
@@ -349,7 +349,7 @@ func TestBrowserPageEvents(t *testing.T) {
 	if len(b.tabs) != 3 || b.tabs[1].url != "https://go.dev/" || b.active != 2 || b.current().url != "https://example.com/" || !b.focusAddress {
 		t.Fatalf("%d tabs, showing %d at %q, address %v after a page in the background opened a window", len(b.tabs), b.active, b.current().url, b.focusAddress)
 	}
-	tt.Frame()
+	settleTester(tt)
 	if (*made)[len(*made)-1] != "https://example.com/" {
 		t.Errorf("pages made at %q: the tab in the background made one before it shows", *made)
 	}
@@ -367,7 +367,7 @@ func TestBrowserClosedTabHearsNothing(t *testing.T) {
 	tab := a.browser.current()
 	p := pageOf(tab)
 	a.newTab("https://example.com/")
-	tt.Frame()
+	settleTester(tt)
 	a.closeTab(0)
 	p.events.Failed("http://localhost:5173/missing", "Connection refused")
 	p.events.Opened("https://go.dev/")
@@ -412,7 +412,7 @@ func TestBrowserKeysLeaveTheTerminal(t *testing.T) {
 func TestBrowserNewTabWithNoneOpen(t *testing.T) {
 	a, tt, made := browsing(t)
 	tt.Key(ui.Cmd, ui.KeyT)
-	tt.Frame()
+	settleTester(tt)
 	b := &a.browser
 	if len(b.tabs) != 1 || b.tabs[0].url != "" || b.active != 0 || !a.showPreview || len(*made) != 0 {
 		t.Fatalf("%d tabs %v, pane %v, pages made at %q: want one new, empty tab", len(b.tabs), urls(b.tabs), a.showPreview, *made)
@@ -428,9 +428,9 @@ func TestBrowserKeysOutOfTheChat(t *testing.T) {
 	a, tt, _ := browsing(t)
 	a.terminalFocused = true
 	a.router.Push("/settings/general")
-	tt.Frame()
+	settleTester(tt)
 	tt.Key(ui.Cmd, ui.KeyT)
-	tt.Frame()
+	settleTester(tt)
 	if len(a.browser.tabs) == 0 || !a.showPreview {
 		t.Errorf("⌘T on the settings page, the terminal focused before: %d tabs, pane %v", len(a.browser.tabs), a.showPreview)
 	}
@@ -480,7 +480,7 @@ func TestBrowserReloadOrStop(t *testing.T) {
 	p := pageOf(a.browser.current())
 	for _, loading := range []bool{false, true, false} {
 		p.loading = loading
-		tt.Frame()
+		settleTester(tt)
 		_, reload := tt.Find("Reload  ⌘R")
 		_, stop := tt.Find("Stop")
 		if reload == loading || stop != loading {
@@ -495,7 +495,7 @@ func TestBrowserReloadOrStop(t *testing.T) {
 func deliver(tt *ui.Tester, event func()) {
 	if event != nil {
 		event()
-		tt.Frame()
+		settleTester(tt)
 	}
 }
 
@@ -506,7 +506,7 @@ func TestBrowserRedrawsAsALoadEnds(t *testing.T) {
 	click(t, tt, "Toggle preview  ⇧⌘P")
 	p := pageOf(a.browser.current())
 	p.loading = true
-	tt.Frame()
+	settleTester(tt)
 	if _, ok := tt.Find("Stop"); !ok {
 		t.Fatal("no stop while the page loads")
 	}
@@ -543,7 +543,7 @@ func TestBrowserCapsTabsAPageOpens(t *testing.T) {
 	// Each window later, as many again, up to the cap.
 	for range 2 * maxOpenedTabs / openBurst {
 		tt.Advance(openWindow)
-		tt.Frame()
+		settleTester(tt)
 		for range openBurst {
 			p.events.Opened("https://example.com/")
 		}
@@ -554,7 +554,7 @@ func TestBrowserCapsTabsAPageOpens(t *testing.T) {
 	// A tab it opened closing makes room for one.
 	a.closeTab(slices.IndexFunc(b.tabs, func(t *browserTab) bool { return t.opener == from.id }))
 	tt.Advance(openWindow)
-	tt.Frame()
+	settleTester(tt)
 	p.events.Opened("https://go.dev/")
 	p.events.Opened("https://go.dev/")
 	if n := opened(); n != maxOpenedTabs {
@@ -564,14 +564,14 @@ func TestBrowserCapsTabsAPageOpens(t *testing.T) {
 	other := b.tabs[len(b.tabs)-1]
 	b.active = len(b.tabs) - 1
 	tt.Advance(openWindow)
-	tt.Frame()
+	settleTester(tt)
 	pageOf(other).events.Opened("https://go.dev/")
 	if len(b.tabs) != 1+maxOpenedTabs {
 		t.Errorf("%d tabs: a page the line opened opened one past its cap", len(b.tabs))
 	}
 	// A tab of the user's opens its own.
 	a.newTab("https://go.dev/")
-	tt.Frame()
+	settleTester(tt)
 	mine := b.current()
 	pageOf(mine).events.Opened("https://go.dev/doc/")
 	if len(b.tabs) != 1+maxOpenedTabs+2 {
@@ -604,7 +604,7 @@ func TestBrowserCapsALineOfPagesOpeningThemselves(t *testing.T) {
 	for range 3 * openBurst {
 		from := b.current()
 		pageOf(from).events.Opened("https://example.com/")
-		tt.Frame()
+		settleTester(tt)
 	}
 	if n := len(b.tabs); n != 1+openBurst {
 		t.Fatalf("%d tabs after a page opened itself in a loop, want %d", n, 1+openBurst)

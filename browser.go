@@ -34,6 +34,7 @@ type browser struct {
 	// navigating then doesn't type over; focusAddress gives it the
 	// keyboard in the next frame, as ⌘L and a new tab do.
 	typing, focusAddress bool
+	focusAddressHold     int
 	// shown is whether the pane was open as the last frame began: its
 	// closing lets go of the address (letGo).
 	shown bool
@@ -118,9 +119,15 @@ func (a *app) newTab(url string) {
 	}
 	b.add(url, at)
 	if url == "" {
-		b.focusAddress = true
+		b.askFocusAddress()
 	}
 	a.showPreview, a.showDiff = true, false
+}
+
+// askFocusAddress gives the address the keyboard. It holds the request
+// for a few frames: a plugin's input with it draws asynchronously.
+func (b *browser) askFocusAddress() {
+	b.focusAddress, b.focusAddressHold = true, 4
 }
 
 // closeTab closes the tab at index i and its page. Closing the last
@@ -401,8 +408,9 @@ func (a *app) browserTabNamed(id float64) (*browserTab, int, error) {
 // Glitched's own.
 func (a *app) browserEffect(e plugins.Effect) (any, error) {
 	var in struct {
-		Tab float64
-		URL string
+		Tab  float64
+		URL  string
+		Text string
 	}
 	if err := json.Unmarshal(e.Args, &in); err != nil {
 		return nil, errors.New(e.Type + " needs a tab")
@@ -447,6 +455,12 @@ func (a *app) browserEffect(e plugins.Effect) (any, error) {
 		if p := a.tabPage(t); p != nil {
 			p.Stop()
 		}
+	case "browser.draft":
+		if len(in.Text) > 2048 {
+			return nil, errors.New("an address is at most 2048 bytes")
+		}
+		t.draft = in.Text
+		a.browser.typing = true
 	case "browser.closeTab":
 		a.closeTab(i)
 	case "browser.activateTab":
@@ -486,9 +500,15 @@ func (a *app) previewPanel(c *ui.Context) {
 		// as the page's web view takes the pointer over its bounds.
 		a.previewEdge(c)
 	})
-	// The flag is for this frame's address, native or a plugin's. Focus
-	// itself then belongs to the input, so the flag doesn't focus it again.
-	a.browser.focusAddress = false
+	// The flag is for a few frames' address, native or a plugin's: the
+	// plugin's drawing answers asynchronously. Focus itself then belongs
+	// to the input, so the flag doesn't focus it again.
+	if b := &a.browser; b.focusAddressHold > 0 {
+		b.focusAddressHold--
+		if b.focusAddressHold == 0 {
+			b.focusAddress = false
+		}
+	}
 }
 
 // previewHeader is the panel's navigation bar as Glitched draws it without
@@ -536,7 +556,7 @@ func (a *app) previewHeader(c *ui.Context, bar ui.TitleBar) {
 			Padding(5, 10).Radius(8).Label("Address").Placeholder("Type an address")
 		if b.focusAddress {
 			in.Focus()
-			b.focusAddress = false
+			b.focusAddress, b.focusAddressHold = false, 0
 		}
 		b.typing = in.Focused()
 		if in.Submitted() && strings.TrimSpace(t.draft) != "" {
@@ -661,7 +681,7 @@ func (a *app) browserShortcuts(c *ui.Context) {
 		return
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyL) {
-		a.browser.focusAddress = true
+		a.browser.askFocusAddress()
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyR) {
 		a.reload(a.browser.current())

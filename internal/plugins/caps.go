@@ -89,6 +89,7 @@ var Effects = map[string]string{
 	"cliupdates.update":      "providers:update",
 	"cliupdates.updateAll":   "providers:update",
 	"cliupdates.check":       "providers:update",
+	"browser.draft":          "ui.place",
 	"browser.navigate":       "ui.place",
 	"browser.back":           "ui.place",
 	"browser.forward":        "ui.place",

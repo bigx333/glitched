@@ -1032,6 +1032,8 @@ declare const glitched: {
   };
   /** The preview browser in this window. Needs ui.place. */
   browser: {
+    /** Keeps the tab's typed address as the user types it. */
+    draft(tab: number, text: string): Promise<void>;
     navigate(tab: number, url: string): Promise<void>;
     back(tab: number): Promise<void>;
     forward(tab: number): Promise<void>;

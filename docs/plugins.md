@@ -551,7 +551,7 @@ Each call runs on the UI thread (the engine's queue, for a service), checked as 
 | `glitched.composer.submit(thread)` | | `threads:write` |
 | `glitched.composer.quote(thread, ask?)` | | `threads:write` |
 | `glitched.cliUpdates.update(machine, provider, whenIdle?)`, `.updateAll()`, `.check()` | | `providers:update` |
-| `glitched.browser.navigate(tab, url)`, `.back(tab)`, `.forward(tab)`, `.reload(tab)`, `.stop(tab)`, `.newTab(url?)`, `.closeTab(tab)`, `.activateTab(tab)` | | `ui.place` |
+| `glitched.browser.draft(tab, text)`, `.navigate(tab, url)`, `.back(tab)`, `.forward(tab)`, `.reload(tab)`, `.stop(tab)`, `.newTab(url?)`, `.closeTab(tab)`, `.activateTab(tab)` | | `ui.place` |
 | `glitched.models.list()` | `{models: [{provider, id, name, family, description, efforts}], efforts}` | |
 | `glitched.models.ask(prompt, {system?, provider?, model?, timeout?})` | `{text, provider, model}`: see [The glitched global](#the-glitched-global) | `models:ask` |
 | `glitched.skills.list(thread)` | `{skills: [{name, description, source, shown, overrides?}], skipped?: [{source, name?, why}], delivery?}`, the skills Glitched gives the thread's agent on its next run: `source` is `home` or `project`, `overrides` says a project's skill replaces the user's own of its name, and `delivery` how the thread's provider gets them. It rejects when the thread's engine is too old to say | `threads:read` |

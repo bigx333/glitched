@@ -82,6 +82,7 @@ globalThis.glitched = Object.freeze({
   palette: Object.freeze({ close: (palette) => app("palette.close", { palette: palette ?? "" }) }),
   sidebar: Object.freeze({ more: (key) => app("sidebar.more", { key }) }),
   browser: Object.freeze({
+    draft: (tab, text) => app("browser.draft", { tab, text }),
     navigate: (tab, url) => app("browser.navigate", { tab, url }),
     back: (tab) => app("browser.back", { tab }),
     forward: (tab) => app("browser.forward", { tab }),

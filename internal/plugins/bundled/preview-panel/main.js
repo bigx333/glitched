@@ -39,7 +39,7 @@ function header(state, ctx) {
 function tabs(ctx) {
   return { type: "row", padding: [0, 8, 6, 8], gap: 4, children: ctx.tabs.map((t) => ({
     type: "row", id: "tab:" + t.id, height: 28, grow: true, radius: 7, gap: 4, padding: [0, 3, 0, 10], align: "center",
-    background: t.active ? "$surface" : "", onClick: click("activate", t.id),
+    ...(t.active ? { background: "$surface" } : {}), onClick: click("activate", t.id),
     children: [
       ...(t.loading ? [{ type: "spinner", id: "loading:" + t.id }] : []),
       { type: "text", text: t.label, fontSize: 12, singleLine: true, color: t.active ? "$text" : "$text.muted" },
@@ -55,7 +55,7 @@ function body(ctx) {
   if (!ctx.url) return centered([
     { type: "icon", name: "globe", fontSize: 28, color: "$text.muted" },
     { type: "text", text: "Type an address above", color: "$text.muted" },
-    { type: "button", id: "dev", label: "Open " + ctx.devUrl, onClick: click("dev", ctx.active), children: [{ type: "text", text: (ctx.devUrl || "").replace(/^http:\/\//, ""), fontSize: 12 }] },
+    { type: "button", id: "dev", label: "Open " + (ctx.devUrl || "").replace(/^http:\/\//, ""), onClick: click("dev", ctx.active) },
   ]);
   return centered([{ type: "text", text: "The preview shows here, in the app's window.", color: "$text.muted" }]);
 }
@@ -70,12 +70,17 @@ export async function update({ state, event }) {
   const tab = event.payload ?? ctx.active;
   switch (event.handler) {
     case "address": {
-      const address = { ...state.address, [String(ctx.active)]: String(event.value ?? "") };
+      const text = String(event.value ?? "");
+      await glitched.browser.draft(ctx.active, text);
+      const address = { ...state.address, [String(ctx.active)]: text };
       return { state: { ...state, address } };
     }
-    case "navigate":
+    case "navigate": {
       await glitched.browser.navigate(ctx.active, event.value ?? state.address[String(ctx.active)] ?? ctx.draft);
-      return {};
+      const address = { ...state.address };
+      delete address[String(ctx.active)];
+      return { state: { ...state, address } };
+    }
     case "back": await glitched.browser.back(tab); return {};
     case "forward": await glitched.browser.forward(tab); return {};
     case "reload": await glitched.browser.reload(tab); return {};
