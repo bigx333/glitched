@@ -206,6 +206,7 @@ func Open(stateDir string, o Options) *Host {
 	h := &Host{state: stateDir, opts: o, sessions: map[pageKey]*Session{}}
 	h.language.Store("en")
 	h.started = !o.WaitToStart
+	migrateRenamedPrefs(stateDir, o.Logf)
 	if err := jsonfile.Load(prefsPath(stateDir), &h.prefs); err != nil && !errors.Is(err, os.ErrNotExist) {
 		o.Logf("plugins: %v", err)
 	}
@@ -226,6 +227,7 @@ func (h *Host) Reload() {
 	var list []*installed
 	seen := map[string]*installed{}
 	builtins := map[string][]string{}
+	shadows := shadowRenames(h.state, entries)
 	h.mu.Lock()
 	h.builtins = builtins // what load asks of a built-in's grants, as it loads
 	h.mu.Unlock()
@@ -240,11 +242,17 @@ func (h *Host) Reload() {
 		in.raw, _ = os.ReadFile(filepath.Join(in.folder, "plugin.json"))
 		in.enabled = !slices.Contains(h.prefs.Disabled, m.ID)
 		first := seen[m.ID]
+		shadow := first
+		if shadow == nil && in.bundled {
+			if oldID := shadows[m.ID]; oldID != "" {
+				shadow = seen[oldID]
+			}
+		}
 		switch {
-		case first != nil && in.bundled:
+		case shadow != nil && in.bundled:
 			// The user's copy runs in its place; it still loads, under an id
 			// of its own, to draw the components the copy fails to.
-			in.shadowedBy, in.enabled, in.fallback = first.folder, false, true
+			in.shadowedBy, in.enabled, in.fallback = shadow.folder, false, true
 			in.manifest.ID += FallbackSuffix
 			h.mu.Lock()
 			builtins[in.manifest.ID] = builtinCaps(*m)

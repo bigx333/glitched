@@ -51,6 +51,12 @@ type Page interface {
 	Close()
 }
 
+// Capturer is an optional capability of a Page that can capture a PNG
+// screenshot of its visible viewport.
+type Capturer interface {
+	CapturePage(ctx context.Context) ([]byte, error)
+}
+
 // Events are what a page tells its tab. A nil func is not called.
 type Events struct {
 	// Navigated: a navigation of the top frame to another document, at

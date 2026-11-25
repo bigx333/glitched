@@ -70,7 +70,7 @@ func TestACopysLateFailuresArentABuiltIns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeOwnPlugin(t, a, "sidebar", strings.Replace(string(manifest), `"main": "main.js"`, `"main": "index.js"`, 1), `
+	writeOwnPlugin(t, a, "sidebar", strings.Replace(string(manifest), `"main": "main.ts"`, `"main": "index.js"`, 1), `
 export function place({items}) { return items.map(() => ({type:"text",text:"Copy"})); }
 export async function update() { await glitched.app.settings.get(); return {}; }
 `)

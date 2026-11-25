@@ -73,6 +73,7 @@ func (m *Manager) sync(renew string) {
 	}
 	for _, e := range m.envs[1:] {
 		if !slices.Contains(envs, e) {
+			m.cacheDropEnv(e)
 			e.stop()
 		}
 	}

@@ -8,6 +8,7 @@ Settings replaces the chat with pages listed in its own sidebar: General, Appear
 - `settings-nav` switches pages from the Settings sidebar, and `Back to app` returns to the chat.
 - `settings-theme` applies a theme. The window repaints in its colors.
 - `settings-general` toggles General's switches (`Stream assistant messages`, `Desktop notifications`, `Confirm before deleting threads`).
+- `settings-zen` toggles Appearance's `Zen mode` switch (card `CHAT`), also the palette's `Toggle Zen mode`. With it on, each turn's steps and in-between replies fold into one line you can open; approvals, questions and errors always show.
 - `settings-archived` lists archived threads with restore (see [thread menu](./thread-menu.md)).
 
 ## How to get to it (user POV)

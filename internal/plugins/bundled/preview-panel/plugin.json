@@ -3,7 +3,7 @@
   "name": "Preview panel",
   "description": "The preview browser's navigation bar, tabs, and empty-tab page around its native web view. Built into Glitched; make a copy in Settings › Plugins to change it.",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "main.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": ["ui.place", "ui.replace"],

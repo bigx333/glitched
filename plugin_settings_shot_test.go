@@ -105,7 +105,7 @@ func pluginShotState(t *testing.T, a *app, state string) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile("examples/plugins/focus-timer/plugin.json")
-	js, _ := os.ReadFile("examples/plugins/focus-timer/index.js")
+	js, _ := os.ReadFile("examples/plugins/focus-timer/index.ts")
 	writeOwnPlugin(t, a, "focus-timer", string(b), string(js))
 	writeOwnPlugin(t, a, "release-captain", `{"id": "release-captain", "name": "Release captain for the whole monorepo and its satellites", "version": "2.14.0-beta.3", "description": "Watches your release branches, drafts the notes, opens the thread that cuts the release and tells the channel when it ships.", "main": "index.js", "contract": "glitched", "contractVersion": 2,
 		"capabilities": ["clipboard", "notify", "composer", "threads:read", "threads:write", "messages:read", "ui.place", "ui.replace", "tools", "programs", "service", "settings:write"],

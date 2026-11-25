@@ -3,7 +3,7 @@
   "name": "Focus timer",
   "description": "A focus timer in each thread's header, with its length in Settings.",
   "version": "0.1.0",
-  "main": "index.js",
+  "main": "index.ts",
   "contract": "glitched",
   "contractVersion": 1,
   "capabilities": ["ui.place", "notify"],

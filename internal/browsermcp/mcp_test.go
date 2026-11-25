@@ -63,12 +63,12 @@ func socketDir(t *testing.T) string {
 
 func TestServeSpeaksMCP(t *testing.T) {
 	var got []string
-	send := session(t, func(_ context.Context, tool string, args json.RawMessage) (string, error) {
+	send := session(t, func(_ context.Context, tool string, args json.RawMessage) (Reply, error) {
 		got = append(got, tool+" "+string(args))
 		if tool == "browser_click" {
-			return "", errors.New("s1e1 is disabled")
+			return Reply{}, errors.New("s1e1 is disabled")
 		}
-		return "snapshot", nil
+		return Text("snapshot"), nil
 	})
 	init := send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"claude-code","version":"2"}}}`)
 	res := init["result"].(map[string]any)
@@ -94,7 +94,7 @@ func TestServeSpeaksMCP(t *testing.T) {
 			t.Errorf("%s is said to be read-only", m["name"])
 		}
 	}
-	if want := "browser_tabs browser_navigate browser_snapshot browser_click browser_type"; strings.Join(names, " ") != want {
+	if want := "browser_tabs browser_navigate browser_snapshot browser_screenshot browser_click browser_type browser_select browser_scroll browser_wait_for"; strings.Join(names, " ") != want {
 		t.Errorf("tools %v, want %s", names, want)
 	}
 	if list["id"] != "l" {
@@ -124,11 +124,11 @@ func TestServeAnswersCallsAsTheyEnd(t *testing.T) {
 	slow := make(chan struct{})
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
-	go Serve(context.Background(), inR, outW, func(_ context.Context, tool string, _ json.RawMessage) (string, error) {
+	go Serve(context.Background(), inR, outW, func(_ context.Context, tool string, _ json.RawMessage) (Reply, error) {
 		if tool == "browser_navigate" {
 			<-slow
 		}
-		return tool, nil
+		return Text(tool), nil
 	})
 	defer inW.Close()
 	go io.WriteString(inW, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_navigate","arguments":{"url":"go.dev"}}}`+"\n"+
@@ -173,23 +173,23 @@ func TestTheBridgeReachesTheApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	hungUp := make(chan struct{})
-	go Accept(ln, func(ctx context.Context, tool string, args json.RawMessage) (string, error) {
+	go Accept(ln, func(ctx context.Context, tool string, args json.RawMessage) (Reply, error) {
 		switch tool {
 		case "browser_click":
-			return "", errors.New("s1e1 is gone")
+			return Reply{}, errors.New("s1e1 is gone")
 		case "browser_navigate":
 			<-ctx.Done()
 			close(hungUp)
-			return "", ctx.Err()
+			return Reply{}, ctx.Err()
 		}
-		return tool + " " + string(args), nil
+		return Text(tool + " " + string(args)), nil
 	})
 	defer ln.Close()
 	if _, err := Listen(dir); err == nil || !strings.Contains(err.Error(), "another Glitched app") {
 		t.Errorf("a second app listening: %v", err)
 	}
-	if got, err := call(context.Background(), "browser_tabs", json.RawMessage(`{"action":"list"}`)); err != nil || got != `browser_tabs {"action":"list"}` {
-		t.Errorf("a call answered %q, %v", got, err)
+	if got, err := call(context.Background(), "browser_tabs", json.RawMessage(`{"action":"list"}`)); err != nil || got.Text != `browser_tabs {"action":"list"}` {
+		t.Errorf("a call answered %+v, %v", got, err)
 	}
 	if _, err := call(context.Background(), "browser_click", json.RawMessage(`{}`)); err == nil || err.Error() != "s1e1 is gone" {
 		t.Errorf("a failed call: %v", err)
@@ -227,11 +227,11 @@ func TestServeEndsCallsTheClientLeaves(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		defer outW.Close()
-		done <- Serve(context.Background(), inR, outW, func(ctx context.Context, tool string, args json.RawMessage) (string, error) {
+		done <- Serve(context.Background(), inR, outW, func(ctx context.Context, tool string, args json.RawMessage) (Reply, error) {
 			started <- string(args)
 			<-ctx.Done()
 			ended <- string(args)
-			return "", ctx.Err()
+			return Reply{}, ctx.Err()
 		})
 	}()
 	io.WriteString(inW, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"browser_navigate","arguments":{"url":"a"}}}`+"\n"+
@@ -276,7 +276,7 @@ func TestTheBridgeHangsUpOnASilentCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	go Accept(ln, func(context.Context, string, json.RawMessage) (string, error) { return "", nil })
+	go Accept(ln, func(context.Context, string, json.RawMessage) (Reply, error) { return Reply{}, nil })
 	conn, err := net.Dial("unix", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -297,7 +297,7 @@ func TestTheBridgeSaysWhyItCantReachTheApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	go Accept(ln, func(context.Context, string, json.RawMessage) (string, error) { return "ok", nil })
+	go Accept(ln, func(context.Context, string, json.RawMessage) (Reply, error) { return Text("ok"), nil })
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := Dial(dir)(ctx, "browser_tabs", json.RawMessage(`{}`)); !errors.Is(err, context.Canceled) {
@@ -356,11 +356,11 @@ func TestTheBridgeOutlastsAFailingAccept(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	go Accept(&flaky{Listener: ln, fails: 3}, func(context.Context, string, json.RawMessage) (string, error) { return "ok", nil })
+	go Accept(&flaky{Listener: ln, fails: 3}, func(context.Context, string, json.RawMessage) (Reply, error) { return Text("ok"), nil })
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if got, err := Dial(dir)(ctx, "browser_tabs", json.RawMessage(`{}`)); err != nil || got != "ok" {
-		t.Errorf("after accepts failed: %q, %v", got, err)
+	if got, err := Dial(dir)(ctx, "browser_tabs", json.RawMessage(`{}`)); err != nil || got.Text != "ok" {
+		t.Errorf("after accepts failed: %+v, %v", got, err)
 	}
 }
 
@@ -373,20 +373,25 @@ func TestTheBridgeHearsOnlyAHangUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	go Accept(ln, func(ctx context.Context, _ string, _ json.RawMessage) (string, error) {
+	go Accept(ln, func(ctx context.Context, _ string, _ json.RawMessage) (Reply, error) {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return Reply{}, ctx.Err()
 		case <-time.After(200 * time.Millisecond):
-			return "ok", nil
+			return Text("ok"), nil
 		}
 	})
+	tok, err := os.ReadFile(TokenPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
 	conn, err := net.Dial("unix", Socket(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	io.WriteString(conn, `{"tool":"browser_tabs","args":{}}`+"\n\n")
+	req, _ := json.Marshal(bridgeRequest{Token: strings.TrimSpace(string(tok)), Tool: "browser_tabs", Args: json.RawMessage(`{}`)})
+	conn.Write(append(req, '\n', '\n'))
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	line, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil || !strings.Contains(line, `"text":"ok"`) {
@@ -410,5 +415,96 @@ func TestServeEndsWithItsContext(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Serve went on after its context ended")
+	}
+}
+
+func TestTheBridgeAuthenticatesToken(t *testing.T) {
+	dir := socketDir(t)
+	ln, err := Listen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokPath := TokenPath(dir)
+	if runtime.GOOS != "windows" {
+		if fi, err := os.Stat(tokPath); err != nil || fi.Mode().Perm() != 0o600 {
+			t.Fatalf("token file %v: err=%v mode=%v, want 0600", tokPath, err, fi.Mode().Perm())
+		}
+	}
+	called := 0
+	go Accept(ln, func(ctx context.Context, tool string, _ json.RawMessage) (Reply, error) {
+		called++
+		return Text("ok:" + tool), nil
+	})
+	rawCall := func(token string) string {
+		conn, err := net.Dial("unix", Socket(dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		req, _ := json.Marshal(bridgeRequest{Token: token, Tool: "browser_tabs", Args: json.RawMessage(`{"action":"list"}`)})
+		conn.Write(append(req, '\n'))
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		line, err := bufio.NewReader(conn).ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		return line
+	}
+	if line := rawCall(""); !strings.Contains(line, `"error":"browser: unauthorized"`) {
+		t.Errorf("missing token got %s", line)
+	}
+	if line := rawCall("wrong-token"); !strings.Contains(line, `"error":"browser: unauthorized"`) {
+		t.Errorf("wrong token got %s", line)
+	}
+	if called != 0 {
+		t.Errorf("handler ran %d times on unauthenticated callers", called)
+	}
+	if r, err := Dial(dir)(context.Background(), "browser_tabs", json.RawMessage(`{"action":"list"}`)); err != nil || r.Text != "ok:browser_tabs" {
+		t.Errorf("valid token dial: %+v, %v", r, err)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tokPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("token file still exists after Close: %v", err)
+	}
+}
+
+func TestServeEncodesImageReply(t *testing.T) {
+	pngBytes := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}
+	send := session(t, func(_ context.Context, tool string, _ json.RawMessage) (Reply, error) {
+		if tool != "browser_screenshot" {
+			return Reply{}, errors.New("unexpected")
+		}
+		return Reply{Text: "Screenshot of tab 1", Image: pngBytes, MimeType: "image/png"}, nil
+	})
+	res := send(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_screenshot","arguments":{}}}`)
+	items := res["result"].(map[string]any)["content"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("got %d content blocks, want 2: %v", len(items), items)
+	}
+	img := items[0].(map[string]any)
+	txt := items[1].(map[string]any)
+	if img["type"] != "image" || img["mimeType"] != "image/png" || img["data"] == "" {
+		t.Errorf("unexpected image block: %v", img)
+	}
+	if txt["type"] != "text" || txt["text"] != "Screenshot of tab 1" {
+		t.Errorf("unexpected text block: %v", txt)
+	}
+}
+
+func TestBridgePropagatesThread(t *testing.T) {
+	dir := socketDir(t)
+	ln, err := Listen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go Accept(ln, func(ctx context.Context, _ string, _ json.RawMessage) (Reply, error) {
+		return Text("thread=" + ThreadFromContext(ctx)), nil
+	})
+	r, err := DialWithThread(dir, "01THREADXYZ")(context.Background(), "browser_tabs", json.RawMessage(`{"action":"list"}`))
+	if err != nil || r.Text != "thread=01THREADXYZ" {
+		t.Errorf("DialWithThread: %+v, %v", r, err)
 	}
 }

@@ -3,7 +3,7 @@
   "name": "Pull requests",
   "description": "The pull request of a thread's branch, in the thread's header: its state and checks, Create PR with a title and description a model can write, Ready for review, and a draft that asks the agent to fix failing checks. Built into Glitched; make a copy in Settings › Plugins to change it.",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "main.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": ["ui.place", "threads:read", "programs", "models:ask", "clipboard", "composer"],

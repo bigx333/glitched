@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +23,15 @@ func writeOwnPlugin(t *testing.T, a *app, folder, manifest, js string) {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string]string{"plugin.json": manifest, "index.js": js} {
+	var parsed struct {
+		Main string `json:"main"`
+	}
+	json.Unmarshal([]byte(manifest), &parsed)
+	entry := parsed.Main
+	if entry == "" {
+		entry = "index.js"
+	}
+	for name, body := range map[string]string{"plugin.json": manifest, entry: js} {
 		if err := os.WriteFile(filepath.Join(dst, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -96,7 +105,7 @@ func TestTheHeaderActionsAreABuiltInPluginYoursReplaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	js := filepath.Join(copied, "main.js")
+	js := filepath.Join(copied, "main.ts")
 	b, _ := os.ReadFile(js)
 	os.WriteFile(js, []byte(strings.ReplaceAll(string(b), `"Commit & push"`, `"Ship it"`)), 0o644)
 	a.plugins.Reload()
