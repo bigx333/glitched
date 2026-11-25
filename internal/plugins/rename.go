@@ -21,26 +21,26 @@ var renamedBuiltins = map[string]string{
 
 var errNoRenameMigration = errors.New("no renamed built-in preferences to migrate")
 
-// migrateRenamedPrefs moves what the user chose for a renamed built-in to
-// its new id. While one of the user's plugins shadows it under the old id,
-// the old id's enabled state, grants, settings and consent are that copy's
-// and stay; a revoked capability is the built-in's and moves either way.
+// migrateRenamedPrefs moves the choices that are the renamed built-in's
+// own: a capability revoked from it always, and its off switch when no
+// plugin of the user's has either id. A copy's grants, settings and consent
+// stay under the old id; Plan declares no settings of its own.
 func migrateRenamedPrefs(stateDir string, logf func(string, ...any)) {
 	var current prefs
 	if err := jsonfile.Load(prefsPath(stateDir), &current); err != nil {
 		return // Open logs the file it can't read.
 	}
 	entries, _ := os.ReadDir(Dir(stateDir))
-	shadows := shadowRenames(stateDir, entries)
-	if !renameMigrationNeeded(current, shadows) {
+	ids := userPluginIDs(stateDir, entries)
+	if !renameMigrationNeeded(current, ids) {
 		return
 	}
 	if _, err := jsonfile.Edit(prefsPath(stateDir), func(p *prefs) error {
-		if !renameMigrationNeeded(*p, shadows) {
+		if !renameMigrationNeeded(*p, ids) {
 			return errNoRenameMigration
 		}
 		for newID, oldID := range renamedBuiltins {
-			migrateRenamedPref(p, oldID, newID, shadows[newID] == oldID)
+			migrateRenamedPref(p, oldID, newID, !ids[oldID] && !ids[newID])
 		}
 		return nil
 	}); err != nil && !errors.Is(err, errNoRenameMigration) {
@@ -48,66 +48,50 @@ func migrateRenamedPrefs(stateDir string, logf func(string, ...any)) {
 	}
 }
 
-func renameMigrationNeeded(p prefs, shadows map[string]string) bool {
+func renameMigrationNeeded(p prefs, ids map[string]bool) bool {
 	for newID, oldID := range renamedBuiltins {
-		if shadows[newID] == oldID {
-			_, ok := p.Revoked[oldID]
-			if ok {
-				return true
-			}
-		} else if hasPref(p, oldID) {
+		if _, ok := p.Revoked[oldID]; ok {
+			return true
+		}
+		if !ids[oldID] && !ids[newID] && slices.Contains(p.Disabled, oldID) {
 			return true
 		}
 	}
 	return false
 }
 
-func hasPref(p prefs, id string) bool {
-	if slices.Contains(p.Disabled, id) {
-		return true
-	}
-	for _, m := range []map[string][]string{p.Grants, p.Revoked} {
-		if _, ok := m[id]; ok {
-			return true
+func migrateRenamedPref(p *prefs, oldID, newID string, migrateSwitch bool) {
+	moveRevoked(p.Revoked, oldID, newID)
+	if migrateSwitch && slices.Contains(p.Disabled, oldID) {
+		p.Disabled = slices.DeleteFunc(p.Disabled, func(id string) bool { return id == oldID })
+		if !slices.Contains(p.Disabled, newID) {
+			p.Disabled = append(p.Disabled, newID)
 		}
 	}
-	if _, ok := p.Settings[id]; ok {
-		return true
-	}
-	_, ok := p.Consent[id]
-	return ok
 }
 
-func migrateRenamedPref(p *prefs, oldID, newID string, copyShadows bool) {
-	if !copyShadows {
-		if slices.Contains(p.Disabled, oldID) {
-			p.Disabled = slices.DeleteFunc(p.Disabled, func(id string) bool { return id == oldID })
-			if !slices.Contains(p.Disabled, newID) {
-				p.Disabled = append(p.Disabled, newID)
-			}
-		}
-		movePref(p.Grants, oldID, newID)
-		movePref(p.Settings, oldID, newID)
-		movePref(p.Consent, oldID, newID)
-	}
-	movePref(p.Revoked, oldID, newID)
-}
-
-func movePref[V any](m map[string]V, oldID, newID string) {
-	v, ok := m[oldID]
+func moveRevoked(m map[string][]string, oldID, newID string) {
+	old, ok := m[oldID]
 	if !ok {
 		return
 	}
-	if _, ok := m[newID]; !ok {
-		m[newID] = v
+	next := slices.Clone(m[newID])
+	for _, capability := range old {
+		if !slices.Contains(next, capability) {
+			next = append(next, capability)
+		}
+	}
+	if len(next) == 0 {
+		delete(m, newID)
+	} else {
+		m[newID] = next
 	}
 	delete(m, oldID)
 }
 
-// shadowRenames are the old ids under which the user's plugins shadow
-// renamed built-ins, by new id. A plugin already installed under the new
-// id wins, as one under the built-in's id does without a rename.
-func shadowRenames(stateDir string, entries []os.DirEntry) map[string]string {
+// userPluginIDs are the manifest ids of the plugins installed under the
+// user's plugins folder, whether or not they load.
+func userPluginIDs(stateDir string, entries []os.DirEntry) map[string]bool {
 	ids := map[string]bool{}
 	for _, e := range entries {
 		folder := filepath.Join(Dir(stateDir), e.Name())
@@ -118,6 +102,14 @@ func shadowRenames(stateDir string, entries []os.DirEntry) map[string]string {
 			ids[m.ID] = true
 		}
 	}
+	return ids
+}
+
+// shadowRenames are the old ids under which the user's plugins shadow
+// renamed built-ins, by new id. A plugin already installed under the new
+// id wins, as one under the built-in's id does without a rename.
+func shadowRenames(stateDir string, entries []os.DirEntry) map[string]string {
+	ids := userPluginIDs(stateDir, entries)
 	out := map[string]string{}
 	for newID, oldID := range renamedBuiltins {
 		if ids[oldID] && !ids[newID] {

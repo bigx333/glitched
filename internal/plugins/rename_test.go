@@ -74,6 +74,63 @@ func TestARenamedBuiltInKeepsItsOwnChoices(t *testing.T) {
 	}
 }
 
+func TestARenamedBuiltInMergesRevokedGrants(t *testing.T) {
+	state := t.TempDir()
+	bundled, release := checklistBuiltIn(t)
+	writePluginPrefs(t, state, prefs{Revoked: map[string][]string{
+		"plan":      {"ui.replace"},
+		"checklist": {"messages:read"},
+	}})
+	openBuiltIn(t, state, bundled, release)
+
+	p := readPluginPrefs(t, state)
+	if !slices.Contains(p.Revoked["checklist"], "ui.replace") || !slices.Contains(p.Revoked["checklist"], "messages:read") {
+		t.Fatalf("revoked grants after the migration: %+v", p.Revoked)
+	}
+	if _, ok := p.Revoked["plan"]; ok {
+		t.Fatalf("the old id's revoked grants stayed: %+v", p.Revoked)
+	}
+}
+
+func TestARenamedBuiltInLeavesACopysOwnChoices(t *testing.T) {
+	state := t.TempDir()
+	bundled, release := checklistBuiltIn(t)
+	// As a reverted copy leaves them: grants and settings under plan were
+	// never the built-in's, so the migration keeps them where a copy restored
+	// from .reverted finds them.
+	writePluginPrefs(t, state, prefs{
+		Grants:   map[string][]string{"plan": {"ui.replace"}},
+		Settings: map[string]map[string]json.RawMessage{"plan": {"setting": json.RawMessage(`"value"`)}},
+	})
+	openBuiltIn(t, state, bundled, release)
+
+	p := readPluginPrefs(t, state)
+	if !slices.Contains(p.Grants["plan"], "ui.replace") || len(p.Settings["plan"]) != 1 {
+		t.Fatalf("a copy's own choices moved: %+v", p)
+	}
+	if _, ok := p.Grants["checklist"]; ok {
+		t.Fatalf("a copy's grants moved: %+v", p.Grants)
+	}
+	if _, ok := p.Settings["checklist"]; ok {
+		t.Fatalf("a copy's settings moved: %+v", p.Settings)
+	}
+}
+
+func TestARenamedBuiltInsSwitchDoesntMoveToAPluginOfItsNewID(t *testing.T) {
+	state := t.TempDir()
+	bundled, release := checklistBuiltIn(t)
+	dst := filepath.Join(Dir(state), "checklist")
+	writeReplacer(t, dst, replacerManifest("checklist", "thread.header.actions", "2"), actionsModule)
+	signAsOwn(t, state, dst)
+	writePluginPrefs(t, state, prefs{Disabled: []string{"plan"}})
+	openBuiltIn(t, state, bundled, release)
+
+	p := readPluginPrefs(t, state)
+	if !slices.Contains(p.Disabled, "plan") || slices.Contains(p.Disabled, "checklist") {
+		t.Fatalf("the off switch moved onto the installed plugin: %v", p.Disabled)
+	}
+}
+
 func TestACopyOfARenamedBuiltInStillShadowsItAndReverts(t *testing.T) {
 	state := t.TempDir()
 	bundled, release := checklistBuiltIn(t)
