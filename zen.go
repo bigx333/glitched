@@ -175,7 +175,7 @@ func (a *app) viewFor(id api.ID, rs rows) timelineView {
 	if m.epoch != rs.epoch {
 		m.turns = nil
 	}
-	m.zen, m.turns = zenViewKeeping(es, m.open, m.turns, rs.stable)
+	m.zen, m.turns = zenViewKeeping(es, m.open, m.turns, rs.stable, rs.asks)
 	m.change, m.first, m.n, m.built, m.epoch = rs.change, &es[0], len(es), m.opened, rs.epoch
 	return m.zen
 }
@@ -310,19 +310,26 @@ func foldable(k entryKind) bool { return k == entryWork || k == entryPlan || k =
 // plan folds nothing. The folds open says are open list their rows under
 // their lines.
 func zenView(es []entry, open map[string]bool) timelineView {
-	v, _ := zenViewKeeping(es, open, nil, 0)
+	v, _ := zenViewKeeping(es, open, nil, 0, addAsks(nil, es, 0))
 	return v
 }
 
-// A zenTurn is a turn's folds, which its rows, from start to end, decide.
+// A zenTurn is a turn's folds, which its rows, from start to end, decide,
+// and whether they were fixed as it was folded: its rows stable, and no
+// run of them waiting.
 type zenTurn struct {
 	start, end int
+	fixed      bool
 	folds      []*zenFold
 }
 
-// zenViewKeeping is zenView's, with the folds of the turns kept that end
-// by row stable, whose rows are the same, and the turns it folded.
-func zenViewKeeping(es []entry, open map[string]bool, kept []zenTurn, stable int) (timelineView, []zenTurn) {
+// zenViewKeeping is zenView's, with asks the rows of the requests waiting,
+// and the turns it folded. It keeps the folds of the turns that were fixed
+// as they were folded and still are: they end by row stable, and before a
+// run that waits, whose rows its requests fold otherwise.
+func zenViewKeeping(es []entry, open map[string]bool, kept []zenTurn, stable int, asks []int) (timelineView, []zenTurn) {
+	w := waitsOf(es, asks)
+	stable = min(stable, w.from)
 	v := timelineView{es: es, items: make([]listItem, 0, len(es)), at: make([]int, len(es))}
 	n := 0
 	for start, end := 0, 0; start < len(es); start = end {
@@ -330,11 +337,11 @@ func zenViewKeeping(es []entry, open map[string]bool, kept []zenTurn, stable int
 		for end < len(es) && es[end].kind != entryUser {
 			end++
 		}
-		t := zenTurn{start: start, end: end}
-		if n < len(kept) && kept[n].start == start && kept[n].end == end && end <= stable {
+		t := zenTurn{start: start, end: end, fixed: end <= stable}
+		if n < len(kept) && kept[n].start == start && kept[n].end == end && kept[n].fixed && t.fixed {
 			t.folds = kept[n].folds
 		} else {
-			t.folds = turnFolds(es, start, end)
+			t.folds = turnFolds(es, start, end, &w)
 		}
 		if n < len(kept) {
 			kept[n] = t
@@ -376,31 +383,61 @@ func (v *timelineView) addTurn(t zenTurn, open map[string]bool) {
 	}
 }
 
+// zenWaits is what the requests waiting change of their runs' folds, in
+// any turn of the run: the replies that explain them, each its run's last
+// before it, which show, and what each run's lines say it waits on, the
+// last request's. from is the first row of a run that waits, its message.
+type zenWaits struct {
+	kept   []int
+	paused []zenPause
+	from   int
+}
+
+type zenPause struct {
+	run  api.ID
+	says string
+}
+
+// waitsOf is what the requests of the rows asks change, looking back from
+// each no further than its run's message.
+func waitsOf(es []entry, asks []int) zenWaits {
+	w := zenWaits{from: len(es)}
+	for _, k := range asks {
+		r := es[k].request
+		w.paused = append(w.paused, zenPause{r.Run, pausedFor[r.Kind != api.KindApproval]})
+		message := "m/" + r.Run.String()
+		reply, i := -1, k-1
+		for ; i >= 0 && (es[i].kind != entryUser || es[i].key != message); i-- {
+			if reply < 0 && es[i].kind == entryAssistant && es[i].run == r.Run {
+				reply = i
+			}
+		}
+		if reply >= 0 {
+			w.kept = append(w.kept, reply)
+		}
+		w.from = min(w.from, max(i, 0))
+	}
+	return w
+}
+
+// pausedOf is what the run's lines say it waits on, "" for nothing.
+func (w *zenWaits) pausedOf(r api.ID) string {
+	says := ""
+	for _, p := range w.paused {
+		if p.run == r {
+			says = p.says
+		}
+	}
+	return says
+}
+
 // turnFolds are the folds of the runs of the turn's rows, from start to
-// end.
-func turnFolds(es []entry, start, end int) []*zenFold {
+// end, as the requests waiting change them.
+func turnFolds(es []entry, start, end int, w *zenWaits) []*zenFold {
 	runs := make([]api.ID, 0, 4)
 	for i := start; i < end; i++ {
 		if r := es[i].run; foldable(es[i].kind) && !slices.Contains(runs, r) {
 			runs = append(runs, r)
-		}
-	}
-	// A request waiting keeps the reply that explains it, its run's last
-	// before it, and its run's line says what it waits on.
-	asks, kept := make([]*client.RequestEntry, 0, 4), make([]int, 0, 4)
-	for k := start; k < end; k++ {
-		r := es[k].request
-		if r == nil || r.State != api.RequestPending {
-			continue
-		}
-		asks = append(asks, r)
-		for i := k - 1; i >= start; i-- {
-			if e := es[i]; e.kind == entryAssistant && e.run == r.Run {
-				kept = append(kept, i)
-				break
-			} else if e.request != nil && e.request.Run == r.Run {
-				break
-			}
 		}
 	}
 	folds := make([]*zenFold, 0, len(runs))
@@ -419,7 +456,7 @@ func turnFolds(es []entry, start, end int) []*zenFold {
 		work := false
 		for i := start; i < end; i++ {
 			e := es[i]
-			if e.run != r || !foldable(e.kind) || e.kind == entryAssistant && !e.turn.IsZero() || keepLast && i == last || slices.Contains(kept, i) {
+			if e.run != r || !foldable(e.kind) || e.kind == entryAssistant && !e.turn.IsZero() || keepLast && i == last || slices.Contains(w.kept, i) {
 				continue
 			}
 			f.rows = append(f.rows, i)
@@ -428,11 +465,7 @@ func turnFolds(es []entry, start, end int) []*zenFold {
 		if !work {
 			continue
 		}
-		for _, q := range asks {
-			if q.Run == r {
-				f.paused = pausedFor[q.Kind != api.KindApproval]
-			}
-		}
+		f.paused = w.pausedOf(r)
 		spans := make([][2]time.Time, 0, 8)
 		for _, i := range f.rows {
 			if e := es[i]; e.kind == entryWork {
