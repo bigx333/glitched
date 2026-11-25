@@ -34,7 +34,7 @@ func TestALinkMintedOnOneMachineIsAddedOnAnother(t *testing.T) {
 	}
 	_, rest, _ := strings.Cut(out, "shown only this once:\n\n  ")
 	token, _, _ := strings.Cut(rest, "\n")
-	if token == "" || !strings.Contains(out, "glitched link -add") || !strings.Contains(out, "\n  glitched pair -dir "+shellQuote(b)+" -revoke a\n") {
+	if token == "" || !strings.Contains(out, "glitched link -add") || !strings.Contains(out, "\n  glitched pair -dir "+shellQuote(b)+" -remove a\n") {
 		t.Fatalf("pair -link printed no token and add line:\n%s", out)
 	}
 	d, err := daemon.Start(ctx, daemon.Config{Dir: b, Hub: true, Listen: []string{"127.0.0.1:0"}, Providers: provider.Mux{"fake": fake.New(fake.Turn(true))}})
@@ -59,7 +59,7 @@ func TestALinkMintedOnOneMachineIsAddedOnAnother(t *testing.T) {
 		{"-dir", b, "-name", "c", "-access", "full"},
 		{"-dir", b, "-children", "most"},
 		{"-dir", b, "-name", "review", "laptop", "-link"},
-		{"-dir", b, "-list", "-revoke", "a"},
+		{"-dir", b, "-list", "-remove", "a"},
 		{"-dir", b, "-link"},
 	} {
 		if err := pair(ctx, args); !errors.As(err, new(usageError)) {

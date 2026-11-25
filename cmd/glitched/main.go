@@ -55,7 +55,7 @@ const usage = `usage: glitched <command> [flags]
   serve     run the host engine, and the hub role unless -hub=false; the next serve
             on -dir, and the GUI's own engine, run as it did unless a flag says otherwise
   status    whether an engine serves -dir, its hub, its tailnet listeners and its tokens
-  pair      mint a token for a client on the tailnet: glitched pair -name LABEL [-link] | -list | -revoke LABEL
+  pair      mint a token for a client on the tailnet: glitched pair -name LABEL [-link] | -list | -remove LABEL
   link      add a machine whose engine minted this one a link: glitched link -add LABEL -server ADDR -token TOKEN | -list | -remove LABEL
   run       send a message and stream the turn: glitched run [-thread ID] [-provider claude] [-yes] text...
   threads   list this host's threads
@@ -309,7 +309,7 @@ func pair(_ context.Context, args []string) error {
 	dir := dirFlag(fs)
 	name := fs.String("name", "", "mint a token with this label")
 	list := fs.Bool("list", false, "list the tokens")
-	revoke := fs.String("revoke", "", "revoke the token with this label")
+	remove := fs.String("remove", "", "remove the token with this label: the client, or for a link the machine, it was minted for")
 	link := fs.Bool("link", false, "mint, for the engine of the machine -name names, a link: a token its agents start children here with, and nothing else")
 	access := fs.String("access", "auto-edits", "with -link, the most a child the link starts may run at: ask, auto-edits or full")
 	working := fs.Int("working", 0, "with -link, how many of the link's children may work at once; 0 is this engine's child limit")
@@ -322,8 +322,8 @@ func pair(_ context.Context, args []string) error {
 	switch {
 	case fs.NArg() > 0:
 		return usageError("pair: takes no arguments after its flags; quote a label with spaces")
-	case countSet(set, "name", "list", "revoke", "children") > 1:
-		return usageError("pair: give one of -name, -list, -revoke and -children")
+	case countSet(set, "name", "list", "remove", "children") > 1:
+		return usageError("pair: give one of -name, -list, -remove and -children")
 	case *link && *name == "":
 		return usageError("pair: -link goes with -name")
 	case !*link && (set["access"] || set["working"] || set["all"]):
@@ -345,14 +345,14 @@ func pair(_ context.Context, args []string) error {
 			fmt.Printf("%s  %s%s\n", t.Created.Local().Format(time.DateTime), t.Label, scope)
 		}
 		return nil
-	case *revoke != "":
-		if err := daemon.Revoke(*dir, *revoke); err != nil {
+	case *remove != "":
+		if err := daemon.RemoveToken(*dir, *remove); err != nil {
 			return err
 		}
-		fmt.Println("revoked", *revoke)
+		fmt.Println("removed", *remove)
 		return nil
 	case *name == "":
-		return usageError("pair: give -name, -list, -revoke or -children")
+		return usageError("pair: give -name, -list, -remove or -children")
 	}
 	host := "<this machine's tailnet name>"
 	probe, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -361,10 +361,10 @@ func pair(_ context.Context, args []string) error {
 	}
 	cancel()
 	addr := net.JoinHostPort(host, daemon.Port)
-	cmd, revokeCmd := "glitched serve", "glitched pair"
+	cmd, pairCmd := "glitched serve", "glitched pair"
 	if set["dir"] {
 		cmd += " -dir " + shellQuote(*dir)
-		revokeCmd += " -dir " + shellQuote(*dir)
+		pairCmd += " -dir " + shellQuote(*dir)
 	}
 	if *link {
 		a, err := daemon.ParseAccess(*access)
@@ -376,7 +376,7 @@ func pair(_ context.Context, args []string) error {
 			return err
 		}
 		fmt.Printf("Link %s for %s, at %s at most. Its token, shown only this once:\n\n  %s\n\n", l.ID, *name, daemon.AccessName(l.Access), token)
-		fmt.Printf("Serve on the tailnet with:\n\n  %s -tailnet\n\nThen on %s:\n\n  glitched link -add <this machine> -server %s -token %s\n\nRevoke it here with:\n\n  %s -revoke %s\n", cmd, *name, addr, token, revokeCmd, shellQuote(*name))
+		fmt.Printf("Serve on the tailnet with:\n\n  %s -tailnet\n\nThen on %s:\n\n  glitched link -add <this machine> -server %s -token %s\n\nRemove %s here with:\n\n  %s -remove %s\n", cmd, *name, addr, token, *name, pairCmd, shellQuote(*name))
 		return nil
 	}
 	token, err := daemon.Pair(*dir, *name)
@@ -450,7 +450,7 @@ func link(ctx context.Context, args []string) error {
 		if err := daemon.RemoveMachine(*dir, *remove); err != nil {
 			return err
 		}
-		fmt.Printf("removed %s; its link stays valid there until it is revoked on that machine\n", *remove)
+		fmt.Printf("removed %s; its link still works there until that machine removes this one or turns off children from other machines\n", *remove)
 		return nil
 	case *add == "":
 		return usageError("link: give -add, -list or -remove")

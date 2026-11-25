@@ -88,7 +88,7 @@ func classify(err error, label string) (class, string) {
 	case errors.Is(err, api.ErrOverflow):
 		return catchUp, ""
 	case errors.Is(err, transport.ErrRefused):
-		return handshakeRefused, label + " no longer accepts this machine's link, so what runs there is its person's to stop by hand"
+		return handshakeRefused, label + " removed this machine, or turned off children from other machines, so what runs there is its person's to stop by hand"
 	case errors.As(err, &rej):
 		return final, label + " refused the child: " + rej.Reason
 	case errors.Is(err, api.ErrNotAllowed):

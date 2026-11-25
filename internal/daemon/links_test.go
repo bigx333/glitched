@@ -6,11 +6,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/engine"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
@@ -117,10 +119,10 @@ func TestALinksTokenReachesOnlyItsScopeOnARealEngine(t *testing.T) {
 	}
 }
 
-// A revoke refuses the link's next handshake and closes its socket within a
+// A removal refuses the link's next handshake and closes its socket within a
 // second; a link minted again under the label is another link, and the old
 // token reaches nothing.
-func TestARevokedLinkIsGoneAndAReMintIsAnotherLink(t *testing.T) {
+func TestARemovedMachinesLinkIsGoneAndAReMintIsAnotherLink(t *testing.T) {
 	quiet(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -142,23 +144,23 @@ func TestARevokedLinkIsGoneAndAReMintIsAnotherLink(t *testing.T) {
 	if _, err := live.Info(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := Revoke(dir, "a"); err != nil {
+	if err := RemoveToken(dir, "a"); err != nil {
 		t.Fatal(err)
 	}
-	revoked := time.Now()
+	removed := time.Now()
 	for {
 		if _, err := live.Info(ctx); err != nil {
 			break
 		}
-		if time.Since(revoked) > 3*time.Second {
-			t.Fatal("the revoked link's socket still answers 3s after the revoke")
+		if time.Since(removed) > 3*time.Second {
+			t.Fatal("the removed link's socket still answers 3s after the removal")
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	again := transport.NewEndpointClient(transport.Tailnet{Address: addr, Token: old}, api.ID{})
 	defer again.Close()
 	if _, err := again.Info(ctx); !errors.Is(err, transport.ErrRefused) {
-		t.Fatalf("a handshake with the revoked link's token: %v, want ErrRefused", err)
+		t.Fatalf("a handshake with the removed link's token: %v, want ErrRefused", err)
 	}
 
 	fresh, second, err := PairLink(dir, "a", api.Link{Access: api.AccessAsk})
@@ -166,10 +168,10 @@ func TestARevokedLinkIsGoneAndAReMintIsAnotherLink(t *testing.T) {
 		t.Fatal(err)
 	}
 	if second.ID == first.ID {
-		t.Fatal("a link minted again under its label kept the revoked one's id")
+		t.Fatal("a link minted again under its label kept the removed one's id")
 	}
 	if _, err := again.Info(ctx); !errors.Is(err, transport.ErrRefused) {
-		t.Fatalf("the revoked token after a re-mint under its label: %v, want ErrRefused", err)
+		t.Fatalf("the removed token after a re-mint under its label: %v, want ErrRefused", err)
 	}
 	ep := transport.NewEndpointClient(transport.Tailnet{Address: addr, Token: fresh}, api.ID{})
 	defer ep.Close()
@@ -397,4 +399,74 @@ func TestAMachineWithoutItsLinkRefusesOnlyRemoteChildren(t *testing.T) {
 			refused(t, "a child on a machine with "+tc.name, errs[1], "machines.json can't be read")
 		})
 	}
+}
+
+// Turning children from other machines off on B removes every machine it
+// minted a link for at once: a link's next handshake is refused as soon as
+// the setting is written, its live socket closes, and its token is gone,
+// while a whole-engine token stays. A's row is lost for the removal, and
+// the child already running on B is left alone. Turned on again, it starts
+// with no links, so the old token stays refused.
+func TestTurningChildrenOffRemovesEveryMachine(t *testing.T) {
+	p := newRemotes(t, fake.New(fake.Asking()), "fake", engine.Limits{})
+	kid := p.place("there")
+	there := p.bound(kid).Thread
+	until(t, "the child waiting on b", func() bool { return p.placeholder(kid).Remote.Slot == api.RunWaiting })
+	if _, err := Pair(p.dirB, "phone"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	live := transport.NewEndpointClient(transport.Tailnet{Address: p.addrB, Token: p.token}, api.ID{})
+	defer live.Close()
+	if _, err := live.Info(ctx); err != nil {
+		t.Fatal(err)
+	}
+	refused := func(when string) {
+		t.Helper()
+		ep := transport.NewEndpointClient(transport.Tailnet{Address: p.addrB, Token: p.token}, api.ID{})
+		defer ep.Close()
+		if _, err := ep.Info(ctx); !errors.Is(err, transport.ErrRefused) {
+			t.Fatalf("a handshake with the link's token %s: %v, want ErrRefused", when, err)
+		}
+	}
+	links := func() []Token {
+		t.Helper()
+		ts, err := Tokens(p.dirB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.DeleteFunc(ts, func(t Token) bool { return t.Link == nil })
+	}
+
+	if _, err := Edit(p.dirB, func(cfg *Config) error { cfg.ChildrenFromOtherMachines = nil; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	refused("once children from other machines are off")
+	if ls := links(); len(ls) != 0 {
+		t.Fatalf("tokens.json keeps %+v once children from other machines are off", ls)
+	}
+	if ts, _ := Tokens(p.dirB); !slices.ContainsFunc(ts, func(t Token) bool { return t.Label == "phone" && t.Link == nil }) {
+		t.Fatalf("tokens.json holds %+v, want phone's whole-engine token kept", ts)
+	}
+	off := time.Now()
+	for {
+		if _, err := live.Info(ctx); err != nil {
+			break
+		}
+		if time.Since(off) > 3*time.Second {
+			t.Fatal("the link's live socket still answers 3s after children from other machines went off")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	p.lostOnce(kid, "b removed this machine, or turned off children from other machines")
+	if th := p.onB(there); th.Live() == nil {
+		t.Fatal("turning children from other machines off stopped the child already running on b")
+	}
+
+	allowChildren(t, p.dirB, api.AccessAutoEdits)
+	if ls := links(); len(ls) != 0 {
+		t.Fatalf("tokens.json holds %+v once children from other machines are on again, want no link", ls)
+	}
+	refused("once children from other machines are on again")
 }

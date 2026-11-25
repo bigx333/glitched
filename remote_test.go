@@ -68,8 +68,8 @@ func TestChildrenFromOtherMachinesWarnsAtFull(t *testing.T) {
 }
 
 // On B, a link is minted for a label, at most at the setting, its token
-// shown once with the line to run on A, listed, and revoked.
-func TestMintingALinkShowsItsTokenOnceAndRevokes(t *testing.T) {
+// shown once with the line to run on A, listed, and removed.
+func TestMintingALinkShowsItsTokenOnceAndRemoves(t *testing.T) {
 	dir := tempDir(t)
 	auto := api.AccessAutoEdits
 	if _, err := daemon.Edit(dir, func(c *daemon.Config) error { c.ChildrenFromOtherMachines = &auto; return nil }); err != nil {
@@ -114,8 +114,8 @@ func TestMintingALinkShowsItsTokenOnceAndRevokes(t *testing.T) {
 	}
 	h.tt.Advance(time.Second)
 	shoot(t, h, "b-links")
-	h.click("Revoke")
-	h.until("the link revoked", func() bool {
+	h.click("Remove")
+	h.until("the link removed", func() bool {
 		ts, _ := daemon.Tokens(dir)
 		return len(ts) == 0 && !h.tt.HasText("laptop")
 	})
@@ -126,8 +126,8 @@ func TestMintingALinkShowsItsTokenOnceAndRevokes(t *testing.T) {
 	h.until("tablet's token", func() bool { return h.a.minted.token != "" && h.tt.HasText(h.a.minted.token) })
 	token = h.a.minted.token
 	h.tt.Advance(time.Second)
-	h.click("Revoke")
-	h.until("the revoked link's token gone", func() bool { return !h.tt.HasText(token) && h.a.minted.token == "" })
+	h.click("Remove")
+	h.until("the removed link's token gone", func() bool { return !h.tt.HasText(token) && h.a.minted.token == "" })
 
 	h.a.mint.label = "phone"
 	h.tt.Frame()
@@ -158,6 +158,46 @@ func TestTheLinkCardsFitANarrowWindow(t *testing.T) {
 	h.tt.Frame()
 	fits(t, h, 760, "Off", "Full access", fullWarning, "Mint a link", "Add machine", "The link's token")
 	shoot(t, h, "b-narrow-settings")
+}
+
+// At 760 pt B's link card says, before the switch is turned off, that off
+// removes every machine below, and each machine has its own Remove. Off
+// deletes every link's token, and on again lists none.
+func TestTurningChildrenOffRemovesEveryLinkedMachine(t *testing.T) {
+	dir := tempDir(t)
+	auto := api.AccessAutoEdits
+	if _, err := daemon.Edit(dir, func(c *daemon.Config) error { c.ChildrenFromOtherMachines = &auto; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"laptop", "desk"} {
+		if _, _, err := daemon.PairLink(dir, label, api.Link{Access: api.AccessAsk}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := start(t, dir)
+	thisMachine(t, h)
+	h.tt.SetSize(760, 2400)
+	h.tt.Advance(time.Second)
+	h.tt.Frame()
+	const offLine = "The most access a child an agent on another machine starts here may run at, through a link minted below. Off removes every machine below at once and deletes its link, so on again starts with none."
+	h.until("both machines listed", func() bool { return h.tt.HasText("laptop") && h.tt.HasText("desk") })
+	fits(t, h, 760, offLine, "Remove laptop", "Remove desk")
+	shoot(t, h, "b-narrow-links")
+	h.click("Remove desk")
+	h.until("desk removed", func() bool {
+		ts, _ := daemon.Tokens(dir)
+		return len(ts) == 1 && ts[0].Label == "laptop" && !h.tt.HasText("desk")
+	})
+	h.click("Off")
+	h.until("every machine removed", func() bool {
+		ts, _ := daemon.Tokens(dir)
+		return ceilingOf(t, dir) == nil && len(ts) == 0 && !h.tt.HasText("laptop")
+	})
+	h.click(accessAuto)
+	h.until("on again", func() bool { return ceilingOf(t, dir) != nil && h.tt.HasText("Mint a link") })
+	if ts, _ := daemon.Tokens(dir); len(ts) != 0 || h.tt.HasText("laptop") {
+		t.Fatalf("tokens.json holds %+v on again, want no link", ts)
+	}
 }
 
 // On A, a machine is added with the link it minted for this one, refused
@@ -208,13 +248,13 @@ func TestAddingAndRemovingAMachineThisOneDelegatesTo(t *testing.T) {
 	shoot(t, h, "a-delegates")
 	h.click("Remove")
 	h.until("the removal's word", func() bool {
-		return h.tt.HasText("Removed desk. Its link stays valid on desk until you revoke it there, in Settings › This machine.")
+		return h.tt.HasText("Removed desk here. Its link still works on desk until it removes this machine or turns off children from other machines there, in Settings › This machine.")
 	})
 	if ms, _ := daemon.Machines(dir); len(ms) != 0 {
 		t.Fatalf("machines.json holds %+v after the remove", ms)
 	}
 	if ts, _ := daemon.Tokens(b); !slices.ContainsFunc(ts, func(t daemon.Token) bool { return t.Link != nil }) {
-		t.Error("removing the machine here revoked its link there")
+		t.Error("removing the machine here removed its link there")
 	}
 	shoot(t, h, "a-removed")
 }
@@ -268,7 +308,7 @@ func TestARemoteChildsRowSaysItsState(t *testing.T) {
 		{"idle", func(v *api.Thread) { v.Run = api.RunIdle }, "Idle on desk"},
 		{"cut-off", func(v *api.Thread) { v.Run = api.RunUncertain }, "Needs you on desk"},
 		{"held", func(v *api.Thread) { v.Run, v.Remote.Held = api.RunIdle, true }, "Held on desk"},
-		{"lost", func(v *api.Thread) { v.Remote.Lost = "the link was revoked on desk" }, "Lost on desk"},
+		{"lost", func(v *api.Thread) { v.Remote.Lost = "the link was removed on desk" }, "Lost on desk"},
 	} {
 		c.set(&kid.View)
 		h.tt.Frame()
@@ -284,7 +324,7 @@ func TestARemoteChildsRowSaysItsState(t *testing.T) {
 	}
 	h.hover("Lost on desk")
 	h.tt.Advance(time.Second)
-	if !h.tt.HasText("the link was revoked on desk") {
+	if !h.tt.HasText("the link was removed on desk") {
 		t.Errorf("the lost row's tip shows %q, want why", h.tt.Texts())
 	}
 	kid.View.Remote.Lost, kid.View.Remote.Held = "", true
@@ -447,7 +487,7 @@ func TestRemoteSurfacesFitANarrowWindow(t *testing.T) {
 	h.tt.Frame()
 	fits(t, h, 760, "Needs you on desk")
 	shoot(t, h, "a-narrow-row")
-	kid.View.Run, kid.View.Remote.Lost = api.RunIdle, "the link was revoked on desk, so this engine no longer follows the child there"
+	kid.View.Run, kid.View.Remote.Lost = api.RunIdle, "the link was removed on desk, so this engine no longer follows the child there"
 	h.a.choose(kid)
 	h.tt.Frame()
 	h.tt.Advance(time.Second)

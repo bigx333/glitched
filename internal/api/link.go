@@ -8,7 +8,7 @@ import (
 // A Link is the scope of a token this engine minted for another machine's
 // engine, so that agents there can start and follow children here: the
 // one standing grant between two engines (docs/daemon/placement-and-handoff.md).
-// ID is random and never reused, unlike the label a revoke frees, so what a
+// ID is random and never reused, unlike the label a removal frees, so what a
 // link made is stamped, counted and found by it alone.
 type Link struct {
 	ID    ID     `json:"id"`

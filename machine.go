@@ -324,9 +324,9 @@ func (a *app) tokensCard(c *ui.Context, m client.Machine) {
 					ui.Text(c, t.Label).FontWeight(500)
 					ui.Text(c, "Paired "+ago(t.Created, c.Now())).FontSize(12).TextColor(palette.muted)
 				})
-				ui.Button(c.Key("revoke"), "Revoke").TextColor(palette.red).OnClick(func() {
+				ui.Button(c.Key("remove-token"), "Remove").Label("Remove " + t.Label).TextColor(palette.red).OnClick(func() {
 					a.machineErr = ""
-					if err := a.backend.Revoke(t.Label); err != nil {
+					if err := a.backend.RemoveToken(t.Label); err != nil {
 						a.machineErr = err.Error()
 					}
 				})

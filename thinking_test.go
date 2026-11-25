@@ -205,7 +205,7 @@ func TestAThreadOutOfReachShowsNoWork(t *testing.T) {
 	if !shows(h, "Thinking…") {
 		t.Fatalf("a remote thread at work shows no sign of it: %q", h.tt.Texts())
 	}
-	if err := daemon.Revoke(dir, "box"); err != nil {
+	if err := daemon.RemoveToken(dir, "box"); err != nil {
 		t.Fatal(err)
 	}
 	h.until("refused", func() bool { return th.env.Status == client.Status(client.Refused{}) })

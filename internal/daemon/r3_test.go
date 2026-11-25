@@ -91,15 +91,15 @@ func TestR3CleanupRechecksLink(t *testing.T) {
 	}
 }
 
-func TestR3UnboundCleanupOnRevoke(t *testing.T) {
+func TestR3UnboundCleanupOnRemoval(t *testing.T) {
 	p := newRemotes(t, fake.New(fake.Turn(false)), "fake", engine.Limits{})
 	x := newProxy(t, p)
 	x.stop()
 	p.machine(x.addr)
-	k := p.place("revoked before cleanup")
+	k := p.place("removed before cleanup")
 	until(t, "attempted unbound child", func() bool { return p.placeholder(k).Remote.Attempted })
 	p.submitA(k, settleIt)
-	if err := Revoke(p.dirB, "a"); err != nil {
+	if err := RemoveToken(p.dirB, "a"); err != nil {
 		t.Fatal(err)
 	}
 	x.start()

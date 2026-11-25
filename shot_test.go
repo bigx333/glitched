@@ -398,7 +398,7 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		d := engine(t, daemon.Config{Dir: rdir, Listen: []string{"127.0.0.1:0"}}, fake.New(fake.Turn(false)))
 		addr := d.Addrs()[0].String()
 		dir := tempDir(t)
-		// Saved as they were when added: the token since revoked, the
+		// Saved as they were when added: the token since removed, the
 		// address since pointed at devbox.
 		listServers(t, dir,
 			client.Server{Label: "devbox", Addr: addr, Token: token},

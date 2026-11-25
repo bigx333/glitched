@@ -183,7 +183,7 @@ func TestReviewLostCleanupDoesNotWakeSettledParent(t *testing.T) {
 	kid := p.place("offline")
 	until(t, "attempt", func() bool { return p.placeholder(kid).Remote.Attempted })
 	p.submitA(p.parent, settleIt)
-	if err := Revoke(p.dirB, "a"); err != nil {
+	if err := RemoveToken(p.dirB, "a"); err != nil {
 		t.Fatal(err)
 	}
 	p.startB()

@@ -43,7 +43,7 @@ func ticking(t *testing.T, h *harness) {
 }
 
 // The This machine page serves the app's own engine to the tailnet and
-// pairs a token, which another app then reaches it with, until revoked.
+// pairs a token, which another app then reaches it with, until removed.
 func TestThisMachineServesAndPairs(t *testing.T) {
 	dir := tempDir(t)
 	h := start(t, dir)
@@ -103,7 +103,7 @@ func TestThisMachineServesAndPairs(t *testing.T) {
 	h.a.pairLabel = "laptop"
 	h.tt.Frame()
 	h.click("Pair")
-	h.until("laptop's token", func() bool { return h.tt.HasText("Token for laptop, shown only this once") && h.tt.HasText("Revoke") })
+	h.until("laptop's token", func() bool { return h.tt.HasText("Token for laptop, shown only this once") && h.tt.HasText("Remove") })
 	token := h.a.paired.token
 	h.tt.Advance(time.Second) // let the token's row fold in
 	if !h.tt.HasText(token) {
@@ -128,9 +128,9 @@ func TestThisMachineServesAndPairs(t *testing.T) {
 		t.Fatalf("another app couldn't reach this one with the token it paired: %v", err)
 	}
 
-	h.click("Revoke")
+	h.click("Remove")
 	h.tt.Frame()
-	o.until("the revoked token refused", func() bool {
+	o.until("the removed token refused", func() bool {
 		for _, e := range o.a.backend.Envs() {
 			if _, refused := e.Status.(client.Refused); refused && e.Name == "desk" {
 				return true
@@ -139,7 +139,7 @@ func TestThisMachineServesAndPairs(t *testing.T) {
 		return false
 	})
 	if ts, _ := daemon.Tokens(dir); len(ts) != 0 {
-		t.Errorf("tokens.json keeps %+v after the revoke", ts)
+		t.Errorf("tokens.json keeps %+v after the removal", ts)
 	}
 }
 

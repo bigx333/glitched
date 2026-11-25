@@ -803,18 +803,18 @@ func TestNetworkFailuresBetweenDefectsResetTheCount(t *testing.T) {
 	}
 }
 
-// A revoke on B while the child runs closes A's socket, and A's dials are
+// A removal on B while the child runs closes A's socket, and A's dials are
 // refused from then on: the second refusal loses the child.
-func TestARevokeOnBLosesTheChildAfterTwoRefusedDials(t *testing.T) {
+func TestRemovingThisMachineOnBLosesTheChildAfterTwoRefusedDials(t *testing.T) {
 	p := newRemotes(t, fake.New(fake.Asking()), "fake", engine.Limits{})
 	x := newProxy(t, p)
 	p.machine(x.addr)
 	kid := p.place("asks")
 	until(t, "the blocked report", func() bool { reports, _ := p.reports(kid); return len(reports) == 1 })
-	if err := Revoke(p.dirB, "a"); err != nil {
+	if err := RemoveToken(p.dirB, "a"); err != nil {
 		t.Fatal(err)
 	}
-	p.lostOnce(kid, "b no longer accepts this machine's link")
+	p.lostOnce(kid, "b removed this machine, or turned off children from other machines")
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	if x.refused != 2 {

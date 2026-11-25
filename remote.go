@@ -17,7 +17,7 @@ import (
 // Remote children: an agent here may start a child on another machine's
 // engine through a link that engine minted for this one. The machine that
 // runs the child (B) turns Children from other machines on, mints the link
-// and revokes it on its This machine page; the machine that delegates (A)
+// and removes the machine it was minted for on its This machine page; the machine that delegates (A)
 // adds B there with the link's token. On A the child is a placeholder in
 // the parent's tree, which says where it runs and opens B's thread when
 // this app has B paired; on B the thread says where it came from.
@@ -56,7 +56,7 @@ func (a *app) linksCard(c *ui.Context, m client.Machine) {
 		ui.Column(c).Key("children-from-others").Padding(14, 16).Gap(10).Children(func() {
 			ui.Column(c).Gap(2).Children(func() {
 				ui.Text(c, "Children from other machines").FontWeight(500)
-				ui.Text(c, "The most access a child an agent on another machine starts here may run at, through a link minted below. Off, no link starts one.").FontSize(12).TextColor(palette.muted)
+				ui.Text(c, "The most access a child an agent on another machine starts here may run at, through a link minted below. Off removes every machine below at once and deletes its link, so on again starts with none.").FontSize(12).TextColor(palette.muted)
 			})
 			if ui.Segmented(c.Key("children-from-others"), &level, childLevels...).Label("Children from other machines").Changed() {
 				var v *api.Access
@@ -78,7 +78,8 @@ func (a *app) linksCard(c *ui.Context, m client.Machine) {
 				a.linkRow(c, t, ceiling)
 			}
 		}
-		// A link revoked since it was minted takes its token with it.
+		// A link whose machine was removed since it was minted takes its token
+		// with it.
 		if p := a.minted; p.token != "" && m.Read.After(p.at) && !slices.ContainsFunc(m.Tokens, func(t daemon.Token) bool { return t.Link != nil && t.Link.ID == p.link.ID }) {
 			a.minted = minted{}
 		}
@@ -92,7 +93,7 @@ func (a *app) linksCard(c *ui.Context, m client.Machine) {
 }
 
 // linkRow is a link minted here, with what it lets the other machine's
-// agents start, and its revoke.
+// agents start, and removing that machine.
 func (a *app) linkRow(c *ui.Context, t daemon.Token, ceiling *api.Access) {
 	l := t.Link
 	desc := accessLabel(l.Access) + " at most"
@@ -114,9 +115,9 @@ func (a *app) linkRow(c *ui.Context, t daemon.Token, ceiling *api.Access) {
 			ui.Text(c, t.Label).FontWeight(500)
 			ui.Text(c, desc).FontSize(12).TextColor(palette.muted)
 		})
-		ui.Button(c.Key("revoke-link"), "Revoke").Label("Revoke " + t.Label + "'s link").TextColor(palette.red).OnClick(func() {
+		ui.Button(c.Key("remove-link"), "Remove").Label("Remove " + t.Label).TextColor(palette.red).OnClick(func() {
 			a.machineErr = ""
-			if err := a.backend.Revoke(t.Label); err != nil {
+			if err := a.backend.RemoveToken(t.Label); err != nil {
 				a.machineErr = err.Error()
 			}
 		})
@@ -246,7 +247,7 @@ func (a *app) delegatesCard(c *ui.Context, m client.Machine) {
 		}
 		if a.removed != "" {
 			ui.Row(c).Key("removed").Padding(12, 12, 12, 16).Gap(12).AlignItems(ui.Center).Background(palette.amber.Alpha(0.08)).Transition(fold).Children(func() {
-				ui.Text(c, "Removed "+a.removed+". Its link stays valid on "+a.removed+" until you revoke it there, in Settings › This machine.").FontSize(12).Grow(1).Shrink(1)
+				ui.Text(c, "Removed "+a.removed+" here. Its link still works on "+a.removed+" until it removes this machine or turns off children from other machines there, in Settings › This machine.").FontSize(12).Grow(1).Shrink(1)
 				ui.Button(c.Key("removed-done"), "Done").OnClick(func() { a.removed = "" })
 			})
 		}

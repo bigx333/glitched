@@ -128,7 +128,7 @@ func TestACachedTranscriptDoesntReadAnUnseenTurn(t *testing.T) {
 	h.until("the new turn over, unread", func() bool {
 		return th.View.LastTurn != nil && !th.View.Working() && h.a.backend.Unread(th.Thread)
 	})
-	if err := daemon.Revoke(rdir, "gui"); err != nil {
+	if err := daemon.RemoveToken(rdir, "gui"); err != nil {
 		t.Fatal(err)
 	}
 	h.until("box refused", func() bool { return th.env.Status == client.Status(client.Refused{}) })

@@ -457,32 +457,32 @@ func TestALinksCreateIsClosedAndChecked(t *testing.T) {
 	rejected("a repository with two checkouts", l.create(api.AccessAsk, 1), "several checkouts")
 }
 
-// A create on a link's socket that outlives its revoke, as one does for
+// A create on a link's socket that outlives its removal, as one does for
 // up to a second, is refused by its own commit, which reads tokens.json.
-func TestALinksCreateOnARevokedSocketIsRefusedAtCommit(t *testing.T) {
+func TestALinksCreateOnARemovedMachinesSocketIsRefusedAtCommit(t *testing.T) {
 	l := newLinked(t, api.Link{Access: api.AccessAutoEdits}, false)
 	ctx := context.Background()
 	for try := 0; ; try++ {
 		if _, err := l.ep.Info(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if err := Revoke(l.dirB, "a"); err != nil {
+		if err := RemoveToken(l.dirB, "a"); err != nil {
 			t.Fatal(err)
 		}
 		_, err := l.ep.Submit(ctx, l.create(api.AccessAsk, 1))
 		var rej *api.RejectedError
 		if errors.As(err, &rej) {
-			if !strings.Contains(rej.Reason, "revoked") {
-				t.Fatalf("the create on a revoked link's live socket: %v, want refused as revoked", err)
+			if !strings.Contains(rej.Reason, "removed") {
+				t.Fatalf("the create on a removed link's live socket: %v, want refused as removed", err)
 			}
 			return
 		}
 		if err == nil {
-			t.Fatal("a create on a revoked link's live socket was taken")
+			t.Fatal("a create on a removed link's live socket was taken")
 		}
 		// The second's reload closed the socket first: try on another.
 		if try == 5 {
-			t.Fatalf("each revoked socket closed before its create: %v", err)
+			t.Fatalf("each removed socket closed before its create: %v", err)
 		}
 		l.ep.Close()
 		label := "a"

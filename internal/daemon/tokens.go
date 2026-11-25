@@ -110,7 +110,7 @@ func mint(dir, label string, made func(hash string) (Token, error)) (string, err
 	key := transport.KeyOf(token)
 	err := edit(dir, func(ts *[]Token) error {
 		if slices.ContainsFunc(*ts, func(t Token) bool { return t.Label == label }) {
-			return fmt.Errorf("pair: %s already has a token; revoke it first", label)
+			return fmt.Errorf("pair: %s already has a token; remove it first", label)
 		}
 		t, err := made(hex.EncodeToString(key[:]))
 		if err != nil {
@@ -147,15 +147,26 @@ func ParseAccess(name string) (api.Access, error) {
 
 var accessNames = map[string]api.Access{"ask": api.AccessAsk, "auto-edits": api.AccessAutoEdits, "full": api.AccessFull}
 
-// Revoke removes label's token. An engine refuses it on the next socket and
-// closes the sockets it admitted within a second.
-func Revoke(dir, label string) error {
+// RemoveToken removes label's token. An engine refuses it on the next
+// socket and closes the sockets it admitted within a second. For a link,
+// that removes the machine it was minted for: its threads here stay, and
+// what they run goes on, for this machine's person to stop.
+func RemoveToken(dir, label string) error {
 	return edit(dir, func(ts *[]Token) error {
 		i := slices.IndexFunc(*ts, func(t Token) bool { return t.Label == label })
 		if i < 0 {
 			return fmt.Errorf("pair: no token is labelled %s", label)
 		}
 		*ts = slices.Delete(*ts, i, i+1)
+		return nil
+	})
+}
+
+// endLinks removes every link's token, as turning children from other
+// machines off or on does, so no link minted before comes back.
+func endLinks(dir string) error {
+	return edit(dir, func(ts *[]Token) error {
+		*ts = slices.DeleteFunc(*ts, func(t Token) bool { return t.Link != nil })
 		return nil
 	})
 }
@@ -168,8 +179,8 @@ func Tokens(dir string) ([]Token, error) {
 	return ts, nil
 }
 
-// edit rewrites tokens.json under its lock, so a pair racing a revoke can't
-// bring the revoked token back.
+// edit rewrites tokens.json under its lock, so a pair racing a removal
+// can't bring the removed token back.
 func edit(dir string, change func(*[]Token) error) error {
 	_, err := jsonfile.Edit(filepath.Join(dir, tokensFile), change)
 	return err
@@ -177,8 +188,9 @@ func edit(dir string, change func(*[]Token) error) error {
 
 // links finds a link in dir's tokens.json as the file is at each call,
 // its access narrowed to engine.json's setting for children from other
-// machines as that is then: a link revoked, or a setting turned off since
-// the link's socket was admitted, starts and runs nothing more.
+// machines as that is then: a link whose machine was removed, or a setting
+// turned off since the link's socket was admitted, starts and runs nothing
+// more.
 func links(dir string) engine.Links {
 	return func(id api.ID) (api.Link, error) {
 		cfg, err := Defaults(dir)
@@ -194,7 +206,7 @@ func links(dir string) engine.Links {
 		}
 		i := slices.IndexFunc(ts, func(t Token) bool { return t.Link != nil && t.Link.ID == id })
 		if i < 0 {
-			return api.Link{}, errors.New("the link was revoked on this machine")
+			return api.Link{}, errors.New("this machine removed the link's machine")
 		}
 		l := *ts[i].link()
 		l.Access = min(l.Access, *cfg.ChildrenFromOtherMachines)
@@ -202,15 +214,16 @@ func links(dir string) engine.Links {
 	}
 }
 
-// grants admits a socket whose token tokens.json holds. It reads the file on
-// every handshake, so a revoke from another process applies to the next one,
-// and every second, to close the sockets a revoked token holds.
+// grants admits a socket whose token tokens.json holds, and a link's only
+// while children from other machines are on. It reads both files on every
+// handshake, so a removal from another process applies to the next one,
+// and every second, to close the sockets a removed token holds.
 type grants struct {
 	dir  string
 	base context.Context
 
 	// mu spans a read of the file through the admission it decides, so a
-	// read from before a revoke never replaces the grants of a later one.
+	// read from before a removal never replaces the grants of a later one.
 	mu       sync.Mutex
 	live     map[transport.Key]grant
 	failing  string               // the last error reading the file, logged once
@@ -235,8 +248,13 @@ func (g *grants) reload() {
 		g.failing = ""
 		slog.Info("admitting tokens again", "file", filepath.Join(g.dir, tokensFile))
 	}
+	cfg, err := Defaults(g.dir)
+	linksOn := err == nil && cfg.ChildrenFromOtherMachines != nil
 	live := map[transport.Key]grant{}
 	for _, t := range ts {
+		if t.Link != nil && !linksOn {
+			continue
+		}
 		var sum transport.Key
 		if b, _ := hex.DecodeString(t.hash()); len(b) == len(sum) {
 			copy(sum[:], b)

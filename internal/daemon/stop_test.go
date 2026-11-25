@@ -359,20 +359,20 @@ func TestOnceBsPersonTakesTheChildOverTheParentCantSteerIt(t *testing.T) {
 	}
 }
 
-// A revoke on B while its child runs blocks A's stop: the child is lost
+// A removal on B while its child runs blocks A's stop: the child is lost
 // here, saying its person on B stops it by hand, and it still runs there.
-func TestARevokeBlocksTheStopAndSaysSo(t *testing.T) {
+func TestRemovingThisMachineOnBBlocksTheStopAndSaysSo(t *testing.T) {
 	p := newRemotes(t, fake.New(fake.Asking()), "fake", engine.Limits{})
 	kid := p.place("there")
 	there := p.bound(kid).Thread
 	until(t, "the child waiting on b", func() bool { return p.placeholder(kid).Remote.Slot == api.RunWaiting })
-	if err := Revoke(p.dirB, "a"); err != nil {
+	if err := RemoveToken(p.dirB, "a"); err != nil {
 		t.Fatal(err)
 	}
 	p.submitA(kid, api.TurnInterrupt{})
 	p.lostOnce(kid, "its person's to stop by hand")
 	until(t, "the stop done", func() bool { return len(p.leased(kid)) == 0 })
 	if th := p.onB(there); th.Live() == nil {
-		t.Fatal("the child on b stopped through a revoked link")
+		t.Fatal("the child on b stopped through a removed link")
 	}
 }
