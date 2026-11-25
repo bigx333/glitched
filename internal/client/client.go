@@ -42,6 +42,12 @@ type Config struct {
 	// engine.json: the GUI has it run the real Claude Code. Left nil, as a
 	// test leaves it, the engine plays every provider with the fake.
 	Engine func(*daemon.Config)
+	// Served, when set, says whether a background service runs, or is
+	// about to run, the engine for Dir. The local env then waits up to
+	// serviceWait for that engine to answer before it embeds one, so the
+	// service, which waits for the lock, keeps the directory. Nil never
+	// waits.
+	Served func(context.Context) bool
 	// Detect reads an installed Tailscale's status for This machine while
 	// no engine answers, as the engine's own Config.Detect would; nil
 	// reads this machine's.
@@ -762,9 +768,14 @@ type local struct {
 	engine   func(*daemon.Config)          // Config.Engine
 	attached *transport.EndpointClient
 	embedded *daemon.Daemon
-	err      error         // from closing the embedded engine
-	done     chan struct{} // closed once close returns
+	err      error                      // from closing the embedded engine
+	done     chan struct{}              // closed once close returns
+	served   func(context.Context) bool // Config.Served
 }
+
+// serviceWait is how long the local env waits for the background
+// service's engine, as it starts or restarts, before it embeds one.
+var serviceWait = 15 * time.Second
 
 func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 	switch {
@@ -775,7 +786,8 @@ func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 	}
 	// An engine holds the lock while it starts, and answers once it serves.
 	deadline := time.Now().Add(connectTimeout)
-	for {
+	var attachUntil time.Time
+	for asked := false; ; {
 		c := transport.NewEndpointClient(daemon.Socket(l.dir), api.ID{})
 		probe, cancel := context.WithTimeout(ctx, probeTimeout)
 		_, err := c.Info(probe)
@@ -786,6 +798,21 @@ func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 			return c, nil
 		}
 		c.Close()
+		if !asked && l.served != nil {
+			asked = true
+			if l.served(ctx) {
+				attachUntil = time.Now().Add(serviceWait)
+				deadline = attachUntil.Add(connectTimeout)
+			}
+		}
+		if time.Now().Before(attachUntil) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(probeInterval):
+			}
+			continue
+		}
 		cfg, err := daemon.Defaults(l.dir)
 		if err != nil {
 			return nil, err

@@ -43,6 +43,43 @@ import (
 // engine in a loop.
 var ErrLocked = errors.New("another engine holds the lock")
 
+// lockPoll is how often StartWhenFree tries the lock again.
+const lockPoll = 250 * time.Millisecond
+
+// StartNow is Start on what config reads: StartWhenFree without the wait.
+func StartNow(ctx context.Context, config func() (Config, error)) (*Daemon, error) {
+	cfg, err := config()
+	if err != nil {
+		return nil, err
+	}
+	return Start(ctx, cfg)
+}
+
+// StartWhenFree is Start on what config reads, except that while another
+// engine holds the lock it waits for it to let go, as the background
+// service does while the app runs its own engine, until ctx ends. It reads
+// config at each try, so what was saved meanwhile applies.
+func StartWhenFree(ctx context.Context, config func() (Config, error)) (*Daemon, error) {
+	for waited := false; ; waited = true {
+		cfg, err := config()
+		if err != nil {
+			return nil, err
+		}
+		d, err := Start(ctx, cfg)
+		if !errors.Is(err, ErrLocked) {
+			return d, err
+		}
+		if !waited {
+			slog.Info("waiting for the engine that holds the lock", "dir", cfg.Dir)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(lockPoll):
+		}
+	}
+}
+
 // Config is how an engine serves. engine.json under Dir keeps all but Dir
 // and Providers.
 type Config struct {

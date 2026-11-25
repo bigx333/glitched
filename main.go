@@ -7,15 +7,19 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"maps"
 	"math"
 	"math/rand/v2"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -33,6 +37,7 @@ import (
 	"glitched/internal/mcp"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/pack"
+	"glitched/internal/service"
 	"glitched/internal/transport"
 	"glitched/wind"
 )
@@ -665,6 +670,16 @@ type app struct {
 	cmdkOpens int
 	cmdkList  ui.ListState
 
+	svcStatus  service.Status
+	svcRead    time.Time // zero till the first read
+	svcLoading bool
+	svcDoing   svcSwitch
+	svcSets    int // switches of the service, so a read begun before one is dropped
+	svcErr     string
+	// svcHandOver: the switch installed the service, so the engine
+	// embedded here goes to it once no agent runs here.
+	svcHandOver bool
+
 	glassOffset ui.Point
 	checkUntil  time.Time
 
@@ -849,7 +864,7 @@ func newApp(dir string, engine func(*daemon.Config), detect func(context.Context
 			fn()
 			a.changed()
 		})
-	}, Asked: a.notifyAsked, Engine: engine, Detect: detect})
+	}, Asked: a.notifyAsked, Engine: engine, Detect: detect, Served: servedByService(dir)})
 	return a
 }
 
@@ -966,6 +981,7 @@ func (a *app) view(c *ui.Context) {
 	a.pruneDiffs()
 	a.pruneThreadState()
 	a.paceContinues()
+	a.handOverWhenIdle()
 	// A steer to a server removed since never lands.
 	maps.DeleteFunc(a.steers, func(_ api.ID, s steer) bool { return !slices.Contains(a.backend.Envs(), s.env) })
 	// Jokes over are gone, whether or not their rows show: a row in a
@@ -1193,6 +1209,17 @@ func main() {
 		}
 		return
 	}
+	// Background service mode (glitched/Glitched serve -dir DIR).
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		if err := serveHeadless(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "glitched:", err)
+			if errors.Is(err, daemon.ErrLocked) {
+				os.Exit(3)
+			}
+			os.Exit(1)
+		}
+		return
+	}
 	var a *app
 	// What's posted before the window exists, as a plugin's timer can,
 	// waits for it.
@@ -1332,6 +1359,33 @@ func (a *app) contentInner(w float32) float32 {
 // leaves, clear at Clear.
 func (a *app) glassTint() ui.Color {
 	return palette.bg.Alpha(float32(1 - a.settings.vibrancy))
+}
+
+func serveHeadless(args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	dir := fs.String("dir", stateDir(), "state directory")
+	waitLock := fs.Bool("wait-lock", false, "while another engine holds the lock, wait for it to let go instead of exiting")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	config := func() (daemon.Config, error) {
+		cfg, err := daemon.Defaults(*dir)
+		if err == nil {
+			cfg.WithAgents()
+		}
+		return cfg, err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	start := daemon.StartWhenFree
+	if !*waitLock {
+		start = daemon.StartNow
+	}
+	d, err := start(ctx, config)
+	if err != nil {
+		return err
+	}
+	return d.Wait()
 }
 
 // windowQueue holds what's posted to the window until it exists.
