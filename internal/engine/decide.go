@@ -128,8 +128,8 @@ func DecideWith(t Thread, c api.Command, env Env, now time.Time) ([]Event, []Eff
 // reaches its machine as an effect, which sends it there as a command
 // frozen now: a settle or a delete settles the child there, where it
 // keeps its transcript, a stop stops its run, a message is sent there and
-// queues nothing here, an answer to a question it asks there is sent
-// there, and a narrower access narrows it there. A
+// queues nothing here, its parent's agent's answer to a question it asks
+// there is sent there, and a narrower access narrows it there. A
 // placeholder whose create was never tried has nothing there to settle.
 // The machine's person who took the child over there has it from then
 // on: an agent's message or stop is refused, as for a local child the
@@ -201,10 +201,16 @@ func (d *decision) placeholder(id api.ID, b api.Intent) error {
 		return nil
 	case api.RequestRespond:
 		switch {
+		case d.by.IsZero():
+			return rejected("this child runs on another machine, and its person answers what it asks there; here only its parent's agent answers its question")
 		case !slices.Contains(r.Questions, b.Request):
 			return rejected("this child's machine has no question of that id open; its approvals and credentials are answered there")
 		case r.State == RemoteLostState:
 			return rejected("this child's machine no longer has it here: " + r.Lost)
+		case d.t.settled():
+			return rejected("this child is settled, so it takes no answer")
+		case theirs:
+			return rejected("the person on this child's machine took it over there: its last message or stop was theirs, so it's theirs to answer")
 		}
 		d.effects = append(d.effects, RemoteSend{Engine: r.Engine, Link: r.Link, Settles: r.Settles, Command: d.there(id, "answer", api.RequestRespond{Request: b.Request, Answer: b.Answer})})
 		return nil

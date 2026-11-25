@@ -449,8 +449,8 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 		after = api.Cursor{}
 	}
 	// Its views come with the commits that move it: whether it holds what
-	// waits on it after a stop is that machine's to say, from more than
-	// the events this engine reads, at the commit it says it in.
+	// waits on it after a stop, and which requests are questions, are
+	// that machine's to say, at the commit it says them in.
 	st, err := m.Open(ctx, api.Subscription{Thread: r.Thread, After: after, Views: true})
 	if err != nil {
 		return false, err
@@ -484,16 +484,19 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 		for _, it := range items {
 			var events []api.Event
 			fresh := false
+			var view *api.Thread
 			switch {
 			case it.Kind == api.StreamSnapshot && it.Snapshot != nil:
 				events, fresh, snapshot = it.Snapshot.Events, true, true
 				next.Cursor = it.Snapshot.Cursor
-				next.Held = len(it.Snapshot.Threads) == 1 && it.Snapshot.Threads[0].Resumable
-			case it.Kind == api.StreamThread && it.Thread != nil && it.Thread.ID == r.Thread:
-				next.Held = it.Thread.Resumable
-				continue
+				next.Held, next.Questions = false, nil
+				if len(it.Snapshot.Threads) == 1 {
+					view = &it.Snapshot.Threads[0]
+				}
+			case it.Kind == api.StreamThread && it.Thread != nil:
+				view = it.Thread
 			case it.Kind == api.StreamEvent && it.Event != nil:
-				events = []api.Event{*it.Event}
+				events, view = []api.Event{*it.Event}, it.Thread
 				next.Cursor = it.Event.Cursor
 			default:
 				continue
@@ -502,6 +505,17 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			var gone bool
 			if next, got, gone, err = engine.Follow(next, events, fresh); err != nil {
 				return progressed, fmt.Errorf("%w: %w", errDefect, err)
+			}
+			// The machine's view of the child, at the commit of the events
+			// it came with, says what holds there after a stop and which
+			// of what the run waits on are questions.
+			if view != nil && view.ID == r.Thread {
+				next.Held, next.Questions = view.Resumable, nil
+				for _, q := range view.Requests {
+					if q.Kind == api.KindQuestion && q.State == api.RequestPending {
+						next.Questions = append(next.Questions, q.ID)
+					}
+				}
 			}
 			for _, p := range got {
 				if !slices.ContainsFunc(reports, func(q engine.RemoteReport) bool { return q.Key == p.Key }) {
