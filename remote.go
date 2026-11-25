@@ -251,8 +251,10 @@ func (a *app) delegatesCard(c *ui.Context, m client.Machine) {
 			})
 		}
 		ui.Column(c).Key("add-machine").Padding(12, 12, 12, 16).Gap(10).Children(func() {
-			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Children(func() {
 				ui.TextInput(c.Key("machine-label"), &a.delegate.label).Placeholder("Label, such as desk").Label("The machine's label").Grow(1)
+			})
+			ui.Row(c).Children(func() {
 				ui.TextInput(c.Key("machine-addr"), &a.delegate.server).Placeholder("desk.tailnet.ts.net:7433").Label("The machine's address").Font("monospace").Grow(1)
 			})
 			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
@@ -437,21 +439,25 @@ func (a *app) originLabel(t thread) string {
 // machine started it, and opens that thread while this app pairs that
 // machine.
 func (a *app) originCrumb(c *ui.Context, t thread) {
-	o := t.View.Origin
-	line := "from " + o.Title + " on " + a.originLabel(t)
+	o, on := t.View.Origin, a.originLabel(t)
+	// line is the title, cut short first, and the machine whole after it.
+	line := func() ui.Element {
+		return ui.Row(c).Key("origin-line").Shrink(1).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "from "+o.Title).FontSize(12.5).SingleLine().Shrink(1).MaxWidth(260)
+			ui.Text(c, " on "+on).FontSize(12.5).SingleLine().Shrink(0)
+		})
+	}
 	var parent thread
 	found := false
 	if e := a.envOf(o.Engine); e != nil && e.Threads[o.Thread] != nil {
 		parent, found = thread{e, e.Threads[o.Thread]}, true
 	}
 	if !found {
-		a.tip(c, ui.Text(c, line).Key("origin").FontSize(12.5).TextColor(palette.faint).SingleLine().Shrink(1).MaxWidth(260), "Started by an agent on "+a.originLabel(t))
+		a.tip(c, ui.Row(c).Key("origin").Shrink(1).TextColor(palette.faint).Children(func() { line() }), "Started by an agent on "+on)
 		return
 	}
-	b := a.tip(c, ghost(c, "origin", false).Padding(3, 6).Shrink(1).MinWidth(40).Label("Open "+o.Title), "Open "+o.Title+" on "+a.originLabel(t))
-	if b.Children(func() {
-		ui.Text(c, line).FontSize(12.5).SingleLine().MaxWidth(260)
-	}).Clicked() {
+	b := a.tip(c, ghost(c, "origin", false).Padding(3, 6).Shrink(1).MinWidth(40).Label("Open "+o.Title), "Open "+o.Title+" on "+on)
+	if b.Children(func() { line() }).Clicked() {
 		a.choose(parent)
 	}
 }
