@@ -120,7 +120,7 @@ type messageToolbar struct {
 }
 
 // messageToolbarRow is the built-in Message toolbar's drawing of the
-// toolbar m, as its main.js draws it. Glitched draws the same while no
+// toolbar m, as its main.ts draws it. Glitched draws the same while no
 // plugin has drawn it. The time is on the outer side, so the actions sit
 // where they would without it.
 func messageToolbarRow(m messageToolbar) *widget.Node {

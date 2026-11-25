@@ -3,7 +3,7 @@
   "name": "Word tools",
   "description": "Tools for Glitched's agents: count a text's words, and keep notes per thread.",
   "version": "0.1.0",
-  "main": "index.js",
+  "main": "index.ts",
   "contract": "glitched",
   "contractVersion": 1,
   "capabilities": ["tools"],

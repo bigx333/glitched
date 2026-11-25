@@ -3,7 +3,7 @@
   "name": "Greetings",
   "description": "The greeting over a new thread's composer, and in a thread with no messages yet. Built into Glitched; make a copy in Settings › Plugins to change them.",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "main.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": [

@@ -332,7 +332,7 @@ export async function place({items}) {
 
 // Glitched draws the built-in Timeline rows' own drawing of a row while
 // the plugin has drawn none, so the plugin taking over moves nothing: its
-// main.js and timelineRow draw every row alike, notes and failures too.
+// main.ts and timelineRow draw every row alike, notes and failures too.
 func TestGlitchedWaitsForTheBuiltInRowsWithTheirOwnDrawing(t *testing.T) {
 	h, _ := timelineHarness(t)
 	a, tt := h.a, h.tt
@@ -366,15 +366,15 @@ func TestGlitchedWaitsForTheBuiltInRowsWithTheirOwnDrawing(t *testing.T) {
 		m.Key = key
 		return m
 	}
-	src, err := os.ReadFile("internal/plugins/bundled/timeline/main.js")
+	src, err := os.ReadFile("internal/plugins/bundled/timeline/main.ts")
 	if err != nil {
 		t.Fatal(err)
 	}
 	cs, _ := json.Marshal(cases)
 	ps, _ := json.Marshal(pick)
-	js := strings.Replace(string(src), "row(context))", "row(cases[pick[key]]))", 1)
+	js := strings.Replace(string(src), "(context ? row(context) : null)", "row(cases[pick[key]])", 1)
 	js = strings.Replace(js, "({ context })", "({ key })", 1) + "\nconst cases = " + string(cs) + ";\nconst pick = " + string(ps) + ";\n"
-	writeOwnPlugin(t, a, "my-rows", rowsManifest, js)
+	writeOwnPlugin(t, a, "my-rows", strings.Replace(rowsManifest, `"index.js"`, `"index.ts"`, 1), js)
 	allowRows(t, a, "my-rows")
 	settlePlugins(t, a, tt, h.p)
 	seen := map[string]bool{}
@@ -384,7 +384,7 @@ func TestGlitchedWaitsForTheBuiltInRowsWithTheirOwnDrawing(t *testing.T) {
 		}
 		m := of(e.key)
 		seen[m.Kind+m.Note] = true
-		same("main.js", a.plugins.App("my-rows").PlaceView("row", e.key), m)
+		same("main.ts", a.plugins.App("my-rows").PlaceView("row", e.key), m)
 	}
 	if len(seen) < len(cases) {
 		t.Errorf("the rows drew only %v of the cases", seen)
@@ -397,7 +397,7 @@ func TestTheBubbleSampleRestylesYourMessages(t *testing.T) {
 	h, _ := timelineHarness(t)
 	a, tt := h.a, h.tt
 	var files [2]string
-	for i, name := range []string{"plugin.json", "index.js"} {
+	for i, name := range []string{"plugin.json", "index.ts"} {
 		b, err := os.ReadFile(filepath.Join("examples/plugins/bubble", name))
 		if err != nil {
 			t.Fatal(err)

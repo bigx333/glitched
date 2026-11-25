@@ -3,7 +3,7 @@
   "name": "Themes",
   "description": "Catppuccin Mocha and Rosé Pine Dawn for Glitched. Built into Glitched; make a copy in Settings › Plugins to tweak their colors.",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "main.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": [],

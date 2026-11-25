@@ -197,6 +197,9 @@ func (a *app) lifted(t thread) bool {
 }
 
 func (a *app) threadsNav(c *ui.Context) {
+	// Before the copies of the sidebar's threads ask how far open each
+	// section shows.
+	a.foldSections(c)
 	ui.Row(c).Padding(0, 16, 6).Gap(6).AlignItems(ui.Center).Children(func() {
 		ui.Image(c, appIcon).Size(18, 18)
 		ui.Text(c, "Glitched").Bold().FontSize(13)
@@ -243,7 +246,9 @@ func (a *app) threadsNav(c *ui.Context) {
 	if len(a.itemsIn(catWorking))+len(a.itemsIn(catSnoozed))+len(a.itemsIn(catSettled)) > 0 {
 		// Settled may hold many: past half the sidebar, they scroll.
 		body = append(body, a.sidebarCopy(c, "bottom", a.sidebarTall/2, func() ui.Element {
-			return ui.Column(c).Key("component:sidebar.body:bottom").MaxHeightPercent(50).Shrink(0)
+			box := ui.Column(c).Key("component:sidebar.body:bottom").MaxHeightPercent(50).Shrink(0)
+			a.bottomBox = box.Bounds()
+			return box
 		}, func() {
 			ui.Scroll(c).Key("bottom").Shrink(1).Padding(6, 8).Gap(6).Children(func() {
 				sections(catWorking, catSnoozed, catSettled)
@@ -251,6 +256,7 @@ func (a *app) threadsNav(c *ui.Context) {
 		}, catWorking, catSnoozed, catSettled))
 	} else {
 		delete(a.sidebarRows, "bottom")
+		a.bottomBox = ui.Rect{}
 	}
 	a.pluginComponent(c, "sidebar.body", nil, body...)
 	ui.Column(c).Padding(8).Gap(1).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
@@ -323,7 +329,11 @@ func (a *app) projectStrip(c *ui.Context) {
 
 // section lists a category's threads under a header that opens and closes
 // it, with their count. Its column is built even while empty, so that a
-// thread moving into it folds in rather than appearing.
+// thread moving into it folds in rather than appearing. It opens and
+// shuts as a curtain, sectionP far: its rows, at their full height within,
+// show from the top as far as it has uncovered them, of as many as the
+// bottom box shows under them (foldSpan); the column's height, and so the
+// headers and the box, follow.
 func (a *app) section(c *ui.Context, cat category, title, empty string, icon *ui.SVG, color ui.Color) {
 	items := a.itemsIn(cat)
 	if len(items) == 0 && cat != catInbox {
@@ -331,21 +341,54 @@ func (a *app) section(c *ui.Context, cat category, title, empty string, icon *ui
 	}
 	// The inbox is always open: its header is a title, not a button.
 	open := cat == catInbox || !a.sectionClosed[cat]
+	p := a.sectionP(cat)
+	if f := a.sectionFold[cat]; f != nil && (p == 0 || p == 1) {
+		f.span = 0 // a fold starts, or ended
+	}
 	ui.Column(c).Key(title).Gap(2).Children(func() {
 		a.sectionHead(c, cat, len(items))
-		ui.Column(c).Key("rows").Gap(2).Children(func() {
-			if !open {
+		rows := ui.Column(c).Key("rows")
+		var in ui.Element
+		show := open || p > 0
+		rows.Children(func() {
+			if !show {
 				return
 			}
-			if len(items) == 0 && empty != "" {
-				ui.Text(c, empty).Key("empty").FontSize(12).TextColor(palette.faint).Padding(6, 10).Transition(fold)
-			}
-			for _, it := range items {
-				a.inboxRow(c, it, cat)
-				a.childRows(c, it.t, 1)
-			}
+			in = ui.Column(c).Key("in").Gap(2).Shrink(0)
+			in.Children(func() {
+				if len(items) == 0 && empty != "" {
+					ui.Text(c, empty).Key("empty").FontSize(12).TextColor(palette.faint).Padding(6, 10).Transition(fold)
+				}
+				for _, it := range items {
+					a.inboxRow(c, it, cat)
+					a.childRows(c, it.t, 1)
+				}
+			})
 		})
+		if show && p < 1 {
+			rows.ClipY().Height(p * a.foldSpan(cat, rows.Bounds(), in.Bounds().H))
+		}
 	})
+}
+
+// foldSpan is how far the curtain of the section cat goes over its rows,
+// as last laid out: their column at rows, tall as inner, which is 0 the
+// frame they first show in. It goes as far as the bottom box shows under
+// the column's top at its most, half the sidebar, but over the first row
+// at least; never further back in a fold than it went before, that the
+// rows it uncovered stay uncovered; and, before the box was laid out, as
+// far as its most.
+func (a *app) foldSpan(cat category, rows ui.Rect, inner float32) float32 {
+	most := a.sidebarTall / 2
+	span := min(inner, most)
+	if box := a.bottomBox; box.H > 0 && rows.W > 0 {
+		span = min(inner, max(most-(rows.Y-box.Y), rowHeight+2))
+	}
+	if f := a.sectionFold[cat]; f != nil {
+		f.span = max(f.span, span)
+		span = min(f.span, inner)
+	}
+	return span
 }
 
 // sectionHead is a section's header: its icon, title and count of threads,
@@ -374,7 +417,7 @@ func (a *app) sectionHead(c *ui.Context, cat category, count int) {
 		}
 		if collapsible {
 			ui.Spacer(c)
-			chevron(c, open).TextColor(palette.faint)
+			chevronAt(c, 90*a.sectionP(cat)).TextColor(palette.faint)
 		}
 		if lost := a.lostIn(cat); len(lost) > 0 {
 			ui.Spacer(c)
@@ -402,11 +445,16 @@ func (a *app) unreadCount() int {
 func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 	t := it.t
 	selected := t.id() == a.selected && a.router.Path() == "/"
-	r := row(c, t.id(), selected).Height(rowHeight).Padding(0, 6, 0, 8).Gap(9).Transition(fold)
+	// While its section opens or shuts, its curtain alone moves the row.
+	folding, tr := a.foldingNamed(sectionNames[cat]), fold
+	if folding {
+		tr = foldStill
+	}
+	r := row(c, t.id(), selected).Height(rowHeight).Padding(0, 6, 0, 8).Gap(9).Transition(tr)
 	if a.revealRow(t.id()) {
 		r.ScrollIntoView()
 	}
-	if a.arriving(t) {
+	if a.arriving(t) && !folding {
 		r.Transition(arrive) // just sent from the hero, sliding in
 	}
 	if fx, playing := a.rowJoke(c, t.id()); playing {

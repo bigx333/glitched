@@ -165,3 +165,13 @@ jobs:
       - run: go vet ./...
       - run: go tool mygo vet .
       - run: go build . ./cmd/...
+
+  plugins-typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: voidzero-dev/setup-vp@v1.22.0
+        with:
+          cache: true
+      - run: vp check --no-fmt --no-lint internal/plugins/bundled examples/plugins

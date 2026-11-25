@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"slices"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -29,7 +30,9 @@ type sidebarBody struct {
 }
 
 // sidebarSection is a section the copy shows: its id, what it says while
-// empty, whether the user closed it, and, while open, its rows in order.
+// empty, whether the user closed it, and its rows in order: while open
+// and, for a copy whose items name the section, while it closes, till the
+// curtain has covered them.
 type sidebarSection struct {
 	ID     string       `json:"id"`
 	Title  string       `json:"title"`
@@ -109,7 +112,7 @@ func (a *app) sidebarSections(cats ...category) []sidebarSection {
 		}
 		s := categories[cat]
 		sec := sidebarSection{ID: sectionNames[cat], Title: s.title, Empty: s.empty, Closed: cat != catInbox && a.sectionClosed[cat], Rows: []sidebarRow{}}
-		if !sec.Closed {
+		if !sec.Closed || a.lingers(cat) {
 			var kids func(t thread, depth int)
 			kids = func(t thread, depth int) {
 				if !a.childrenOpen[t.id()] || depth > maxDepth {
@@ -231,23 +234,137 @@ func (a *app) sidebarCopy(c *ui.Context, part string, maxHeight float32, box fun
 		current: true,
 		context: func(plugins.ThreadRecord) any { return body },
 		listRow: func(c *ui.Context, list *widget.Node, i int, e ui.Element, _ bool) bool {
-			return a.sidebarListRow(c, list.Items[i].Thread, was, e)
+			return a.sidebarListRow(c, list.Items[i].Thread, list.Items[i].Section, was, e)
 		},
 		reveal: reveal,
+		fold: func(_ *widget.Node, section string) (float32, bool) {
+			cat, ok := catNamed(section)
+			f := a.sectionFold[cat]
+			if !ok || f == nil {
+				return 1, false
+			}
+			f.saw = true
+			return f.p, f.p < 1
+		},
 	}
+}
+
+// sectionFold is how far open a section of the bottom part shows, as it
+// opens and shuts: p, 0 shut to 1 open, on its way from from to to since
+// at. live is whether the section had threads the frame before; saw
+// whether a copy's list named it this frame (render.Style.Fold), and
+// named whether one did the frame before. span is the most of its rows
+// Glitched's own curtain went over in this fold (foldSpan).
+type sectionFold struct {
+	from, to, p      float32
+	at               time.Time
+	live, saw, named bool
+	span             float32
+}
+
+// foldSections moves each section of the bottom part on to open or shut,
+// as the user left it, over the chevron's turn: from where it is, so that
+// a click mid-way turns it round. It is there at once with less motion
+// asked for, as the section shows, at launch or holding threads anew, and
+// should the clock go back.
+func (a *app) foldSections(c *ui.Context) {
+	reduce := c.Preferences().ReduceMotion
+	for _, cat := range []category{catWorking, catSnoozed, catSettled} {
+		f := a.sectionFold[cat]
+		if f == nil {
+			f = &sectionFold{}
+			a.sectionFold[cat] = f
+		}
+		f.named, f.saw = f.saw, false
+		to := float32(1)
+		if a.sectionClosed[cat] {
+			to = 0
+		}
+		has := len(a.itemsIn(cat)) > 0
+		if !f.live || !has || reduce || a.now.Before(f.at) {
+			f.from, f.to, f.p, f.at, f.live = to, to, to, a.now, has
+			continue
+		}
+		if to != f.to {
+			f.from, f.to, f.at = f.p, to, a.now
+		}
+		k := min(float32(a.now.Sub(f.at))/float32(turn.Duration), 1)
+		f.p = f.from + (f.to-f.from)*easeOut(k)
+		if k >= 1 {
+			f.p = f.to
+		}
+		if f.p != f.to {
+			c.AnimationFrame()
+		}
+	}
+}
+
+// sectionP is how far open the section cat shows, 0 shut to 1 open: the
+// inbox, always open, is 1.
+func (a *app) sectionP(cat category) float32 {
+	if f := a.sectionFold[cat]; f != nil {
+		return f.p
+	}
+	if cat != catInbox && a.sectionClosed[cat] {
+		return 0
+	}
+	return 1
+}
+
+// lingers is whether the section cat, shut, still shows some of its rows,
+// as a copy's list folded it the frame before: a copy that names no
+// section shows them no more from the click on.
+func (a *app) lingers(cat category) bool {
+	f := a.sectionFold[cat]
+	return f != nil && f.p > 0 && f.named
+}
+
+// folding is whether a section of the bottom part opens or shuts now.
+func (a *app) folding() bool {
+	for _, f := range a.sectionFold {
+		if f.p != f.to {
+			return true
+		}
+	}
+	return false
+}
+
+// foldingNamed is whether the section a list item names opens or shuts
+// now.
+func (a *app) foldingNamed(section string) bool {
+	cat, ok := catNamed(section)
+	f := a.sectionFold[cat]
+	return ok && f != nil && f.p < 1
+}
+
+// catNamed is the section a copy's context names id (sectionNames).
+func catNamed(id string) (category, bool) {
+	for cat, s := range sectionNames {
+		if s == id && id != "" {
+			return cat, true
+		}
+	}
+	return 0, false
 }
 
 // foldOut is fold without its way in: a row that scrolls into a list
 // was there all along.
 var foldOut = func() ui.ElementTransition { t := fold; t.Enter = nil; return t }()
 
+// foldStill is fold's colors alone, for a row of a section opening or
+// shutting: the section's curtain sizes it, in layout, and a row's own
+// size moving after it, or folding in as it is uncovered, would run apart
+// from the curtain.
+var foldStill = ui.ElementTransition{Colors: fold.Colors, Duration: fold.Duration, Ease: fold.Ease}
+
 // sidebarListRow does to a thread's row in sidebar.body what the sidebar
 // does to its own: it folds in, as its thread joins the part (not among
 // was, the part's threads the frame before), and out,
 // slides in as it arrives from the hero, plays the jokes, and shows the
 // thread on a click, its composer taking the focus. It stays as though
-// pointed at while its snooze popover is open.
-func (a *app) sidebarListRow(c *ui.Context, thread string, was map[api.ID]bool, e ui.Element) bool {
+// pointed at while its snooze popover is open. While the section its item
+// names opens or shuts, the section's curtain alone moves the row.
+func (a *app) sidebarListRow(c *ui.Context, thread, section string, was map[api.ID]bool, e ui.Element) bool {
 	id, err := api.ParseID(thread)
 	if err != nil {
 		return false
@@ -257,12 +374,16 @@ func (a *app) sidebarListRow(c *ui.Context, thread string, was map[api.ID]bool, 
 		return false
 	}
 	a.revealRow(id)
-	if !was[id] {
+	folding := a.foldingNamed(section)
+	switch {
+	case folding:
+		e.Transition(foldStill)
+	case !was[id]:
 		e.Transition(fold)
-	} else {
+	default:
 		e.Transition(foldOut)
 	}
-	if a.arriving(t) {
+	if a.arriving(t) && !folding {
 		e.Transition(arrive)
 	}
 	if fx, playing := a.rowJoke(c, id); playing {

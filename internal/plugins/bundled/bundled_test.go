@@ -2,6 +2,7 @@ package bundled_test
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,8 +10,11 @@ import (
 	"testing"
 	"time"
 
+	plugin "github.com/yxxbc/mygo-plugin"
+
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/bundled"
+	"glitched/internal/plugins/pack"
 	"glitched/internal/plugins/widget"
 )
 
@@ -234,5 +238,124 @@ func TestARefusedCommitSaysWhy(t *testing.T) {
 	_, s := header(t, work, "Nobody's")
 	if e := (&widget.View{Body: s.PlaceView("actions", "t1")}).Find("error"); e == nil || e.Text != "git commit: Author identity unknown" {
 		t.Errorf("the dialog says %+v", e)
+	}
+}
+
+func TestEveryBuiltInPluginUsesTypeScriptAndCompiles(t *testing.T) {
+	key, err := pack.LoadKey(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	entries, err := fs.ReadDir(bundled.FS, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var services []struct {
+		id      string
+		dir     string
+		service string
+	}
+	var ids []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		id := e.Name()
+		ids = append(ids, id)
+		sub, err := fs.Sub(bundled.FS, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := fs.ReadFile(sub, pack.ManifestFile)
+		if err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		var m struct {
+			Main     string `json:"main"`
+			Glitched struct {
+				Service string `json:"service"`
+			} `json:"glitched"`
+		}
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		if !strings.HasSuffix(m.Main, ".ts") {
+			t.Errorf("%s: main = %q, want .ts", id, m.Main)
+		}
+		if m.Glitched.Service != "" && !strings.HasSuffix(m.Glitched.Service, ".ts") {
+			t.Errorf("%s: service = %q, want .ts", id, m.Glitched.Service)
+		}
+		dst := filepath.Join(root, id)
+		err = fs.WalkDir(sub, ".", func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || p == pack.SignatureFile {
+				return err
+			}
+			if strings.HasSuffix(p, ".js") {
+				t.Errorf("%s: unexpected .js file %s", id, p)
+			}
+			b, err := fs.ReadFile(sub, p)
+			if err != nil {
+				return err
+			}
+			os.MkdirAll(filepath.Join(dst, filepath.Dir(p)), 0o755)
+			return os.WriteFile(filepath.Join(dst, p), b, 0o644)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := pack.Sign(dst, key); err != nil {
+			t.Fatalf("%s: sign: %v", id, err)
+		}
+		if m.Glitched.Service != "" {
+			services = append(services, struct {
+				id      string
+				dir     string
+				service string
+			}{id: id, dir: dst, service: m.Glitched.Service})
+		}
+	}
+	if len(ids) == 0 {
+		t.Fatal("found no built-in plugins")
+	}
+
+	q := make(chan func(), 1024)
+	h := plugins.Open(t.TempDir(), plugins.Options{
+		Post:        func(fn func()) { q <- fn },
+		Bundled:     os.DirFS(root),
+		ReleaseKeys: []string{key.Public()},
+	})
+	t.Cleanup(h.Close)
+	installed := make(map[string]plugins.Plugin, len(ids))
+	for _, p := range h.Installed() {
+		installed[p.ID] = p
+	}
+	for _, id := range ids {
+		p, ok := installed[id]
+		if !ok {
+			t.Errorf("%s: missing from Installed", id)
+			continue
+		}
+		if err := h.Failed(id); err != nil {
+			t.Errorf("%s: failed to load: %v", id, err)
+		} else if p.Err != nil {
+			t.Errorf("%s: plugin error: %v", id, p.Err)
+		} else if !p.Enabled {
+			t.Errorf("%s: not enabled (trust=%v)", id, p.Trust)
+		}
+	}
+	for _, svc := range services {
+		p, err := plugin.Load(svc.dir, plugin.Options{
+			Main:            svc.service,
+			Prelude:         plugins.Prelude,
+			Contract:        plugins.Contract,
+			ContractVersion: plugins.ContractVersion,
+			DataDir:         t.TempDir(),
+		})
+		if err != nil {
+			t.Errorf("%s (%s): %v", svc.id, svc.service, err)
+			continue
+		}
+		p.Shutdown()
 	}
 }

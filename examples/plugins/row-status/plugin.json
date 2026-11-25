@@ -3,7 +3,7 @@
   "name": "Row status",
   "description": "A badge on each sidebar row: what the thread is doing, and how often it changed.",
   "version": "0.1.0",
-  "main": "index.js",
+  "main": "index.ts",
   "contract": "glitched",
   "contractVersion": 1,
   "capabilities": ["ui.place", "threads:read"],

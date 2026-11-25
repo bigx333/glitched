@@ -3,7 +3,7 @@
   "name": "Quiet header",
   "description": "Replaces the thread header's buttons with a quieter row: icons only, and no Commit & push.",
   "version": "0.1.0",
-  "main": "index.js",
+  "main": "index.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": ["ui.place", "ui.replace", "threads:read"],
