@@ -368,6 +368,15 @@ Claude Code runs in threads get the browser as an MCP server named
   load (15 seconds at most), and answers with the page's next snapshot.
   They go through the agent's permissions, as `mcp__glitched-browser__browser_*`:
   in Ask mode, the thread's approval card.
+- **Leases:** every tool that uses a tab, a snapshot or screenshot too,
+  leases it to the calling thread for five minutes from its last use,
+  and refuses a tab another thread leases: a snapshot there would
+  replace the refs the owner acts on. A call naming no tab uses the
+  thread's last-used leased tab, else the tab shown, so another thread
+  showing a tab moves none of its calls; a navigate whose shown tab
+  another thread leases opens a new tab. A call naming no thread leases
+  nothing and may use only unleased tabs. `release` with no tab drops
+  only the caller's leases.
 - **Actions** run in the page script (`act`), the same on every engine.
   It resolves the ref and checks the element is still the role and name
   the snapshot gave it, shown and enabled, and not what a user couldn't

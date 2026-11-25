@@ -819,3 +819,96 @@ func TestAgentBrowserSyncsSPAURL(t *testing.T) {
 		t.Errorf("tab title = %q, want Profile Settings", got)
 	}
 }
+
+// A thread can't read another thread's leased tab: a snapshot would
+// replace the refs the owner acts on.
+func TestALeaseKeepsItsThreadsRefs(t *testing.T) {
+	_, ab, _ := agents(t)
+	if _, err := callToolReply(t, ab, "threadAAAAAAA", "browser_tabs", `{"action":"new","url":"example.com"}`); err != nil {
+		t.Fatal(err)
+	}
+	ref := refOf(ab, 1)
+	for _, call := range [][2]string{
+		{"browser_snapshot", `{"tab":1}`},
+		{"browser_wait_for", `{"tab":1,"text":"Docs","timeout_ms":100}`},
+	} {
+		if _, err := callToolReply(t, ab, "threadBBBBBBB", call[0], call[1]); err == nil || !strings.Contains(err.Error(), "leased by another thread") {
+			t.Errorf("thread B %s of A's tab = %v", call[0], err)
+		}
+	}
+	if _, err := callToolReply(t, ab, "threadAAAAAAA", "browser_click", `{"ref":"`+ref+`"}`); err != nil {
+		t.Errorf("A's ref after B's attempts: %v", err)
+	}
+}
+
+// One thread's screenshot neither shows another thread's leased tab nor
+// moves where that thread's calls without a tab go.
+func TestAScreenshotLeavesOtherThreadsTabs(t *testing.T) {
+	a, ab, made := agents(t)
+	if _, err := callToolReply(t, ab, "threadAAAAAAA", "browser_tabs", `{"action":"new","url":"example.com"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callTool(t, ab, "browser_tabs", `{"action":"new","url":"go.dev"}`); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range *made {
+		p.png = []byte("png")
+	}
+	if _, err := callToolReply(t, ab, "threadBBBBBBB", "browser_screenshot", `{"tab":1}`); err == nil || !strings.Contains(err.Error(), "leased by another thread") {
+		t.Errorf("thread B screenshot of A's tab = %v", err)
+	}
+	if _, err := callToolReply(t, ab, "threadBBBBBBB", "browser_screenshot", `{"tab":2}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callToolReply(t, ab, "threadAAAAAAA", "browser_navigate", `{"url":"example.org"}`); err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{a.browser.tabs[0].url, a.browser.tabs[1].url}; got[0] != "https://example.org" || got[1] != "https://go.dev" {
+		t.Errorf("A's navigate after B's screenshot: tabs at %v, want A's tab 1 moved and tab 2 left", got)
+	}
+	out, err := callToolReply(t, ab, "threadAAAAAAA", "browser_snapshot", `{}`)
+	if err != nil || !strings.HasPrefix(out.Text, "Tab 1:") {
+		t.Errorf("A's snapshot without a tab = %v\n%s", err, out.Text)
+	}
+}
+
+// A call naming no thread can't use or release a thread's leased tab, and
+// one thread's release without a tab drops only its own leases.
+func TestALeaseHoldsAgainstCallsWithoutAThread(t *testing.T) {
+	a, ab, _ := agents(t)
+	if _, err := callToolReply(t, ab, "threadAAAAAAA", "browser_tabs", `{"action":"new","url":"example.com"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callToolReply(t, ab, "threadBBBBBBB", "browser_tabs", `{"action":"new","url":"go.dev"}`); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range [][2]string{
+		{"browser_snapshot", `{"tab":1}`},
+		{"browser_navigate", `{"tab":1,"url":"example.org"}`},
+		{"browser_tabs", `{"action":"close","tab":1}`},
+		{"browser_tabs", `{"action":"release","tab":1}`},
+	} {
+		if _, err := callTool(t, ab, call[0], call[1]); err == nil || !strings.Contains(err.Error(), "leased by another thread") {
+			t.Errorf("%s %s without a thread = %v", call[0], call[1], err)
+		}
+	}
+	// Tab 2, B's, shows: a navigate without a thread opens a tab of its own.
+	if _, err := callTool(t, ab, "browser_navigate", `{"url":"example.org"}`); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.browser.tabs) != 3 || a.browser.tabs[1].url != "https://go.dev" {
+		t.Errorf("tabs after a navigate without a thread: %d, tab 2 at %s", len(a.browser.tabs), a.browser.tabs[1].url)
+	}
+	if _, err := callTool(t, ab, "browser_tabs", `{"action":"release"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callToolReply(t, ab, "threadBBBBBBB", "browser_tabs", `{"action":"release"}`); err != nil {
+		t.Fatal(err)
+	}
+	if owner := ab.leaseOwner(1); owner != "threadAAAAAAA" {
+		t.Errorf("tab 1's lease after others released theirs = %q", owner)
+	}
+	if owner := ab.leaseOwner(2); owner != "" {
+		t.Errorf("tab 2's lease after B released its own = %q", owner)
+	}
+}

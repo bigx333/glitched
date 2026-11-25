@@ -152,7 +152,7 @@ func (ab *agentBrowser) call(ctx context.Context, tool string, raw json.RawMessa
 		made := false
 		err := ab.view(ctx, func() error {
 			var err error
-			if t, err = ab.preferredTab(args.Tab, thread); err == nil {
+			if t, err = ab.leasedTab(args.Tab, thread); err == nil {
 				made = t.page == nil
 				p, err = ab.page(t)
 			}
@@ -205,19 +205,20 @@ func shortThread(id string) string {
 	return id[:8]
 }
 
-// claimLease verifies tabID is unleased or leased to thread, and claims/renews the lease.
+// claimLease verifies tabID is unleased or leased to thread, and
+// claims or renews the lease. A call naming no thread may use only an
+// unleased tab, and leases none.
 func (ab *agentBrowser) claimLease(tabID int, thread string) error {
-	if thread == "" {
-		return nil
-	}
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
 	now := ab.now()
 	ab.pruneLeasesLocked(now)
-	if cur, ok := ab.leases[tabID]; ok && cur.thread != "" && cur.thread != thread {
+	if cur, ok := ab.leases[tabID]; ok && cur.thread != thread {
 		return fmt.Errorf("Tab %d is leased by another thread (%s); open a new tab with browser_tabs action=\"new\" instead.", tabID, shortThread(cur.thread))
 	}
-	ab.leases[tabID] = tabLease{thread: thread, expires: now.Add(ab.leaseTTL)}
+	if thread != "" {
+		ab.leases[tabID] = tabLease{thread: thread, expires: now.Add(ab.leaseTTL)}
+	}
 	return nil
 }
 
@@ -227,15 +228,11 @@ func (ab *agentBrowser) releaseLeases(tabID *int, thread string) error {
 	ab.pruneLeasesLocked(ab.now())
 	if tabID != nil {
 		if cur, ok := ab.leases[*tabID]; ok {
-			if thread != "" && cur.thread != "" && cur.thread != thread {
+			if cur.thread != thread {
 				return fmt.Errorf("Tab %d is leased by another thread (%s) and cannot be released by this thread.", *tabID, shortThread(cur.thread))
 			}
 			delete(ab.leases, *tabID)
 		}
-		return nil
-	}
-	if thread == "" {
-		clear(ab.leases)
 		return nil
 	}
 	for id, cur := range ab.leases {
@@ -253,35 +250,38 @@ func (ab *agentBrowser) leaseOwner(tabID int) string {
 	return ab.leases[tabID].thread
 }
 
-// threadTab returns an open tab currently leased by thread. On the view's thread.
+// threadTab is the open tab thread used last of those it leases, or nil.
+// On the view's thread.
 func (ab *agentBrowser) threadTab(thread string) *browserTab {
 	if thread == "" {
 		return nil
 	}
+	ab.mu.Lock()
+	defer ab.mu.Unlock()
+	ab.pruneLeasesLocked(ab.now())
+	var last *browserTab
+	var at time.Time
 	for _, t := range ab.a.browser.tabs {
-		if ab.leaseOwner(t.id) == thread {
-			return t
+		if l, ok := ab.leases[t.id]; ok && l.thread == thread && l.expires.After(at) {
+			last, at = t, l.expires
 		}
 	}
-	return nil
+	return last
 }
 
-// preferredTab picks id if given, or for thread avoids stealing another
-// thread's leased active tab when this thread already owns a tab. On the view's thread.
-func (ab *agentBrowser) preferredTab(id *int, thread string) (*browserTab, error) {
-	if id != nil {
-		return ab.tab(id)
-	}
-	t, err := ab.tab(nil)
-	if err != nil {
-		return nil, err
-	}
-	if thread != "" {
-		if owner := ab.leaseOwner(t.id); owner != "" && owner != thread {
-			if own := ab.threadTab(thread); own != nil {
-				return own, nil
-			}
+// leasedTab is the tab of id, or for none the thread's own tab, else the
+// one shown; leased to thread, or why it can't be. Another thread
+// showing a tab so moves none of thread's calls. On the view's thread.
+func (ab *agentBrowser) leasedTab(id *int, thread string) (*browserTab, error) {
+	t := ab.threadTab(thread)
+	if id != nil || t == nil {
+		var err error
+		if t, err = ab.tab(id); err != nil {
+			return nil, err
 		}
+	}
+	if err := ab.claimLease(t.id, thread); err != nil {
+		return nil, err
 	}
 	return t, nil
 }
@@ -527,24 +527,19 @@ func (ab *agentBrowser) navigate(ctx context.Context, args toolArgs) (string, er
 				return err
 			}
 		case u != "":
-			if thread != "" && len(b.tabs) > 0 {
-				cur := b.tabs[b.active]
-				if owner := ab.leaseOwner(cur.id); owner != "" && owner != thread {
-					if own := ab.threadTab(thread); own != nil {
-						t = own
-					} else {
-						ab.a.newTab(u)
-						t = b.tabs[b.active]
-						openedFresh = true
-					}
-				} else {
-					t = b.current()
+			// The thread's own tab, else the one shown (the dev
+			// server's, where there is none) unless another thread
+			// leases it, else a new one.
+			if t = ab.threadTab(thread); t == nil {
+				t = b.current()
+				if ab.leaseOwner(t.id) != "" {
+					ab.a.newTab(u)
+					t = b.tabs[b.active]
+					openedFresh = true
 				}
-			} else {
-				t = b.current() // the dev server's, where there is none
 			}
 		default:
-			if t, err = ab.preferredTab(nil, thread); err != nil {
+			if t, err = ab.leasedTab(nil, thread); err != nil {
 				return err
 			}
 		}
@@ -592,7 +587,7 @@ func (ab *agentBrowser) screenshot(ctx context.Context, args toolArgs) (browserm
 	made := false
 	err := ab.view(ctx, func() error {
 		var err error
-		if t, err = ab.preferredTab(args.Tab, thread); err != nil {
+		if t, err = ab.leasedTab(args.Tab, thread); err != nil {
 			return err
 		}
 		made = t.page == nil
@@ -737,10 +732,7 @@ func (ab *agentBrowser) scroll(ctx context.Context, args toolArgs) (string, erro
 	var p browse.Page
 	err := ab.view(ctx, func() error {
 		var err error
-		if t, err = ab.preferredTab(tabHint, thread); err != nil {
-			return err
-		}
-		if err := ab.claimLease(t.id, thread); err != nil {
+		if t, err = ab.leasedTab(tabHint, thread); err != nil {
 			return err
 		}
 		if p, err = ab.page(t); err != nil {
@@ -782,7 +774,7 @@ func (ab *agentBrowser) waitFor(ctx context.Context, args toolArgs) (string, err
 	var p browse.Page
 	err := ab.view(ctx, func() error {
 		var err error
-		if t, err = ab.preferredTab(args.Tab, thread); err != nil {
+		if t, err = ab.leasedTab(args.Tab, thread); err != nil {
 			return err
 		}
 		p, err = ab.page(t)

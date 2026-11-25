@@ -35,7 +35,7 @@ type Annotations struct {
 	OpenWorld   bool `json:"openWorldHint"`
 }
 
-const tabArg = `"tab": {"type": "integer", "description": "The tab's id, as browser_tabs lists it; the tab shown when left out."}`
+const tabArg = `"tab": {"type": "integer", "description": "The tab's id, as browser_tabs lists it; when left out, the tab this thread leases and used last, else the tab shown."}`
 
 // Tools are the browser's tools.
 var Tools = []Tool{
@@ -43,6 +43,7 @@ var Tools = []Tool{
 		Name: "browser_tabs",
 		Description: "List, open, show, close, or release the tabs of the browser in the Glitched app, the pane beside the user's chat. " +
 			"Each tab has an id the other tools take. Opening one at a url loads it, leases it to this thread so other threads won't overwrite it, and returns its snapshot. " +
+			"Every tool using a tab leases it the same way, and refuses a tab another thread leases. " +
 			"Action \"release\" drops this thread's lease on a tab (or all its tabs when tab is omitted).",
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {
 			"action": {"type": "string", "enum": ["list", "new", "select", "close", "release"]},
@@ -75,7 +76,7 @@ var Tools = []Tool{
 		Annotations: Annotations{OpenWorld: true},
 	},
 	{
-		Name: "browser_screenshot",
+		Name:        "browser_screenshot",
 		Description: "Capture a PNG screenshot of a tab in the Glitched browser so you can visually inspect layout, styling, and rendering.",
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {
 			` + tabArg + `
@@ -114,7 +115,7 @@ var Tools = []Tool{
 		Annotations: Annotations{Destructive: true, OpenWorld: true},
 	},
 	{
-		Name: "browser_scroll",
+		Name:        "browser_scroll",
 		Description: "Scroll the page or a specific element by ref in the Glitched browser, then return a fresh snapshot.",
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {
 			"direction": {"type": "string", "enum": ["up", "down", "left", "right", "top", "bottom"], "description": "Direction or edge to scroll toward. If omitted with ref, scrolls the element into view."},
@@ -125,7 +126,7 @@ var Tools = []Tool{
 		Annotations: Annotations{OpenWorld: true},
 	},
 	{
-		Name: "browser_wait_for",
+		Name:        "browser_wait_for",
 		Description: "Wait until a page in the Glitched browser shows or hides matching text, CSS selector, or URL substring (up to timeout_ms), then return its snapshot.",
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {
 			"text": {"type": "string", "description": "Visible page text substring to wait for."},
