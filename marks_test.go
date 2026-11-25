@@ -1107,3 +1107,185 @@ func TestTwoWindowsShowingDifferentProjectsWriteMarksOnce(t *testing.T) {
 		t.Errorf("marks.json written %d times over 40 rebuilds", n)
 	}
 }
+
+// settlesInARound fails t if, after one round of a and b by turns, settling
+// either again changes the marks.
+func settlesInARound(t *testing.T, stored []projectMark, a, b []string) {
+	t.Helper()
+	s, _ := settleMarks(stored, a)
+	s, _ = settleMarks(s, b)
+	for range 3 {
+		for _, set := range [][]string{a, b} {
+			next, changed := settleMarks(s, set)
+			if changed {
+				t.Fatalf("settling %v changed %v to %v", set, s, next)
+			}
+		}
+	}
+}
+
+func TestAMovedProjectTakesNoHashIconOneNotShownHas(t *testing.T) {
+	// cp hashes to fast-tier, which cy has. With n shown, cp moves off
+	// n's folder; were it to take fast-tier, it would move again when cy
+	// shows, and so on for ever.
+	stored := []projectMark{{"cy", "fast-tier", "#ec4899"}, {"n", "folder", "#f97316"}, {"cp", "folder", "#8b5cf6"}}
+	settlesInARound(t, stored, []string{"cy", "cp"}, []string{"cp", "n", "ns", "l", "z"})
+}
+
+func TestAMovedProjectLooksForAnIconFromItsOwn(t *testing.T) {
+	// ir hashes to phone, which is has. With wc shown, ir moves off wc's
+	// code; looking from phone, it would land on is's phone and move again
+	// when is shows.
+	stored := []projectMark{{"wc", "code", "#14b8a6"}, {"is", "phone", "#0ea5e9"}, {"ir", "code", "#0ea5e9"}}
+	settlesInARound(t, stored, []string{"is", "ir"}, []string{"ir", "wc", "h", "e", "vx"})
+}
+
+func TestAMovedProjectKeepsItsColor(t *testing.T) {
+	// aaa hashes to phone #0ea5e9, but was given #eab308.
+	stored := []projectMark{{"openbot", "phone", "#22c55e"}, {"aaa", "phone", "#eab308"}}
+	out, _ := settleMarks(stored, []string{"openbot", "aaa"})
+	if m := out[1]; m != (projectMark{"aaa", "code", "#eab308"}) {
+		t.Errorf("aaa is %v; want code #eab308", m)
+	}
+}
+
+func TestWhileIconsGoRoundAPairOneNotShownHasIsTaken(t *testing.T) {
+	// z, not shown, has code #eab308; aaa moving onto code keeps its color.
+	stored := []projectMark{{"z", "code", "#eab308"}, {"openbot", "phone", "#22c55e"}, {"aaa", "phone", "#eab308"}}
+	out, _ := settleMarks(stored, []string{"openbot", "aaa"})
+	if m := out[2]; m != (projectMark{"aaa", "code", "#eab308"}) {
+		t.Errorf("aaa is %v; want code #eab308", m)
+	}
+}
+
+// pastEight is a stored mark for each of pairs, as icon and color indexes,
+// each under a name of its own, and those names.
+func pastEight(pairs ...[2]int) ([]projectMark, []string) {
+	var stored []projectMark
+	var shown []string
+	for i, p := range pairs {
+		n := fmt.Sprintf("s%02d", i)
+		stored = append(stored, projectMark{n, projectIcons[p[0]], projectColors[p[1]]})
+		shown = append(shown, n)
+	}
+	return stored, shown
+}
+
+// on is n marks on one pair of icon, or, with n 0, every pair of it.
+func on(icon, color, n int) [][2]int {
+	var ps [][2]int
+	if n == 0 {
+		for c := range projectColors {
+			ps = append(ps, [2]int{icon, c})
+		}
+	}
+	for range n {
+		ps = append(ps, [2]int{icon, color})
+	}
+	return ps
+}
+
+func TestANewProjectPastEightTakesAnIconWithAPairFree(t *testing.T) {
+	// openbot hashes to phone #22c55e. terminal is the least used, but has
+	// no pair free; every other icon has eight on one pair.
+	ps := on(0, 0, 0)
+	for i := 1; i < 8; i++ {
+		ps = append(ps, on(i, 0, 8)...)
+	}
+	stored, shown := pastEight(ps...)
+	out, _ := settleMarks(stored, append(shown, "openbot"))
+	if m := markOf(t, out, "openbot"); m != (projectMark{"openbot", "phone", "#22c55e"}) {
+		t.Errorf("openbot is %v; want phone #22c55e", m)
+	}
+}
+
+func TestANewProjectPastEightTakesAPairNoOneHasOverOneNotShownHas(t *testing.T) {
+	// phone is the least used, but its one pair free, #22c55e, is a's,
+	// which isn't shown; the others have eight each on #8b5cf6.
+	ps := on(2, 0, 0)
+	ps = slices.Delete(ps, 2, 3)
+	for i := range 8 {
+		if i != 2 {
+			ps = append(ps, on(i, 0, 8)...)
+		}
+	}
+	stored, shown := pastEight(ps...)
+	stored = append([]projectMark{{"a", "phone", "#22c55e"}}, stored...)
+	out, _ := settleMarks(stored, append(shown, "openbot"))
+	if m := markOf(t, out, "openbot"); m != (projectMark{"openbot", "code", "#22c55e"}) {
+		t.Errorf("openbot is %v; want code #22c55e", m)
+	}
+}
+
+func TestANewProjectPastEightTakesAPairOneNotShownHasOverNone(t *testing.T) {
+	// Every pair is taken but phone #22c55e, which a, not shown, has;
+	// phone has nine, the rest seven.
+	ps := on(2, 0, 0)
+	ps = slices.Delete(ps, 2, 3)
+	ps = append(ps, on(2, 0, 3)...)
+	for i := range 8 {
+		if i != 2 {
+			ps = append(ps, on(i, 0, 0)...)
+		}
+	}
+	stored, shown := pastEight(ps...)
+	stored = append([]projectMark{{"a", "phone", "#22c55e"}}, stored...)
+	out, _ := settleMarks(stored, append(shown, "openbot"))
+	if m := markOf(t, out, "openbot"); m != (projectMark{"openbot", "phone", "#22c55e"}) {
+		t.Errorf("openbot is %v; want phone #22c55e", m)
+	}
+}
+
+func TestNewProjectsAreKeptInNameOrder(t *testing.T) {
+	// glitched and openbot take their hash icons first; mygo, on wind
+	// with glitched, moves.
+	out, _ := settleMarks(nil, []string{"openbot", "mygo", "glitched"})
+	want := []projectMark{
+		{"glitched", "wind", "#ec4899"},
+		{"mygo", "code", "#0ea5e9"},
+		{"openbot", "phone", "#22c55e"},
+	}
+	if !slices.Equal(out, want) {
+		t.Errorf("got %v; want %v", out, want)
+	}
+}
+
+func TestUnknownMarksOnOnePairCountOnceAsPicksGo(t *testing.T) {
+	// Two this version can't redraw, both drawn code #8b5cf6, use code
+	// once: openbot, hashing to phone, which two have, takes code.
+	var unknown []projectMark
+	for i := 0; len(unknown) < 2; i++ {
+		if n := fmt.Sprintf("f%d", i); hashOf(n).Icon == "code" {
+			unknown = append(unknown, projectMark{n, "rocket", "#8b5cf6"})
+		}
+	}
+	var ps [][2]int
+	for i := range 8 {
+		if i != 3 {
+			ps = append(ps, [2]int{i, 0}, [2]int{i, 1})
+		}
+	}
+	stored, shown := pastEight(ps...)
+	for _, m := range unknown {
+		shown = append(shown, m.Name)
+	}
+	out, _ := settleMarks(append(stored, unknown...), append(shown, "openbot"))
+	if m := markOf(t, out, "openbot"); m != (projectMark{"openbot", "code", "#22c55e"}) {
+		t.Errorf("openbot is %v; want code #22c55e", m)
+	}
+}
+
+func TestOnlyAProjectsFirstMarkIsWhereItIsNotShown(t *testing.T) {
+	// z, not shown, is on terminal; its second entry, on wind, counts for
+	// nothing, so glitched, moving off openbot's phone, takes its hash wind.
+	stored := []projectMark{
+		{"openbot", "phone", "#22c55e"},
+		{"glitched", "phone", "#ec4899"},
+		{"z", "terminal", "#8b5cf6"},
+		{"z", "wind", "#8b5cf6"},
+	}
+	out, _ := settleMarks(stored, []string{"openbot", "glitched"})
+	if m := out[1]; m != (projectMark{"glitched", "wind", "#ec4899"}) {
+		t.Errorf("glitched is %v; want wind #ec4899", m)
+	}
+}

@@ -198,7 +198,7 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 		case p.at < 0:
 			out = append(out, m)
 			changed = true
-		case out[p.at] != m:
+		default:
 			out[p.at] = m
 			changed = true
 		}
