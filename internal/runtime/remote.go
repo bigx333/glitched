@@ -305,7 +305,10 @@ func (h *Host) hear(placeholder api.ID) {
 // there. A refusal of c is logged and ends it, as a refused stop of a
 // local child records nothing: the child there stays as it is. A child
 // lost on the way is lost here too, the stop that didn't reach it said:
-// what runs there is its person's to stop. A message or a narrowing is
+// what runs there is its person's to stop. An answer a machine's link
+// may not send, as one from before links took answers says, is refused
+// too: the answer is lost, never the child, and its question stays its
+// person's there. A message or a narrowing is
 // ended by a settle or a delete, which the stop after it takes up.
 func (h *Host) remoteCommand(e store.Effect, what string, at api.Remote, create *api.Command, c api.Command, narrow *api.Command) (engine.Observation, bool) {
 	ctx := h.ctx
@@ -344,8 +347,13 @@ func (h *Host) remoteCommand(e store.Effect, what string, at api.Remote, create 
 				return label, false, err
 			}
 		}
-		if err = send(c); errors.As(err, &rej) {
+		err = send(c)
+		if errors.As(err, &rej) {
 			refused = rej.Reason
+			return label, false, nil
+		}
+		if _, answer := c.Body.(api.RequestRespond); answer && errors.Is(err, api.ErrNotAllowed) {
+			refused = err.Error()
 			return label, false, nil
 		}
 		if err == nil && narrow != nil {
@@ -429,7 +437,10 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 	if (r.Turn == nil || r.Ended == nil) && !r.Run.IsZero() {
 		after = api.Cursor{}
 	}
-	st, err := m.Open(ctx, api.Subscription{Thread: r.Thread, After: after})
+	// Its views come with the commits that move it: whether it holds what
+	// waits on it after a stop, and which requests are questions, are
+	// that machine's to say, at the commit it says them in.
+	st, err := m.Open(ctx, api.Subscription{Thread: r.Thread, After: after, Views: true})
 	if err != nil {
 		return false, err
 	}
@@ -459,12 +470,19 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 		for _, it := range items {
 			var events []api.Event
 			fresh := false
+			var view *api.Thread
 			switch {
 			case it.Kind == api.StreamSnapshot && it.Snapshot != nil:
 				events, fresh, snapshot = it.Snapshot.Events, true, true
 				next.Cursor = it.Snapshot.Cursor
+				next.Held, next.Questions = false, nil
+				if len(it.Snapshot.Threads) == 1 {
+					view = &it.Snapshot.Threads[0]
+				}
+			case it.Kind == api.StreamThread && it.Thread != nil:
+				view = it.Thread
 			case it.Kind == api.StreamEvent && it.Event != nil:
-				events = []api.Event{*it.Event}
+				events, view = []api.Event{*it.Event}, it.Thread
 				next.Cursor = it.Event.Cursor
 			default:
 				continue
@@ -473,6 +491,17 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			var gone bool
 			if next, got, gone, err = engine.Follow(next, events, fresh); err != nil {
 				return progressed, fmt.Errorf("%w: %w", errDefect, err)
+			}
+			// The machine's view of the child, at the commit of the events
+			// it came with, says what holds there after a stop and which
+			// of what the run waits on are questions.
+			if view != nil && view.ID == r.Thread {
+				next.Held, next.Questions = view.Resumable, nil
+				for _, q := range view.Requests {
+					if q.Kind == api.KindQuestion && q.State == api.RequestPending {
+						next.Questions = append(next.Questions, q.ID)
+					}
+				}
 			}
 			for _, p := range got {
 				if !slices.ContainsFunc(reports, func(q engine.RemoteReport) bool { return q.Key == p.Key }) {
@@ -498,13 +527,13 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			}
 			reports[i].Reply = reply.Text
 		}
-		if snapshot || next.Run != r.Run || next.Silent != r.Silent || next.Slot != r.Slot || !slices.Equal(next.Pending, r.Pending) || next.Taken != r.Taken || next.Ended != r.Ended || next.Model != r.Model || next.Access != r.Access || next.Turn != r.Turn || len(reports) > 0 {
+		if snapshot || next.Held != r.Held || next.Run != r.Run || next.Silent != r.Silent || next.Slot != r.Slot || !slices.Equal(next.Pending, r.Pending) || !slices.Equal(next.Questions, r.Questions) || next.Taken != r.Taken || next.Ended != r.Ended || next.Model != r.Model || next.Access != r.Access || next.Turn != r.Turn || len(reports) > 0 {
 			_, listed, err := h.dial(at)
 			if err != nil {
 				return progressed, err
 			}
 			listed.Close()
-			o := engine.RemoteSeen{Cursor: next.Cursor, Run: next.Run, Silent: next.Silent, Slot: next.Slot, Pending: next.Pending, Taken: next.Taken, Ended: next.Ended, Model: next.Model, Access: next.Access, Turn: next.Turn, Reports: reports, On: label}
+			o := engine.RemoteSeen{Cursor: next.Cursor, Run: next.Run, Silent: next.Silent, Slot: next.Slot, Pending: next.Pending, Questions: next.Questions, Taken: next.Taken, Ended: next.Ended, Model: next.Model, Access: next.Access, Turn: next.Turn, Held: next.Held, Reports: reports, On: label}
 			_, err = h.store.Observe(ctx, t.ID, o, h.clock(), 0)
 			if errors.Is(err, engine.ErrRefused) {
 				return progressed, errObsolete

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"maps"
@@ -8,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"glitched/internal/api"
 	"glitched/internal/daemon"
 )
 
@@ -51,8 +53,9 @@ func (m *Manager) Inspect() {
 
 // Configure changes engine.json, and restarts the engine embedded here to
 // apply the change, except a change to the child limits, idle
-// compaction, keep awake or the provider log alone, which it applies at
-// once. An engine another process runs applies it when it next starts.
+// compaction, keep awake, the provider log or children from other
+// machines alone, which it applies at once: the engine reads the last
+// from engine.json at each link's create. An engine another process runs applies it when it next starts.
 func (m *Manager) Configure(change func(*daemon.Config)) error {
 	var was daemon.Config
 	cfg, err := daemon.Edit(m.cfg.Dir, func(cfg *daemon.Config) error {
@@ -88,6 +91,7 @@ func (m *Manager) Configure(change func(*daemon.Config)) error {
 	// The engine reads it as it starts, which is when it acts on it.
 	was.ContinueAfterRestart = cfg.ContinueAfterRestart
 	was.SyncSkills = cfg.SyncSkills
+	was.ChildrenFromOtherMachines = cfg.ChildrenFromOtherMachines
 	if reflect.DeepEqual(cfg, was) && m.embedded != nil {
 		applyLive(m.embedded, cfg)
 	} else {
@@ -103,6 +107,41 @@ func (m *Manager) Pair(label string) (string, error) {
 	m.changes++
 	m.Inspect()
 	return token, err
+}
+
+// PairLink mints a link for the engine of the machine label names, scoped
+// to l, its token returned only this once (daemon.PairLink).
+func (m *Manager) PairLink(label string, l api.Link) (string, api.Link, error) {
+	token, l, err := daemon.PairLink(m.cfg.Dir, label, l)
+	m.changes++
+	m.Inspect()
+	return token, l, err
+}
+
+// AddMachine adds the engine at server, which minted this one a link with
+// token, as label, where this engine's agents may then start children. It
+// asks that engine which it is in the background and calls done with why
+// it failed, or nil.
+func (m *Manager) AddMachine(label, server, token string, done func(error)) {
+	m.wg.Go(func() {
+		ctx, cancel := context.WithTimeout(m.ctx, addTimeout)
+		_, err := daemon.AddMachine(ctx, m.cfg.Dir, label, server, token)
+		cancel()
+		m.post(m.ctx, func() {
+			m.changes++
+			m.Inspect()
+			done(err)
+		})
+	})
+}
+
+// RemoveMachine removes label's machine and its token here. Its link stays
+// valid on that machine until its person revokes it there.
+func (m *Manager) RemoveMachine(label string) error {
+	err := daemon.RemoveMachine(m.cfg.Dir, label)
+	m.changes++
+	m.Inspect()
+	return err
 }
 
 // Revoke removes label's token. The engine closes the sockets it admitted

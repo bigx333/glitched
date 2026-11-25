@@ -562,13 +562,26 @@ type Thread struct {
 	// Remote is set on a remote child's placeholder: where its child runs,
 	// whose run Run is as this engine last heard.
 	Remote *Placement `json:"remote,omitempty"`
+	// Origin is set on a thread another machine's link started: the
+	// thread there that started it, through which link.
+	Origin *Origin `json:"origin,omitempty"`
 }
 
 // Placement is where a remote child runs: on the machine labelled
-// Machine, which this engine last heard from for it at Heard, zero before
-// it has since it started; Lost is why it no longer follows the child.
-// A read fills Machine and Heard; a stream's view leaves them out.
+// Machine, whose engine is Engine, through the link Link, as the thread
+// Thread there, zero until that machine took the create, whose last run
+// there is Run. This engine last
+// heard from it for the child at Heard, zero before it has since it
+// started; Lost is why it no longer follows the child. A read fills
+// Machine and Heard; a stream's view leaves them out.
 type Placement struct {
+	Engine ID `json:"engine"`
+	Link   ID `json:"link"`
+	Thread ID `json:"thread,omitzero"`
+	Run    ID `json:"run,omitzero"`
+	// Held is that a stop there left messages or reports waiting, which
+	// only a resume there starts.
+	Held    bool      `json:"held,omitempty"`
 	Machine string    `json:"machine,omitempty"`
 	Heard   time.Time `json:"heard,omitzero"`
 	Lost    string    `json:"lost,omitempty"`
@@ -601,9 +614,12 @@ func (t Thread) Working() bool { return t.Run != RunIdle && t.Run != RunUncertai
 // Silent is whether the live run is a silent one.
 func (t Thread) Silent() bool { return t.Turn != nil && t.Turn.Silent }
 
-// Stoppable is whether the thread has a run the user can stop: a live
-// one that isn't silent.
-func (t Thread) Stoppable() bool { return t.Live() && !t.Silent() }
+// Stoppable is whether the user can stop the thread: it has a live run
+// that isn't silent, or it is a link's thread whose messages wait with
+// no run, on its worktree or its ceiling, where a stop holds them.
+func (t Thread) Stoppable() bool {
+	return t.Live() && !t.Silent() || t.Origin != nil && !t.Live() && t.Queued > 0 && !t.Resumable
+}
 
 // Live is whether the thread has a run, an uncertain one too. Only an
 // interrupt, a settle or a delete ends an uncertain run.
@@ -653,8 +669,16 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // still forgotten; version 20 takes a link's create of a thread settled
 // on its machine first, which a version 19 engine would start, and fences
 // a link's messages by its settles, which a version 19 engine would let a
-// late message reopen.
-const Protocol = 20
+// late message reopen; version 21 says in a view where a remote child runs
+// and where a link's thread came from, which a version 20 GUI would show
+// as a child it can't open and a thread of the user's, and sends a link's
+// thread stream its views, without which a version 20 engine's follower
+// can't say what a stop there holds; version 22 takes a parent's answer to
+// its remote child's question over the link, which a version 21 engine
+// refuses, and sends a link's thread's view on its commit's last event,
+// which a version 21 follower drops, so it never says what a stop there
+// holds.
+const Protocol = 22
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host
@@ -713,6 +737,12 @@ func (t Tailnet) Running() bool { return t.State == "Running" }
 type Query struct {
 	Thread ID     `json:"thread,omitzero"`
 	After  Cursor `json:"after,omitzero"`
+	// Views is that a thread's subscription also sends the thread's view
+	// at each commit that moves it, on the item of the commit's last event
+	// of the thread, so the two arrive whole, and on a catch-up's last
+	// replayed event, or as a StreamThread item when it replays none. A
+	// Read ignores it.
+	Views bool `json:"views,omitempty"`
 }
 
 type Snapshot struct {

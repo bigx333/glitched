@@ -388,6 +388,8 @@ func TestRecheckFinishedChildOnUpgrade(t *testing.T) {
 	kid := p.place("upgrade cursor")
 	there := p.bound(kid).Thread
 	until(t, "completed outcome folded", func() bool { return p.placeholder(kid).Remote.Ended != nil })
+	// The report's wake is the parent's to stop, once it has it.
+	until(t, "the parent's report", func() bool { reports, _ := p.reports(kid); return len(reports) == 1 })
 	p.submitA(p.parent, api.TurnInterrupt{})
 	p.parentIdle()
 	p.stopA()

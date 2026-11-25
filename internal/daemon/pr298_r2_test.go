@@ -297,7 +297,7 @@ func TestR2OriginalWinsWhileCleanupWaitsForWriter(t *testing.T) {
 		buf := make([]byte, 1<<19)
 		n := goruntime.Stack(buf, true)
 		for _, s := range strings.Split(string(buf[:n]), "\n\n") {
-			if strings.Contains(s, "internal/runtime/link.go:144") && strings.Contains(s, "internal/store.(*Store).commit(") && strings.Contains(s, "Mutex") {
+			if strings.Contains(s, "internal/runtime.(*Host).createFromLink(") && strings.Contains(s, "internal/store.(*Store).commit(") && strings.Contains(s, "Mutex") {
 				return true
 			}
 		}

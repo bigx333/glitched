@@ -114,6 +114,7 @@ type Remote struct {
 	Silent    bool            `json:"silent,omitempty"`
 	Slot      api.RunState    `json:"slot,omitempty"`
 	Pending   []api.ID        `json:"pending,omitempty"`
+	Questions []api.ID        `json:"questions,omitempty"`
 	Reported  []api.ID        `json:"reported,omitempty"`
 	Lost      string          `json:"lost,omitempty"`
 	Create    *api.Command    `json:"create,omitempty"`
@@ -125,6 +126,9 @@ type Remote struct {
 	Model  api.ModelRef    `json:"model,omitzero"`
 	Access api.Access      `json:"access,omitempty"`
 	Turn   *api.TurnResult `json:"turn,omitempty"`
+	// Held is that the child there holds what waits on it after a stop,
+	// as its machine's own view says, which only a resume there starts.
+	Held bool `json:"held,omitempty"`
 }
 
 // Origin is a link's thread's: where it came from, as api.Origin, its
@@ -358,8 +362,12 @@ func View(t Thread) api.Thread {
 		v.Context = &c
 	}
 	if r := t.Remote; r != nil {
-		v.Remote = &api.Placement{Lost: r.Lost}
+		v.Remote = &api.Placement{Engine: r.Engine, Link: r.Link, Thread: r.Thread, Run: r.Run, Lost: r.Lost}
+		v.Remote.Held = r.State == RemoteBoundState && r.Held
 		switch {
+		case r.State == RemoteBoundState && r.Silent && r.Slot != api.RunUncertain:
+			// A silent run there shows nothing, as one here does.
+			v.Run = api.RunIdle
 		case r.State == RemoteBoundState:
 			v.Run = r.Slot
 		case r.State == RemoteCreating && !t.settled():
@@ -369,6 +377,10 @@ func View(t Thread) api.Thread {
 			e := *r.Ended
 			v.LastTurn = &e
 		}
+	}
+	if t.Origin != nil {
+		o := t.Origin.Origin
+		v.Origin = &o
 	}
 	if r := t.Live(); r != nil {
 		v.Turn = &api.Turn{Run: r.ID, Model: r.Model, Access: r.Access, Silent: r.Silent}

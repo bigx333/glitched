@@ -81,7 +81,7 @@ func (t Thread) waiting() bool {
 
 // compactWindow is the window after last, a finished run of t's.
 func compactWindow(t Thread, last Run, now time.Time) (start, end time.Time, ok bool) {
-	if !t.Exists() || t.Deleted || t.settled() || !t.Parent.IsZero() || t.Context.Stale {
+	if !t.Exists() || t.Deleted || t.settled() || t.child() || t.Context.Stale {
 		return time.Time{}, time.Time{}, false
 	}
 	if last.State != RunFinished || last.Outcome != api.OutcomeCompleted || last.Ended.IsZero() || last.Silent {

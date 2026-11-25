@@ -163,6 +163,7 @@ func (s *Store) submit(ctx context.Context, c api.Command, body api.Intent, chec
 	}}
 	r := &receipt{id: c.ID, hash: hash[:], thread: c.Target}
 	at, err := s.commit(ctx, r, 0, func(q querier) ([]step, error) {
+		var narrows []step
 		if b, ok := c.Body.(api.ThreadCreate); ok && b.Settled && b.Origin != nil {
 			// A settled create of a link's thread there already is the
 			// settle of its tree, decided in the commit either create
@@ -182,16 +183,42 @@ func (s *Store) submit(ctx context.Context, c api.Command, body api.Intent, chec
 					return nil, &api.RejectedError{Reason: err.Error()}
 				}
 				c.Body, c.Caller = api.InboxSet{Disposition: api.Disposition{State: api.Settled}}, &api.Caller{Thread: b.Origin.Thread}
+				// The create comes at the access its machine narrowed the
+				// child to since the first: the tree takes it in this
+				// commit too, before the settle, so nothing reopened
+				// there runs wider.
+				if b.Access < t.Access {
+					ids, err := treeOf(ctx, q, c.Target)
+					if err != nil {
+						return nil, err
+					}
+					narrow := api.ThreadConfigure{Access: &b.Access}
+					for _, id := range append([]api.ID{c.Target}, ids...) {
+						narrows = append(narrows, step{id, func(q querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
+							var body api.Intent = narrow
+							if id != c.Target {
+								if body = engine.Below(narrow, t); body == nil {
+									return nil, nil, nil
+								}
+							}
+							env, err := s.env(ctx, q, t)
+							if err != nil {
+								return nil, nil, err
+							}
+							return engine.DecideWith(t, api.Command{ID: c.ID, Target: id, Body: body}, env, now)
+						}})
+					}
+				}
 			}
 		}
 		if !engine.TakesTree(c.Body) {
-			return []step{top}, nil
+			return append(narrows, top), nil
 		}
 		below, err := treeOf(ctx, q, c.Target)
 		if err != nil {
 			return nil, err
 		}
-		var steps []step
+		steps := narrows
 		for _, id := range below {
 			// An agent's stop of a tree leaves the threads the user took
 			// over, and the runs only the user can end, to the user.

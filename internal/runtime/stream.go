@@ -29,7 +29,7 @@ func (h *Host) Open(ctx context.Context, sub api.Subscription) (api.Stream, erro
 			return nil, err
 		}
 	}
-	s := &stream{h: h, thread: sub.Thread, wake: make(chan struct{}, 1)}
+	s := &stream{h: h, thread: sub.Thread, views: sub.Views && !sub.Thread.IsZero(), wake: make(chan struct{}, 1)}
 	h.mu.Lock()
 	h.subs[s] = struct{}{}
 	h.mu.Unlock()
@@ -44,7 +44,7 @@ func (h *Host) Open(ctx context.Context, sub api.Subscription) (api.Stream, erro
 
 func (h *Host) catchUp(ctx context.Context, q api.Query) ([]api.StreamItem, uint64, error) {
 	if !q.Thread.IsZero() && q.After.Log == h.store.LogID() {
-		events, head, err := h.store.Since(ctx, q.Thread, q.After.Seq, replayEvents+1)
+		events, head, view, err := h.store.SinceView(ctx, q.Thread, q.After.Seq, replayEvents+1)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -56,6 +56,13 @@ func (h *Host) catchUp(ctx context.Context, q api.Query) ([]api.StreamItem, uint
 			items := make([]api.StreamItem, len(events))
 			for i := range events {
 				items[i] = api.StreamItem{Kind: api.StreamEvent, Event: &events[i]}
+			}
+			switch {
+			case !q.Views || view.ID != q.Thread:
+			case len(items) > 0:
+				items[len(items)-1].Thread = &view
+			default:
+				items = append(items, api.StreamItem{Kind: api.StreamThread, Thread: &view})
 			}
 			return items, head, nil
 		}
@@ -70,6 +77,7 @@ func (h *Host) catchUp(ctx context.Context, q api.Query) ([]api.StreamItem, uint
 type stream struct {
 	h      *Host
 	thread api.ID // zero is the shell
+	views  bool   // a thread's view comes with its events, as Query.Views says
 	wake   chan struct{}
 
 	mu    sync.Mutex
@@ -140,6 +148,13 @@ func (s *stream) batchOf(c store.Commit) batch {
 			b.items = append(b.items, api.StreamItem{Kind: api.StreamEvent, Event: &c.Events[i]})
 		}
 	}
+	if s.views && len(b.items) > 0 {
+		for i := range c.Threads {
+			if c.Threads[i].ID == s.thread {
+				b.items[len(b.items)-1].Thread = &c.Threads[i]
+			}
+		}
+	}
 	return b
 }
 
@@ -167,17 +182,17 @@ func (s *stream) queue(items []api.StreamItem) {
 const viewOverhead = 256
 
 func size(it api.StreamItem) int {
-	switch {
-	case it.Event != nil:
-		return len(it.Event.Payload)
-	case it.Thread != nil:
-		n := viewOverhead + len(it.Thread.Title) + len(it.Thread.Workspace)
+	n := 0
+	if it.Event != nil {
+		n += len(it.Event.Payload)
+	}
+	if it.Thread != nil {
+		n += viewOverhead + len(it.Thread.Title) + len(it.Thread.Workspace)
 		for _, r := range it.Thread.Requests {
 			n += len(r.Body)
 		}
-		return n
 	}
-	return 0
+	return n
 }
 
 func (s *stream) bound() {

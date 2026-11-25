@@ -952,6 +952,9 @@ func (a *app) revealRow(id api.ID) bool {
 // choose shows the thread a person chose, its composer taking the focus
 // (composerInput).
 func (a *app) choose(t thread) {
+	if b, ok := a.remoteThread(t); ok {
+		t = b
+	}
 	a.select_(t)
 	a.chosen = t.id()
 }

@@ -248,9 +248,12 @@ func (a *app) childRow(c *ui.Context, k thread, depth int) {
 			name.FontWeight(600).TextColor(palette.text)
 		}
 		a.statusMark(c, a.statusOf(k))
-		if len(a.shown(k)) > 0 {
+		switch {
+		case len(a.shown(k)) > 0:
 			a.childToggle(c, k)
-		} else {
+		case remote(k) != nil:
+			a.remoteMark(c, k, 11)
+		default:
 			ui.Text(c, ago(k.View.UpdatedAt, a.now)).FontSize(11).TextColor(palette.faint).Shrink(0)
 		}
 	}).Clicked() {
@@ -269,6 +272,15 @@ func (a *app) childRow(c *ui.Context, k thread, depth int) {
 // did beside each other. It returns the title, which the header measures.
 func (a *app) heading(c *ui.Context, t thread, narrow bool) ui.Element {
 	up := a.ancestors(t)
+	if len(up) == 0 && t.View.Origin != nil {
+		var heading ui.Element
+		ui.Row(c).Key("origin-heading").Gap(8).AlignItems(ui.Center).Shrink(1).Children(func() {
+			a.originCrumb(c, t)
+			ui.Icon(c, icChevronR).FontSize(11).TextColor(palette.faint).Shrink(0)
+			heading = headingTitle(c, t)
+		})
+		return heading
+	}
 	if len(up) == 0 {
 		return headingTitle(c, t)
 	}
@@ -461,9 +473,14 @@ func contextTokens(n float64) string {
 // stillBlocked is whether a blocked report of child's, in t's transcript,
 // still stands: the child's run waits on a request, and the report is the
 // last the run made of one. A run that asked twice made two; the first was
-// answered.
+// answered. A remote child's placeholder holds no requests: its child
+// waits on one on its machine while the placeholder says it waits.
 func stillBlocked(t, child thread, r client.ReportEntry) bool {
-	if !slices.ContainsFunc(child.View.Requests, func(q api.Request) bool { return q.Run == r.Run }) || t.Transcript == nil {
+	waits := slices.ContainsFunc(child.View.Requests, func(q api.Request) bool { return q.Run == r.Run })
+	if p := remote(child); p != nil {
+		waits = child.View.Run == api.RunWaiting && p.Run == r.Run
+	}
+	if !waits || t.Transcript == nil {
 		return false
 	}
 	for i := len(t.Transcript.Entries) - 1; i >= 0; i-- {
@@ -521,6 +538,8 @@ func (a *app) reports(c *ui.Context, t thread, e entry) {
 			switch {
 			case n.Kind == api.ReportFailed:
 				icon, col, state = icX, palette.red, "Failed"
+			case n.Kind == api.ReportBlocked && found && stillBlocked(t, child, n) && remote(child) != nil:
+				icon, col, state = icHand, palette.amber, "Needs you on "+a.remoteLabel(child)
 			case n.Kind == api.ReportBlocked && found && stillBlocked(t, child, n):
 				icon, col, state = icHand, palette.amber, "Needs you"
 			case n.Kind == api.ReportBlocked:

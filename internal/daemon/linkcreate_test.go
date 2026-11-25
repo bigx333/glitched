@@ -305,8 +305,11 @@ func TestALinkReachesOnlyTheThreadsItStarted(t *testing.T) {
 	notAllowed(t, "a read of the child under the link's thread", err)
 	notAllowed(t, "a stop of the child under the link's thread", l.send(kid, api.TurnInterrupt{}))
 
+	var rej *api.RejectedError
+	if err := l.send(thread, api.RequestRespond{Request: api.NewID(), Answer: []byte("{}")}); !errors.As(err, &rej) {
+		t.Errorf("an answer to no question of the link's thread: %v, want it refused", err)
+	}
 	refused := []api.Intent{
-		api.RequestRespond{Request: api.NewID(), Answer: []byte("{}")},
 		api.ThreadRename{Title: "mine now"},
 		api.ThreadDelete{},
 		api.ThreadDelete{RemoveWorktree: true},
