@@ -1392,3 +1392,57 @@ func TestMarksOfAnotherShapeAreLeftAsTheyAre(t *testing.T) {
 		t.Errorf("marks.json holds %v", ms)
 	}
 }
+
+func TestAMarkWithNoNameLeavesMarksJSONAsItIs(t *testing.T) {
+	dir := t.TempDir()
+	src := `[{"name":"pstack-t3","icon":"wind","color":"#0ea5e9"},{"name":"mygo","icon":"phone","color":"#0ea5e9"},{}]`
+	if err := os.WriteFile(filepath.Join(dir, "marks.json"), []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var logged syncBuffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	a := marksApp(dir, "pstack-t3", "mygo")
+	by := marksDrawn(a)
+	if by["pstack-t3"] != (projectMark{"pstack-t3", "wind", "#0ea5e9"}) || by["mygo"] != (projectMark{"mygo", "phone", "#0ea5e9"}) {
+		t.Errorf("drawn %v; want the stored marks", by)
+	}
+	for range 3 {
+		showMarks(a, "pstack-t3", "mygo")
+	}
+	showMarks(a, "pstack-t3", "mygo", "glitched")
+	keptAsIs(t, dir, src)
+	if slices.ContainsFunc(a.marks, func(m projectMark) bool { return m.Name == "" }) {
+		t.Errorf("a mark with no name is held: %v", a.marks)
+	}
+	if n := strings.Count(logged.String(), "is not one this version writes"); n != 1 {
+		t.Errorf("logged %q", logged.String())
+	}
+}
+
+func TestMarksMadeUnreadableAtTheSameStatAreHeldOnce(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "marks.json")
+	a := marksApp(dir, "glitched", "mygo")
+	old, _ := os.ReadFile(path)
+	_, mtime := readMarks(t, dir)
+	// Another version's file, as many bytes and at the same time.
+	src := `{"version":2}`
+	src += strings.Repeat(" ", len(old)-len(src))
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Chtimes(path, mtime, mtime)
+	var logged syncBuffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	showMarks(a, "glitched", "mygo", "pstack-t3")
+	showMarks(a, "glitched", "mygo", "pstack-t3", "sparky")
+	keptAsIs(t, dir, src)
+	if !a.marksHeld {
+		t.Error("marks not held")
+	}
+	if n := strings.Count(logged.String(), "is not one this version writes"); n != 1 {
+		t.Errorf("logged %q", logged.String())
+	}
+}

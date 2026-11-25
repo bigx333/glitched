@@ -263,7 +263,7 @@ func (f marksFile) same(g marksFile) bool { return f.mod.Equal(g.mod) && f.size 
 
 // decodeMarks is the marks in raw, a JSON value, in their order, and
 // whether raw is an array of marks this version writes. An entry that
-// doesn't decode is skipped. A newer version's extra fields on an entry
+// doesn't decode, or has no name, is skipped. A newer version's extra fields on an entry
 // are dropped when this one writes the entry again.
 func decodeMarks(raw json.RawMessage) (ms []projectMark, ours bool) {
 	var entries []json.RawMessage
@@ -273,7 +273,7 @@ func decodeMarks(raw json.RawMessage) (ms []projectMark, ours bool) {
 	ours = true
 	for _, e := range entries {
 		var m projectMark
-		if json.Unmarshal(e, &m) != nil {
+		if json.Unmarshal(e, &m) != nil || m.Name == "" {
 			ours = false
 			continue
 		}
@@ -368,7 +368,7 @@ func (a *app) settleShownMarks() {
 			case err == nil || errors.Is(err, errMarksSettled):
 				a.marks, a.marksRead = ms, a.statMarks()
 			case errors.Is(err, errMarksHeld):
-				// Read again, and held, on the next rebuild.
+				a.heldMarks(true)
 			default:
 				log.Printf("glitched: marks: %v", err)
 			}
