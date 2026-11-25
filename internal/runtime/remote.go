@@ -417,30 +417,11 @@ func (h *Host) followRemote(ctx context.Context, placeholder api.ID) {
 // a snapshot whole, asks m what each done run said, and commits it, with
 // the reports it holds, whenever it moved the cursor past a snapshot, or
 // changed the child's run or brought a report. progressed is that it
-// committed. A machine removed from the list ends it within a second,
-// whatever the child does.
+// committed. Before each commit it checks the machine is still in the
+// list.
 func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label string) (progressed bool, err error) {
 	r := *t.Remote
 	at := api.Remote{Engine: r.Engine, Link: r.Link}
-	ctx, removed := context.WithCancelCause(ctx)
-	defer removed(nil)
-	go func() {
-		tick := time.NewTicker(time.Second)
-		defer tick.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-tick.C:
-			}
-			if _, listed, err := h.dial(at); errors.Is(err, ErrNoMachine) {
-				removed(err)
-				return
-			} else if err == nil {
-				listed.Close()
-			}
-		}
-	}()
 	// A child followed before this engine kept its runs as admitted there
 	// and how they ended is read from the start, its reports kept by key,
 	// until a run it reads has ended.
@@ -457,9 +438,6 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 	cancel()
 	for {
 		it, err := st.Next(ctx)
-		if cause := context.Cause(ctx); cause != nil && ctx.Err() != nil && errors.Is(cause, ErrNoMachine) {
-			return progressed, cause
-		}
 		if err != nil {
 			return progressed, err
 		}
@@ -547,9 +525,8 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 }
 
 // createRemote commits b, a remote child's create, with the repository
-// its machine starts it from, its parent's. What goes to another machine
-// holds no value of the parent's vault, which never leaves this one,
-// however short. A create already committed gets its receipt.
+// its machine starts it from, its parent's. A create already committed
+// gets its receipt.
 func (h *Host) createRemote(ctx context.Context, c api.Command, b api.ThreadCreate) (api.Receipt, error) {
 	if done, err := h.store.Committed(ctx, c.ID); err != nil || done {
 		if err != nil {
@@ -561,11 +538,6 @@ func (h *Host) createRemote(ctx context.Context, c api.Command, b api.ThreadCrea
 	if err != nil {
 		return api.Receipt{}, err
 	}
-	for _, v := range h.credentials(b.Parent) {
-		if v != "" && (strings.Contains(b.Text, v) || strings.Contains(b.Title, v) || strings.Contains(parent.Title, v)) {
-			return api.Receipt{}, &api.RejectedError{Reason: "the task holds a credential value; name the variable instead"}
-		}
-	}
 	in := b
 	in.Repository = repositoryOf(ctx, parent.Workspace)
 	// A worktree made for a local create of the same thread commits, or
@@ -573,22 +545,6 @@ func (h *Host) createRemote(ctx context.Context, c api.Command, b api.ThreadCrea
 	h.making.Lock()
 	defer h.making.Unlock()
 	return h.store.SubmitResolved(ctx, c, in, h.clock())
-}
-
-// leavesNoValue refuses text, a message to thread, when thread is a
-// remote child's placeholder and text holds a value of its parent's
-// vault, which never leaves this machine.
-func (h *Host) leavesNoValue(ctx context.Context, thread api.ID, text string) error {
-	t, err := h.store.Thread(ctx, thread)
-	if err != nil || t.Remote == nil {
-		return err
-	}
-	for _, v := range h.credentials(t.Parent) {
-		if v != "" && strings.Contains(text, v) {
-			return &api.RejectedError{Reason: "the message holds a credential value; name the variable instead"}
-		}
-	}
-	return nil
 }
 
 // repositoryOf is the repository a remote child of a thread in dir starts

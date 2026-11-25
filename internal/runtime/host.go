@@ -343,10 +343,6 @@ func (h *Host) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
 		return h.submitFromLink(ctx, link, c)
 	}
 	switch b := c.Body.(type) {
-	case api.MessageDispatch:
-		if err := h.leavesNoValue(ctx, c.Target, b.Text); err != nil {
-			return api.Receipt{}, err
-		}
 	case api.ThreadCreate:
 		if b.Origin != nil || b.Repository != nil {
 			return api.Receipt{}, &api.RejectedError{Reason: "only another machine's link starts a thread from there"}

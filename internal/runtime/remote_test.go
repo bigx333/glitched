@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -155,44 +154,21 @@ func TestAPlaceholderTakesAPlaceAtWork(t *testing.T) {
 	assertReplay(t, n.st)
 }
 
-// A remote child's task that holds a value of its parent's vault is
-// refused before anything is stored: the vault never leaves the machine.
-func TestARemoteTaskWithAVaultValueIsRefused(t *testing.T) {
+// A remote child's task and its messages are not scanned for values of
+// the parent's vault.
+func TestARemoteTaskWithAVaultValueIsPlaced(t *testing.T) {
 	vault := secrets.New(t.TempDir())
 	n, ad := remoteHost(t, runtime.WithVault(vault))
 	parent := repoThread(t, n.h)
-	if err := vault.Put(parent, map[string]string{"DEPLOY_TOKEN": "tok-8c1f2e9a77", "PIN": "k29Qm7", "OWN_NAME": "[OWN_NAME]"}); err != nil {
+	if err := vault.Put(parent, map[string]string{"DEPLOY_TOKEN": "tok-8c1f2e9a77"}); err != nil {
 		t.Fatal(err)
 	}
-	before, err := n.st.ReadLog(ctx, 0, 0)
-	if err != nil {
-		t.Fatal(err)
+	ids, errs := placed(t, n.h, ad, parent, fake.Child{Title: "deploy tok-8c1f2e9a77", Task: "deploy with tok-8c1f2e9a77", Remote: "laptop"})
+	if errs[0] != nil {
+		t.Fatalf("a remote task holding a vault value: %v; want it placed", errs[0])
 	}
-	ids, errs := placed(t, n.h, ad, parent,
-		fake.Child{Title: "leaky", Task: "deploy with tok-8c1f2e9a77", Remote: "laptop"},
-		fake.Child{Title: "deploy tok-8c1f2e9a77", Task: "deploy", Remote: "laptop"},
-		fake.Child{Title: "using k29Qm7", Task: "go", Remote: "laptop"},
-		fake.Child{Title: "using [OWN_NAME]", Task: "go", Remote: "laptop"},
-		fake.Child{Title: "named", Task: "deploy with $DEPLOY_TOKEN", Remote: "laptop"})
-	for i, what := range []string{"a task with the token's value", "a title with the token's value", "a title with a value too short to redact", "a title with a value that is its own redaction"} {
-		refusedWith(t, what, errs[i], "the task holds a credential value; name the variable instead")
-	}
-	if errs[4] != nil {
-		t.Fatalf("a task that names the variable: %v; want it placed", errs[4])
-	}
-	after, err := n.st.ReadLog(ctx, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range after[len(before):] {
-		if slices.Contains(ids[:4], e.Thread) {
-			t.Fatalf("a refused create stored %s", e.Type)
-		}
-	}
-	for _, id := range ids[:4] {
-		if th, _ := n.st.Thread(ctx, id); th.Exists() {
-			t.Fatalf("a refused create stored its thread: %+v", th)
-		}
+	if err := tryOn(n.h, ids[0], dispatch("continue with tok-8c1f2e9a77", api.StartNow)); err != nil {
+		t.Fatalf("a message holding a vault value: %v; want it taken", err)
 	}
 }
 
