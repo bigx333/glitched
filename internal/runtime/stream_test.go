@@ -62,3 +62,30 @@ func TestShellViewsCountAgainstTheCap(t *testing.T) {
 		t.Fatalf("unread views over the cap: %v, want api.ErrOverflow", err)
 	}
 }
+
+// A thread's stream that asks for views sends the thread's view after the
+// events of each commit that moves it, and nothing for one that doesn't.
+func TestAThreadsViewFollowsTheEventsOfItsCommit(t *testing.T) {
+	mine, other := api.NewID(), api.NewID()
+	s := &stream{thread: mine, views: true, wake: make(chan struct{}, 1)}
+	s.start(nil, 0)
+	if it, err := nextWithin(s, time.Second); err != nil || it.Kind != api.StreamSynchronized {
+		t.Fatalf("an empty catch-up: %+v %v, want synchronized", it, err)
+	}
+	s.publish(store.Commit{Events: []api.Event{{Cursor: api.Cursor{Seq: 1}, Thread: other}}, Threads: []api.Thread{{ID: other}}})
+	s.publish(store.Commit{Events: []api.Event{{Cursor: api.Cursor{Seq: 2}, Thread: mine}}, Threads: []api.Thread{{ID: other}, {ID: mine, Resumable: true}}})
+	var got []api.StreamItem
+	for range 2 {
+		it, err := nextWithin(s, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, it)
+	}
+	if got[0].Kind != api.StreamEvent || got[0].Event.Cursor.Seq != 2 || got[1].Kind != api.StreamThread || got[1].Thread.ID != mine || !got[1].Thread.Resumable {
+		t.Fatalf("got %+v, want the commit's event and then its view", got)
+	}
+	if it, err := nextWithin(s, 100*time.Millisecond); err == nil {
+		t.Fatalf("got %+v after the commit's view, want nothing", it)
+	}
+}
