@@ -26,7 +26,7 @@ func serviceCmd(ctx context.Context, args []string) error {
 
 	fs := flag.NewFlagSet("service", flag.ContinueOnError)
 	dir := dirFlag(fs)
-	bin := fs.String("binary", "", "glitched binary for the service to run")
+	bin := fs.String("binary", "", "glitched binary for the service to run; this one when empty")
 	jsonOut := fs.Bool("json", false, "output status as JSON")
 	if err := fs.Parse(flagArgs); err != nil {
 		return usageError(err.Error())

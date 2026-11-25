@@ -49,13 +49,19 @@ func (launchd) parse(data []byte) (binary, dir, log string) {
 	return binary, dir, log
 }
 
-// serveOf reads the binary and -dir of a serve command line.
+// serveOf reads the binary and -dir of a serve command line, as the flag
+// package does: -dir DIR or -dir=DIR, with one dash or two.
 func serveOf(args []string) (binary, dir string) {
 	if len(args) == 0 {
 		return "", ""
 	}
-	for i, a := range args[:len(args)-1] {
-		if a == "-dir" || a == "--dir" {
+	for i, a := range args {
+		name, value, eq := strings.Cut(a, "=")
+		switch {
+		case name != "-dir" && name != "--dir":
+		case eq:
+			dir = value
+		case i+1 < len(args):
 			dir = args[i+1]
 		}
 	}
@@ -65,13 +71,17 @@ func serveOf(args []string) (binary, dir string) {
 func domainTarget() string  { return fmt.Sprintf("gui/%d", os.Getuid()) }
 func serviceTarget() string { return domainTarget() + "/" + Label }
 
-func (launchd) loaded(ctx context.Context) bool {
-	_, err := command(ctx, "launchctl", "print", serviceTarget())
-	return err == nil
+// loaded is whether launchd runs the job, and err why it could not say.
+func (launchd) loaded(ctx context.Context) (bool, error) {
+	out, err := command(ctx, "launchctl", "print", serviceTarget())
+	if err != nil && strings.Contains(string(out), "Could not find service") {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func (l launchd) load(ctx context.Context, path string, restart bool) error {
-	loaded := l.loaded(ctx)
+	loaded, _ := l.loaded(ctx)
 	switch {
 	case loaded && !restart:
 		// Starts the job if it stopped; one that runs keeps running.
@@ -98,8 +108,9 @@ func (l launchd) load(ctx context.Context, path string, restart bool) error {
 	return err
 }
 
+// unload boots the job out unless launchd says it does not run it.
 func (l launchd) unload(ctx context.Context) error {
-	if !l.loaded(ctx) {
+	if loaded, err := l.loaded(ctx); !loaded && err == nil {
 		return nil
 	}
 	_, err := command(ctx, "launchctl", "bootout", serviceTarget())

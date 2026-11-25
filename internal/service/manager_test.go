@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // stub is a fake launchctl and systemctl on PATH. Each logs its arguments,
@@ -27,11 +28,15 @@ case "$me $*" in
 $(cat "$STUB_DIR/fail" 2>/dev/null)) echo "refused by the stub" >&2; exit 1 ;;
 esac
 case "$me $*" in
-"launchctl print"*) [ -e "$STUB_DIR/loaded" ] || exit 113; if [ -e "$STUB_DIR/print" ]; then cat "$STUB_DIR/print"; else echo "	state = running"; echo "	pid = 42"; fi ;;
+$(cat "$STUB_DIR/hang" 2>/dev/null)) exec sleep 10 ;;
+esac
+case "$me $*" in
+"launchctl print"*) [ -e "$STUB_DIR/loaded" ] || { echo "Could not find service \"$2\" in domain"; exit 113; }; if [ -e "$STUB_DIR/print" ]; then cat "$STUB_DIR/print"; else echo "	state = running"; echo "	pid = 42"; fi ;;
 "launchctl bootstrap"*) : > "$STUB_DIR/loaded" ;;
 "launchctl bootout"*) [ -e "$STUB_DIR/loaded" ] || exit 3; rm -f "$STUB_DIR/loaded" ;;
 "systemctl --user start"*|"systemctl --user restart"*) : > "$STUB_DIR/active" ;;
-"systemctl --user disable --now"*) rm -f "$STUB_DIR/active" ;;
+"systemctl --user enable"*) : > "$STUB_DIR/enabled" ;;
+"systemctl --user disable --now"*) rm -f "$STUB_DIR/active" "$STUB_DIR/enabled" ;;
 "systemctl --user show"*) if [ -e "$STUB_DIR/show" ]; then cat "$STUB_DIR/show"; elif [ -e "$STUB_DIR/active" ]; then echo ActiveState=active; echo MainPID=42; else echo ActiveState=inactive; echo MainPID=0; fi ;;
 esac
 `
@@ -54,11 +59,21 @@ func newStub(t *testing.T, m manager) *stub {
 }
 
 // fail has the managers refuse the calls the shell pattern matches.
-func (s *stub) fail(pattern string) {
+func (s *stub) fail(pattern string) { s.set("fail", pattern) }
+
+// hang has the managers never answer the calls the shell pattern matches.
+func (s *stub) hang(pattern string) { s.set("hang", pattern) }
+
+func (s *stub) set(name, content string) {
 	s.t.Helper()
-	if err := os.WriteFile(filepath.Join(s.dir, "fail"), []byte(pattern), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(s.dir, name), []byte(content), 0o644); err != nil {
 		s.t.Fatal(err)
 	}
+}
+
+func (s *stub) has(name string) bool {
+	_, err := os.Stat(filepath.Join(s.dir, name))
+	return err == nil
 }
 
 // calls returns the calls since the last, and forgets them.
@@ -81,9 +96,7 @@ func (s *stub) report(out string) {
 	if _, ok := s.m.(systemd); ok {
 		name = "show"
 	}
-	if err := os.WriteFile(filepath.Join(s.dir, name), []byte(out), 0o644); err != nil {
-		s.t.Fatal(err)
-	}
+	s.set(name, out)
 }
 
 func (s *stub) opts(dir string) Options {
@@ -305,6 +318,154 @@ func TestStatusReportsACrashLoopAsRestarting(t *testing.T) {
 	}
 }
 
+// An install cut short between enabling the unit and starting it, as by
+// closing Settings, still undoes the enabling: the rollback has time of
+// its own.
+func TestInstallCancelledMidwayRollsBack(t *testing.T) {
+	s := newStub(t, systemd{})
+	s.hang("systemctl --user start*")
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if _, err := Install(ctx, s.opts("state")); err == nil {
+		t.Fatal("Install succeeded, want it cut short")
+	}
+	if s.has("enabled") {
+		t.Errorf("the cut-short install left the unit enabled; calls %q", s.calls())
+	}
+	if def, ok := s.definition(); ok {
+		t.Errorf("the cut-short install left its definition:\n%s", def)
+	}
+}
+
+// A definition that names its directory as -dir=DIR, as one written by
+// hand can, is that directory's as much as one with -dir DIR.
+func TestADirFlagWithAnEqualsSignNamesTheDirectory(t *testing.T) {
+	for _, tc := range managers {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStub(t, tc.m)
+			prod := s.opts("prod")
+			if _, err := Install(context.Background(), prod); err != nil {
+				t.Fatal(err)
+			}
+			def, _ := s.definition()
+			def = strings.Replace(def, map[string]string{
+				"launchd": "<string>-dir</string>\n\t\t<string>",
+				"systemd": `"-dir" "`,
+			}[tc.name], map[string]string{
+				"launchd": "<string>-dir=",
+				"systemd": `"-dir=`,
+			}[tc.name], 1)
+			if err := os.WriteFile(s.m.path(s.home), []byte(def), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if st := Inspect(context.Background(), s.opts("dev")); !st.Foreign || st.Dir != prod.Dir {
+				t.Errorf("status from another directory %+v, want installed for %s and foreign; definition\n%s", st, prod.Dir, def)
+			}
+			if _, err := Uninstall(context.Background(), s.opts("dev")); err == nil {
+				t.Error("Uninstall from another directory succeeded")
+			}
+		})
+	}
+}
+
+// A state directory reached through a symlink is the same directory.
+func TestASymlinkedStateDirectoryIsTheSame(t *testing.T) {
+	for _, tc := range managers {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStub(t, tc.m)
+			real := s.opts("real")
+			if err := os.MkdirAll(real.Dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			alias := s.opts("alias")
+			if err := os.Symlink(real.Dir, alias.Dir); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Install(context.Background(), alias); err != nil {
+				t.Fatal(err)
+			}
+			if st := Inspect(context.Background(), real); st.Foreign {
+				t.Errorf("status from %s reads the service for its alias %s as foreign: %+v", real.Dir, alias.Dir, st)
+			}
+			if _, err := Uninstall(context.Background(), real); err != nil {
+				t.Errorf("Uninstall from %s: %v", real.Dir, err)
+			}
+		})
+	}
+}
+
+// When launchd can't say whether it runs the job, Uninstall still stops
+// it, and says so when that fails too, rather than leave it running.
+func TestUninstallStopsAJobLaunchdCantDescribe(t *testing.T) {
+	for _, tc := range []struct {
+		name, fail string
+		ok         bool
+	}{
+		{"bootout works", "launchctl print*", true},
+		{"bootout refused", "launchctl [pb][ro]*", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStub(t, launchd{})
+			if _, err := Install(context.Background(), s.opts("state")); err != nil {
+				t.Fatal(err)
+			}
+			s.calls()
+			s.fail(tc.fail)
+			_, err := Uninstall(context.Background(), s.opts("state"))
+			calls := s.calls()
+			if !hasCall(calls, "launchctl bootout*") {
+				t.Errorf("Uninstall called %q, want a bootout", calls)
+			}
+			_, kept := s.definition()
+			if tc.ok && (err != nil || kept) {
+				t.Errorf("Uninstall = %v, definition kept %v; want it gone", err, kept)
+			}
+			if !tc.ok && (err == nil || !kept) {
+				t.Errorf("Uninstall = %v, definition kept %v; want the refusal and the definition", err, kept)
+			}
+		})
+	}
+	t.Run("not loaded", func(t *testing.T) {
+		s := newStub(t, launchd{})
+		if _, err := Install(context.Background(), s.opts("state")); err != nil {
+			t.Fatal(err)
+		}
+		os.Remove(filepath.Join(s.dir, "loaded"))
+		if _, err := Uninstall(context.Background(), s.opts("state")); err != nil {
+			t.Errorf("Uninstall of a job launchd does not run: %v", err)
+		}
+		if _, ok := s.definition(); ok {
+			t.Error("the definition stays")
+		}
+	})
+}
+
+// The service runs the glitched that installs it, which knows serve's
+// -wait-lock, not an older one first on PATH.
+func TestInstallRunsTheRunningBinary(t *testing.T) {
+	s := newStub(t, osManagerOr(t))
+	if err := os.WriteFile(filepath.Join(s.dir, "glitched"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	o := s.opts("state")
+	o.Binary = ""
+	st, err := Install(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exe, _ := os.Executable()
+	if st.Binary != exe {
+		t.Errorf("the service runs %s, want this binary %s", st.Binary, exe)
+	}
+}
+
+func osManagerOr(t *testing.T) manager {
+	if osManager == nil {
+		t.Skip("no background service on this OS")
+	}
+	return osManager
+}
+
 // Status reports what the installed definition runs, not what its caller
 // would install.
 func TestStatusReadsTheInstalledDefinition(t *testing.T) {
@@ -389,6 +550,14 @@ func TestScriptLeavesAnotherDirectorysServiceBe(t *testing.T) {
 			"darwin": "<plist>\n<dict>\n  <key>ProgramArguments</key>\n  <array>\n    <string>/bin/glitched</string>\n    <string>serve</string>\n    <string>-dir</string>\n    <string>" + filepath.Join(s.home, "prod") + "</string>\n    <string>-wait-lock</string>\n  </array>\n</dict>\n</plist>\n",
 			"linux":  "[Service]\nExecStart=\"/bin/glitched\" serve -dir \"" + filepath.Join(s.home, "prod") + "\" -wait-lock\n",
 		}[runtime.GOOS]},
+		{"a definition with -dir=DIR", map[string]string{
+			"darwin": "<plist>\n<dict>\n  <key>ProgramArguments</key>\n  <array>\n    <string>/bin/glitched</string>\n    <string>serve</string>\n    <string>-dir=" + filepath.Join(s.home, "prod") + "</string>\n    <string>-wait-lock</string>\n  </array>\n</dict>\n</plist>\n",
+			"linux":  "[Service]\nExecStart=\"/bin/glitched\" \"serve\" \"-dir=" + filepath.Join(s.home, "prod") + "\" \"-wait-lock\"\n",
+		}[runtime.GOOS]},
+		{"a definition with an unquoted --dir=DIR", map[string]string{
+			"darwin": "<plist>\n<dict>\n  <key>ProgramArguments</key>\n  <array>\n    <string>/bin/glitched</string>\n    <string>serve</string>\n    <string>--dir=" + filepath.Join(s.home, "prod") + "</string>\n  </array>\n</dict>\n</plist>\n",
+			"linux":  "[Service]\nExecStart=/bin/glitched serve --dir=" + filepath.Join(s.home, "prod") + " -wait-lock\n",
+		}[runtime.GOOS]},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Install(context.Background(), s.opts("prod")); err != nil {
@@ -420,5 +589,115 @@ func TestScriptLeavesAnotherDirectorysServiceBe(t *testing.T) {
 				t.Error("daemon uninstall from its own directory left the definition")
 			}
 		})
+	}
+}
+
+// scriptIn runs scripts/glitched's functions under home: body runs after
+// the script is sourced, so a test can call or replace one.
+func scriptIn(t *testing.T, home string, env []string, body string) (string, error) {
+	t.Helper()
+	script, err := filepath.Abs(filepath.Join("..", "..", "scripts", "glitched"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", `source "$1"; `+body, "glitched-test", script)
+	cmd.Env = append(os.Environ(), append([]string{"HOME=" + home}, env...)...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// Rebuilding the GUI quits its window, not the background service Settings
+// installed, which runs the same executable as serve.
+func TestScriptQuitsTheWindowNotTheService(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("on macOS quit_gui asks the app to quit")
+	}
+	home := t.TempDir()
+	exe := filepath.Join(home, ".local", "glitched.app", "glitched")
+	// Each runs as exe with args, as ps shows it.
+	spawn := func(args ...string) (exited <-chan struct{}) {
+		cmd := exec.Command("bash", append([]string{"-c", `exec -a "$0" bash -c 'sleep 30; :' "$@"`, exe}, args...)...)
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		go func() { cmd.Wait(); close(done) }()
+		t.Cleanup(func() { cmd.Process.Kill(); <-done })
+		return done
+	}
+	window := spawn()
+	svc := spawn("serve", "-dir", filepath.Join(home, ".glitched"), "-wait-lock")
+	time.Sleep(200 * time.Millisecond) // for ps to show them as exe
+	if out, err := scriptIn(t, home, nil, "quit_gui"); err != nil {
+		t.Fatalf("quit_gui: %v\n%s", err, out)
+	}
+	select {
+	case <-window:
+	case <-time.After(5 * time.Second):
+		t.Error("quit_gui left the window running")
+	}
+	select {
+	case <-svc:
+		t.Error("quit_gui stopped the background service")
+	default:
+	}
+}
+
+// daemon install rebuilds a CLI too old to know serve's -wait-lock, which
+// the service it writes runs, and keeps one that knows it.
+func TestScriptRebuildsACLIThatLacksWaitLock(t *testing.T) {
+	if osManager == nil {
+		t.Skip("no background service on this OS")
+	}
+	for _, tc := range []struct {
+		name, help string
+		rebuild    bool
+	}{
+		{"old", "  -dir string", true},
+		{"current", "  -wait-lock", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStub(t, osManager)
+			bin := t.TempDir()
+			cli := "#!/bin/sh\ncase \"$1 $2\" in \"serve -h\") echo '" + tc.help + "' >&2 ;; esac\n[ \"$1\" = status ] && echo 'engine     serving as test'\nexit 0\n"
+			if err := os.WriteFile(filepath.Join(bin, "glitched"), []byte(cli), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			built := filepath.Join(bin, "built")
+			out, err := scriptIn(t, s.home, []string{"GLITCHED_DIR=" + filepath.Join(s.home, "state"), "GLITCHED_BIN_DIR=" + bin},
+				`build_daemon() { : > "`+built+`"; }; daemon_install`)
+			if err != nil {
+				t.Fatalf("daemon install: %v\n%s", err, out)
+			}
+			if _, err := os.Stat(built); (err == nil) != tc.rebuild {
+				t.Errorf("rebuilt %v, want %v\n%s", err == nil, tc.rebuild, out)
+			}
+		})
+	}
+}
+
+// scripts/glitched run for a state directory through a symlink manages
+// the service installed for it.
+func TestScriptSeesASymlinkedStateDirectoryAsItsOwn(t *testing.T) {
+	if osManager == nil {
+		t.Skip("no background service on this OS")
+	}
+	s := newStub(t, osManager)
+	real := s.opts("real")
+	if err := os.MkdirAll(real.Dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	alias := s.opts("alias")
+	if err := os.Symlink(real.Dir, alias.Dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install(context.Background(), alias); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := scriptIn(t, s.home, []string{"GLITCHED_DIR=" + real.Dir}, "daemon_uninstall"); err != nil {
+		t.Fatalf("daemon uninstall from %s: %v\n%s", real.Dir, err, out)
+	}
+	if _, ok := s.definition(); ok {
+		t.Error("daemon uninstall left the definition")
 	}
 }

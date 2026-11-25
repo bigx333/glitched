@@ -22,13 +22,16 @@ import (
 // installs the same job.
 const Label = "com.example.glitched.daemon"
 
+// rollbackTimeout bounds putting back what a failed Install replaced.
+const rollbackTimeout = 10 * time.Second
+
 // ErrUnsupported is returned when background service installation is
 // requested on an unsupported operating system.
 var ErrUnsupported = errors.New("background service installation is supported only on macOS and Linux")
 
 // Options configure the installed background engine service.
 type Options struct {
-	Binary string // path to glitched executable; defaults via ResolveBinary
+	Binary string // path to glitched executable; the running one when empty
 	Dir    string // engine state directory; defaults to ~/.glitched
 	PATH   string // captured login PATH; defaults via CapturePATH
 	Home   string // override for $HOME (mostly tests)
@@ -134,6 +137,9 @@ func Install(ctx context.Context, opts Options) (Status, error) {
 		return Status{}, err
 	}
 	if err := m.load(ctx, path, had); err != nil {
+		// ctx may be what ended the load; putting back has time of its own.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+		defer cancel()
 		var undo error
 		if had {
 			undo = os.WriteFile(path, old, 0o644)
@@ -205,7 +211,7 @@ func Inspect(ctx context.Context, opts Options) Status {
 	st.Installed = true
 	st.Binary, st.Dir, st.LogPath = m.parse(data)
 	st.Dir = stateDir(st.Dir, home)
-	st.Foreign = st.Dir != stateDir(opts.Dir, home)
+	st.Foreign = !sameDir(st.Dir, stateDir(opts.Dir, home))
 	st.health = m.state(ctx)
 	return st
 }
@@ -215,7 +221,7 @@ func Inspect(ctx context.Context, opts Options) Status {
 // CLI must not stop it or take it over.
 func ownedBy(m manager, data []byte, home, dir string) error {
 	_, served, _ := m.parse(data)
-	if served = stateDir(served, home); served != dir {
+	if served = stateDir(served, home); !sameDir(served, dir) {
 		return fmt.Errorf("the background service is installed for %s, not %s; uninstall it from there first: glitched service uninstall -dir %s", served, dir, served)
 	}
 	return nil
@@ -232,6 +238,17 @@ func stateDir(dir, home string) string {
 	return filepath.Clean(dir)
 }
 
+// sameDir is whether a and b are one directory, as when one is a symlink
+// to the other.
+func sameDir(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
+}
+
 func homeOf(opts Options) (string, error) {
 	if opts.Home != "" {
 		return opts.Home, nil
@@ -239,14 +256,12 @@ func homeOf(opts Options) (string, error) {
 	return os.UserHomeDir()
 }
 
-// ResolveBinary returns explicit if non-empty, otherwise glitched from PATH
-// or the currently executing binary.
+// ResolveBinary returns explicit if non-empty, otherwise the running
+// executable: the glitched that installs the service knows serve's
+// -wait-lock, which an older one first on PATH may not.
 func ResolveBinary(explicit string) (string, error) {
 	if explicit != "" {
 		return filepath.Abs(explicit)
-	}
-	if p, err := exec.LookPath("glitched"); err == nil {
-		return filepath.Abs(p)
 	}
 	exe, err := os.Executable()
 	if err != nil {

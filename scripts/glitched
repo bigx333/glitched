@@ -172,7 +172,8 @@ installed_gui_exec() {
 }
 
 # List PIDs of the installed GUI window (never matching `mcp` or `browser-mcp`
-# stdio subprocesses spawned for running agents).
+# stdio subprocesses spawned for running agents, nor the background service
+# Settings installs, which runs the same executable as `serve`).
 gui_pids() {
   local exe
   exe="$(installed_gui_exec)"
@@ -180,7 +181,7 @@ gui_pids() {
     {
       pid = $1
       sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "")
-      if ($0 == exe || (index($0, exe " ") == 1 && $0 !~ / (mcp|browser-mcp)( |$)/)) {
+      if ($0 == exe || (index($0, exe " ") == 1 && $0 !~ / (mcp|browser-mcp|serve)( |$)/)) {
         print pid
       }
     }
@@ -295,13 +296,29 @@ service_dir() {
   local dir=""
   if [ "$GOOS" = "darwin" ]; then
     [ -f "$LAUNCHD_PLIST" ] || return 0
-    dir="$(awk '/<string>-dir<\/string>/ { getline; sub(/^[ \t]*<string>/, ""); sub(/<\/string>.*/, ""); print; exit }' "$LAUNCHD_PLIST" |
+    dir="$(awk '
+      /<string>--?dir<\/string>/ { getline; sub(/^[ \t]*<string>/, ""); sub(/<\/string>.*/, ""); print; exit }
+      /<string>--?dir=/ { sub(/^[ \t]*<string>--?dir=/, ""); sub(/<\/string>.*/, ""); print; exit }
+    ' "$LAUNCHD_PLIST" |
       sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&quot;/"/g' -e "s/&apos;/'/g" -e 's/&amp;/\&/g')"
   else
     [ -f "$SYSTEMD_UNIT_PATH" ] || return 0
-    dir="$(sed -n 's/^ExecStart=.*-dir"\{0,1\} "\([^"]*\)".*/\1/p' "$SYSTEMD_UNIT_PATH" | sed -e 's/%%/%/g' -e 's/\$\$/$/g')"
+    # -dir DIR or -dir=DIR, either quoted or not, with one dash or two.
+    dir="$(sed -n \
+      -e 's/^ExecStart=.*[ "]--\{0,1\}dir"\{0,1\} "\([^"]*\)".*/\1/p' \
+      -e 's/^ExecStart=.*[ "]--\{0,1\}dir"\{0,1\} \([^" ][^ ]*\).*/\1/p' \
+      -e 's/^ExecStart=.*"--\{0,1\}dir=\([^"]*\)".*/\1/p' \
+      -e 's/^ExecStart=.* --\{0,1\}dir=\([^" ][^ ]*\).*/\1/p' \
+      "$SYSTEMD_UNIT_PATH" | head -n 1 | sed -e 's/%%/%/g' -e 's/\$\$/$/g')"
   fi
   printf '%s' "${dir:-$HOME/.glitched}"
+}
+
+# Whether two paths are one directory, as when one is a symlink to the other.
+same_dir() {
+  [ "${1%/}" = "${2%/}" ] && return 0
+  local a b
+  a="$(cd "$1" 2>/dev/null && pwd -P)" && b="$(cd "$2" 2>/dev/null && pwd -P)" && [ "$a" = "$b" ]
 }
 
 # Refuse to stop or replace a service another state directory installed,
@@ -309,7 +326,7 @@ service_dir() {
 require_own_service() {
   local dir
   dir="$(service_dir)"
-  if [ -n "$dir" ] && [ "${dir%/}" != "${GLITCHED_DIR%/}" ]; then
+  if [ -n "$dir" ] && ! same_dir "$dir" "$GLITCHED_DIR"; then
     die "the background service is installed for $dir, not $GLITCHED_DIR; run with GLITCHED_DIR=$dir to manage it, or uninstall it there first"
   fi
 }
@@ -422,9 +439,19 @@ systemd_install() {
 
 # --- Cross-platform daemon commands ---
 
+# Whether the installed CLI's serve knows -wait-lock, which the service runs:
+# an older one exits at once, and the service manager restarts it in a loop.
+cli_current() {
+  [ -x "$GLITCHED_CLI" ] || return 1
+  case "$("$GLITCHED_CLI" serve -h 2>&1)" in
+    *-wait-lock*) return 0 ;;
+  esac
+  return 1
+}
+
 daemon_install() {
   require_own_service
-  [ -x "$GLITCHED_CLI" ] || build_daemon
+  cli_current || build_daemon
   log "Installing and starting daemon service"
   if [ "$GOOS" = "darwin" ]; then
     launchd_install
@@ -473,7 +500,7 @@ daemon_stop() {
 
 daemon_restart() {
   require_own_service
-  [ -x "$GLITCHED_CLI" ] || die "$GLITCHED_CLI not installed (run ./scripts/glitched first)"
+  cli_current || build_daemon
   log "Restarting daemon service"
   if [ "$GOOS" = "darwin" ]; then
     launchd_install
@@ -504,7 +531,7 @@ daemon_uninstall() {
 daemon_status() {
   local dir
   dir="$(service_dir)"
-  if [ -n "$dir" ] && [ "${dir%/}" != "${GLITCHED_DIR%/}" ]; then
+  if [ -n "$dir" ] && ! same_dir "$dir" "$GLITCHED_DIR"; then
     printf '%-10s %s\n' "installed" "for another directory, $dir, not $GLITCHED_DIR"
   fi
   if [ "$GOOS" = "darwin" ]; then
@@ -683,4 +710,7 @@ main() {
   esac
 }
 
-main "$@"
+# Sourced, as by tests, it only defines its functions.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi
