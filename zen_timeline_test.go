@@ -390,3 +390,82 @@ func TestPruneDropsAGoneThreadsTimeline(t *testing.T) {
 		t.Error("the thread that shows lost its timeline")
 	}
 }
+
+// With Zen mode on, the reply that says why the agent asks shows over the
+// approval card, though the command it asks to run comes between them.
+func TestZenShowsTheReplyThatExplainsAnApproval(t *testing.T) {
+	const why = "The endpoint needs a look, so I'll fetch it."
+	h, _ := asking(t, []provider.Event{
+		provider.Work{Item: "r", Kind: "read", Title: "Read f", Status: api.WorkCompleted},
+		provider.TextDelta{Text: why},
+		provider.Work{Item: "c", Kind: "command", Title: curl, Status: api.WorkStarted},
+		commandAsk("ask", curl),
+	})
+	h.a.settings.zen = true
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if !h.tt.HasText(why) || !h.tt.HasText("Allow once") || h.tt.HasText("Read f") {
+		t.Fatalf("no reply over the card, or the work shows, with Zen on: %q", h.tt.Texts())
+	}
+}
+
+// With Zen mode on, work that comes in above a message on its way keeps
+// the timeline on the message at its top.
+func TestZenKeepsThePlaceAsWorkComesAboveAMessageSending(t *testing.T) {
+	es := zenTurns(30)
+	h, th := zenThread(t, es, true, zenFinal(29))
+	h.tt.SetSize(1320, 480)
+	command := api.NewID()
+	th.Pending = append(th.Pending, client.Pending{Command: command, Body: api.MessageDispatch{Text: strings.Repeat("A long message on its way, line after line. ", 80)}})
+	h.a.changed()
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	l := h.a.listFor(th.id())
+	rs := h.a.rowsOf(th)
+	if rs.es[len(rs.es)-1].key != "m/"+command.String() {
+		t.Fatalf("the last row is %q, not the message sending", rs.es[len(rs.es)-1].key)
+	}
+	l.ScrollTo(h.a.viewFor(th.id(), rs).pos(len(rs.es)-1), ui.Start)
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	top := func() string {
+		first, _ := l.Visible()
+		v := h.a.viewFor(th.id(), h.a.rowsOf(th))
+		return fmt.Sprint(v.key(first))
+	}
+	if l.AtEnd() || top() != "m/"+command.String() {
+		t.Fatalf("the message sending isn't at the top, short of the end: %q", top())
+	}
+	run := es[len(es)-1].(*client.AssistantEntry).Run
+	at := time.Date(2026, 11, 25, 9, 5, 0, 0, time.UTC)
+	th.Transcript.Entries = append(th.Transcript.Entries, &client.WorkEntry{Run: run, Started: at, Ended: at.Add(time.Second),
+		Items: []client.WorkStep{{Item: "s3", Kind: "read", Title: "Read data.go", Status: api.WorkCompleted, Started: at, Ended: at}}})
+	h.a.changed()
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if got := top(); got != "m/"+command.String() {
+		t.Fatalf("new work above moved the top to %q", got)
+	}
+}
+
+// A thread deleted takes its Zen lines with it, open or not.
+func TestZenForgetsADeletedThreadsLines(t *testing.T) {
+	h, th := zenThread(t, zenTurns(3), true, zenFinal(2))
+	h.click(zenLineText(h.tt))
+	h.tt.Advance(time.Second)
+	if !h.tt.HasText(zenBetween(0)) {
+		t.Fatalf("the line didn't open: %q", h.tt.Texts())
+	}
+	h.a.settings.confirmDelete = false
+	if err := h.tt.RightClick("A thread"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.tt.ChooseMenuItem("Delete…"); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the delete", func() bool { _, ok := h.a.find(th.id()); return !ok })
+	h.tt.Advance(2 * time.Second)
+	if h.a.listed[th.id()] != nil || len(h.a.zenOpen) != 0 {
+		t.Fatalf("the deleted thread's timeline %v and open lines %v are kept", h.a.listed[th.id()], h.a.zenOpen)
+	}
+}

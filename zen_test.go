@@ -459,3 +459,72 @@ func TestWorkEntryKeepsHowLongItWorked(t *testing.T) {
 		t.Fatalf("running work worked %v", e.worked)
 	}
 }
+
+func zenAsk(key string, run api.ID, kind string) entry {
+	return entry{key: key, kind: entryRequest, run: run, request: &client.RequestEntry{Run: run, Request: api.NewID(), Kind: kind, State: api.RequestPending}}
+}
+
+// A reply that explains what a waiting request asks shows with its card,
+// though work comes between them; once answered, it folds with the work.
+func TestZenKeepsTheReplyAboveAWaitingRequest(t *testing.T) {
+	r := api.NewID()
+	es := []entry{zenRow("u", entryUser, r), zenWork("w0", r), zenRow("a1", entryAssistant, r), zenWork("w1", r), zenAsk("q", r, api.KindApproval)}
+	wantShape(t, es, zenView(es, nil), "u", "fold(w0 w1)", "a1", "q")
+	es[4].request.State = api.RequestAnswered
+	es = append(es, zenWork("w2", r), zenReply("a2", r))
+	wantShape(t, es, zenView(es, nil), "u", "fold(w0 a1 w1 w2)", "q", "a2")
+}
+
+// A run that planned and then asks says it's paused, though no work row
+// says so.
+func TestZenSaysARunIsPausedFromItsRequest(t *testing.T) {
+	for kind, want := range map[string]string{api.KindApproval: "Paused for approval", api.KindQuestion: "Paused for your answer"} {
+		r := api.NewID()
+		es := []entry{zenRow("u", entryUser, r), zenRow("p", entryPlan, r), zenAsk("q", r, kind)}
+		v := zenView(es, nil)
+		wantShape(t, es, v, "u", "fold(p)", "q")
+		if got := v.fold(1).paused; got != want {
+			t.Errorf("%s: paused %q, want %q", kind, got, want)
+		}
+		es[2].request.State = api.RequestAnswered
+		if got := zenView(es, nil).fold(1).paused; got != "" {
+			t.Errorf("%s: answered, paused %q", kind, got)
+		}
+	}
+}
+
+// Work that overlaps counts its time once: two calls at once in a run
+// worked as long as the longer stretch they cover.
+func TestZenCountsOverlappingWorkOnce(t *testing.T) {
+	r := api.NewID()
+	at := time.Date(2026, 11, 25, 9, 0, 0, 0, time.UTC)
+	work := func(key string, from, to int) entry {
+		e := workEntry(key, &client.WorkEntry{Run: r, Started: at.Add(time.Duration(from) * time.Second), Ended: at.Add(time.Duration(to) * time.Second)})
+		e.key = key
+		return e
+	}
+	es := []entry{zenRow("u", entryUser, r), work("w1", 0, 8), work("w2", 2, 10), work("w3", 12, 13), zenReply("a", r)}
+	if got := zenView(es, nil).fold(1).worked; got != 11*time.Second {
+		t.Fatalf("worked %v, want 11s", got)
+	}
+}
+
+// An update to a long thread builds again only the folds of the turns
+// that can change: with Zen on it costs not much more than with it off.
+func TestZenUpdateBuildsOnlyTheLiveTurnsAgain(t *testing.T) {
+	th := thread{Thread: &client.Thread{Transcript: &client.Transcript{Entries: zenTurns(500)}}}
+	cost := map[bool]float64{}
+	for _, zen := range []bool{false, true} {
+		a := &app{rows: map[api.ID]*rowsCache{}, listed: map[api.ID]*timelineMemo{}, zenOpen: map[string]bool{}}
+		a.settings.zen = zen
+		a.viewFor(th.id(), a.rowsOf(th))
+		cost[zen] = testing.AllocsPerRun(50, func() {
+			a.posts++
+			a.viewFor(th.id(), a.rowsOf(th))
+		})
+	}
+	t.Logf("allocations per update: %v with Zen off, %v on", cost[false], cost[true])
+	if cost[true] > 2*cost[false] {
+		t.Fatalf("an update costs %v allocations with Zen on, %v off", cost[true], cost[false])
+	}
+}
