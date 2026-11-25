@@ -454,10 +454,15 @@ func (s *Store) upgrade(ctx context.Context) error {
 		return err
 	}
 	defer conn.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+	// An upgrade that rebuilds a table or an index reads the whole
+	// database, which on a large one takes a while.
+	slog.Info("store: upgrading the database; a large one takes a while", "from", version, "to", schemaVersion)
 	for ; version < schemaVersion; version++ {
+		began := time.Now()
 		if err := upgradeOnce(ctx, conn, version); err != nil {
 			return fmt.Errorf("store: upgrade from version %d: %w", version, err)
 		}
+		slog.Info("store: upgraded", "to", version+1, "took", time.Since(began).Round(time.Millisecond))
 	}
 	return nil
 }
