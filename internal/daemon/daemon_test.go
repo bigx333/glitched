@@ -81,6 +81,68 @@ func TestStartTwiceOnOneDirIsLocked(t *testing.T) {
 	start(t, Config{Dir: dir})
 }
 
+// StartWhenFree waits while another engine holds the lock, and starts once
+// it lets go, reading the config as it does: what changed meanwhile, as the
+// app saves engine.json, applies.
+func TestStartWhenFreeWaitsForTheLock(t *testing.T) {
+	dir := stateDir(t)
+	first, err := Start(context.Background(), Config{Dir: dir, Hub: true, Providers: provider.Mux{"fake": fake.New(nil)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reads := make(chan struct{}, 100)
+	started := make(chan *Daemon, 1)
+	failed := make(chan error, 1)
+	go func() {
+		d, err := StartWhenFree(context.Background(), func() (Config, error) {
+			reads <- struct{}{}
+			return Config{Dir: dir, Hub: true, Providers: provider.Mux{"fake": fake.New(nil)}}, nil
+		})
+		if err != nil {
+			failed <- err
+			return
+		}
+		started <- d
+	}()
+	<-reads
+	<-reads // it tried, and tries again
+	select {
+	case d := <-started:
+		d.Close()
+		t.Fatal("a second engine started on a locked dir")
+	case err := <-failed:
+		t.Fatalf("StartWhenFree gave up on a locked dir: %v", err)
+	default:
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case d := <-started:
+		if err := d.Close(); err != nil {
+			t.Fatal(err)
+		}
+	case err := <-failed:
+		t.Fatal(err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("StartWhenFree never started once the lock was free")
+	}
+}
+
+// StartWhenFree stops waiting when its context ends.
+func TestStartWhenFreeEndsWithItsContext(t *testing.T) {
+	dir := stateDir(t)
+	start(t, Config{Dir: dir})
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_, err := StartWhenFree(ctx, func() (Config, error) {
+		return Config{Dir: dir, Hub: true, Providers: provider.Mux{"fake": fake.New(nil)}}, nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("StartWhenFree = %v, want the context's end", err)
+	}
+}
+
 func TestStartRefusesAListenAddressOffTheTailnet(t *testing.T) {
 	dir := stateDir(t)
 	for _, addr := range []string{"0.0.0.0:7465", "8.8.8.8:7465"} {

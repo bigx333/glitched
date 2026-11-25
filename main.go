@@ -1349,17 +1349,24 @@ func (a *app) glassTint() ui.Color {
 func serveHeadless(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	dir := fs.String("dir", stateDir(), "state directory")
+	waitLock := fs.Bool("wait-lock", false, "while another engine holds the lock, wait for it to let go instead of exiting")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, err := daemon.Defaults(*dir)
-	if err != nil {
-		return err
+	config := func() (daemon.Config, error) {
+		cfg, err := daemon.Defaults(*dir)
+		if err == nil {
+			cfg.WithAgents()
+		}
+		return cfg, err
 	}
-	cfg.WithAgents()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	d, err := daemon.Start(ctx, cfg)
+	start := daemon.StartWhenFree
+	if !*waitLock {
+		start = daemon.StartNow
+	}
+	d, err := start(ctx, config)
 	if err != nil {
 		return err
 	}
