@@ -357,7 +357,13 @@ func (h *harness) click(text string) {
 	if err := h.tt.Click(text); err != nil {
 		h.t.Fatal(err)
 	}
-	// A click may be of a plugin's widget only once this frame runs it.
+}
+
+// clickPlugin clicks a plugin's declarative widget once the window shows
+// it, and waits for the plugin to answer the click.
+func (h *harness) clickPlugin(text string) {
+	h.t.Helper()
+	h.click(text)
 	if h.a.plugins != nil {
 		settlePlugins(h.t, h.a, h.tt, h.p)
 	}

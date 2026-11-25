@@ -33,7 +33,7 @@ func TestACopyThatPlacesNoRetryKeepsTheNoteAndRetry(t *testing.T) {
 	e := entry{key: "unsent", kind: entryUser, text: "Unsent message", note: "Not sent: offline", failed: client.Pending{Err: errors.New("offline")}}
 	a, tt, p := oneRow(t, &e)
 	writeOwnPlugin(t, a, "my-rows", rowsManifest, rowsModule(`{type:"native", id:"body", name:"transcript.body"}`))
-	allow(t, a, "my-rows", "ui.replace")
+	allowRows(t, a, "my-rows")
 	settlePlugins(t, a, tt, p)
 	tt.Advance(time.Second)
 	if got := a.partsDrawn["timeline.message"]; got == nil || len(got.copies) != 1 || got.copies[0].plugin != "my-rows" {

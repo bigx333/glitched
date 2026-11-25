@@ -282,9 +282,7 @@ func TestASelectedReplyKeepsItsQuoteWhenTheBuiltInTakesOver(t *testing.T) {
 	if !barShown(h) || a.quote.text != sel {
 		t.Fatalf("after the layout handoff, selection=%q and quote bar=%v; want %q with the quote bar", a.quote.text, barShown(h), sel)
 	}
-	if err := tt.Click("Quote"); err != nil {
-		t.Fatal(err)
-	}
+	h.clickPlugin("Quote")
 	if !slices.ContainsFunc(a.attachments, func(at attachment) bool { return at.quote && at.text == sel }) {
 		t.Fatalf("Quote did not attach the original selected text %q", sel)
 	}
@@ -301,7 +299,7 @@ func TestASelectedReplyKeepsItsQuoteWhenALateCopyTakesOver(t *testing.T) {
 	h.untilShown("the reply", "Looking at the code.")
 	settlePlugins(t, a, tt, h.p)
 	manifest := `{"id":"async-rows","name":"Async rows","main":"index.js","contract":"glitched","contractVersion":2,
-	"capabilities":["ui.place","ui.replace"],"glitched":{"places":[{"id":"row","at":"timeline.message","replaces":true}]}}`
+	"capabilities":["ui.place","ui.replace","messages:read"],"glitched":{"places":[{"id":"row","at":"timeline.message","replaces":true}]}}`
 	writeOwnPlugin(t, a, "async-rows", manifest, `
 export async function place({items}) {
 	await glitched.app.settings.get()

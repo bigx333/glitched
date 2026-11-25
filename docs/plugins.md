@@ -283,7 +283,7 @@ A plugin's command can join a menu of Glitched's: a thread row's context menu, a
 | `project.menu` | `{project: {name, workspace, machine}}`: `workspace` and `machine` only with `threads:read` |
 | `message.actions` | `{thread, message: {role, text}}`: `text` only with `messages:read` |
 
-A message's actions are buttons, so their items name an `icon`, one of the app's; a menu's don't. The menus themselves stay Glitched's: Rename, Snooze, Delete and the rest can't be removed or replaced.
+A message's actions are buttons, so their items name an `icon`, one of the app's; a menu's don't. `requires` may list dotted fields of the item's arguments that must be non-zero for it to show, as `["thread.local", "thread.workspace"]`. The menus themselves stay Glitched's: Rename, Snooze, Delete and the rest can't be removed or replaced.
 
 **Panel tabs** (`glitched.tabs`) show as buttons in a thread's header and open in the panel beside the chat, one session per thread, with the thread as `context`. `glitched.tabs.open(id)` opens one.
 

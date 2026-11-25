@@ -635,6 +635,7 @@ func (h *Host) Entries() []Entry {
 // MenuItem is a plugin's command in one of Glitched's menus.
 type MenuItem struct {
 	Plugin, Command, Title, Icon string
+	Requires                     []string
 }
 
 // MenuItems are the commands the running plugins put in the menu at, in
@@ -652,7 +653,7 @@ func (h *Host) MenuItems(at string) []MenuItem {
 					title = c.Title
 				}
 			}
-			out = append(out, MenuItem{in.manifest.ID, m.Command, title, m.Icon})
+			out = append(out, MenuItem{in.manifest.ID, m.Command, title, m.Icon, m.Requires})
 		}
 	}
 	return out

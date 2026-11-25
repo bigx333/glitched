@@ -16,8 +16,8 @@
   "glitched": {
     "programs": ["git"],
     "menus": [
-      { "command": "copy-branch", "at": "thread.menu" },
-      { "command": "open-editor", "at": "thread.menu" }
+      { "command": "copy-branch", "at": "thread.menu", "requires": ["thread.local", "thread.workspace"] },
+      { "command": "open-editor", "at": "thread.menu", "requires": ["thread.local", "thread.workspace"] }
     ]
   }
 }
