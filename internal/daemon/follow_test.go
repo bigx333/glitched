@@ -529,48 +529,51 @@ func TestABlockedRemoteChildWakesItsParentOnce(t *testing.T) {
 	folded(t, p.a.store)
 }
 
-// A restart of A between a silent admission on B and its end reports
-// nothing for that run: A stored that it was silent.
-func TestARestartBetweenASilentAdmissionAndItsEndReportsNothing(t *testing.T) {
-	release, held := make(chan struct{}), make(chan struct{})
+// B never compacts a link's child on its own, as it doesn't a local
+// child, so across a restart of A the follower sees no silent run and the
+// first report stays the only one. A silent run from a B that still
+// compacts a link's child, an older one, is engine.Follow's to fold, and
+// internal/engine's Follow tests cover it.
+func TestBNeverCompactsALinksChildAcrossARestartOfA(t *testing.T) {
+	compacted := make(chan struct{})
 	var once sync.Once
+	var mu sync.Mutex
+	var expires time.Time
 	adB := fake.New(fake.Turn(false))
 	adB.Confirms = func(spec provider.SessionSpec) []provider.Event {
 		if spec.ResumeOnly {
-			once.Do(func() { close(held) })
-			<-release
+			once.Do(func() { close(compacted) })
 			return nil
 		}
-		return []provider.Event{provider.Context{Used: 10, Window: 100, Model: spec.Model.Model, CacheExpires: time.Now().Add(engine.ClaudeCacheTTL/10 + time.Second)}}
+		mu.Lock()
+		defer mu.Unlock()
+		expires = time.Now().Add(engine.ClaudeCacheTTL/10 + time.Second)
+		return []provider.Event{provider.Context{Used: 10, Window: 100, Model: spec.Model.Model, CacheExpires: expires}}
 	}
 	p := newRemotes(t, adB, "claude", engine.Limits{})
-	defer once.Do(func() {})
 	kid := p.place("there")
 	until(t, "the first report", func() bool { reports, _ := p.reports(kid); return len(reports) == 1 })
-	select {
-	case <-held:
-	case <-time.After(30 * time.Second):
-		t.Fatal("b never compacted the child's thread")
-	}
-	until(t, "A's sight of the silent run", func() bool { r := p.placeholder(kid).Remote; return r.Silent && r.Slot == api.RunStarting })
 	r := p.bound(kid)
 	p.stopA()
-	close(release)
-	until(t, "the compaction's end on b", func() bool {
-		for _, e := range eventsOf(t, p.b.Endpoint(), r.Thread) {
-			if e.Type == "turn.ended" {
-				if b, _ := e.Decode(); b.(api.TurnEnded).Run == r.Run {
-					return true
-				}
-			}
-		}
-		return false
-	})
+	mu.Lock()
+	past := time.Until(expires) - engine.ClaudeCacheTTL/10 + engine.CompactLapse + 2*time.Second
+	mu.Unlock()
+	select {
+	case <-compacted:
+		t.Fatal("b compacted a link's child on its own")
+	case <-time.After(past):
+	}
 	p.startA()
-	until(t, "A's sight of the silent run's end", func() bool { return p.placeholder(kid).Remote.Slot == api.RunIdle })
+	until(t, "the follower back", func() bool { return p.placeholder(kid).Remote.Cursor.Seq > 0 })
 	time.Sleep(300 * time.Millisecond)
+	if th := p.onB(r.Thread); len(th.Runs) != 1 {
+		t.Fatalf("b ran %d runs on the link's child; want the first only", len(th.Runs))
+	}
+	if rm := p.placeholder(kid).Remote; rm.Silent || rm.Run != r.Run {
+		t.Fatalf("A follows run %s silent=%t; want the first run %s, not silent", rm.Run, rm.Silent, r.Run)
+	}
 	if reports, wakes := p.reports(kid); len(reports) != 1 || len(wakes) != 1 {
-		t.Fatalf("after the silent run: reports %+v, %d wakes; want the first only", reports, len(wakes))
+		t.Fatalf("after the cache's expiry and a restart of A: reports %+v, %d wakes; want the first only", reports, len(wakes))
 	}
 	folded(t, p.a.store)
 }
