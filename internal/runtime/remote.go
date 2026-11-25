@@ -520,13 +520,13 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			}
 			reports[i].Reply = reply.Text
 		}
-		if snapshot || next.Run != r.Run || next.Silent != r.Silent || next.Slot != r.Slot || !slices.Equal(next.Pending, r.Pending) || next.Taken != r.Taken || next.Ended != r.Ended || next.Model != r.Model || next.Access != r.Access || next.Turn != r.Turn || len(reports) > 0 {
+		if snapshot || next.Run != r.Run || next.Silent != r.Silent || next.Slot != r.Slot || !slices.Equal(next.Pending, r.Pending) || next.Taken != r.Taken || next.Ended != r.Ended || next.Model != r.Model || next.Access != r.Access || next.Turn != r.Turn || !next.Hold.Equal(r.Hold) || len(reports) > 0 {
 			_, listed, err := h.dial(at)
 			if err != nil {
 				return progressed, err
 			}
 			listed.Close()
-			o := engine.RemoteSeen{Cursor: next.Cursor, Run: next.Run, Silent: next.Silent, Slot: next.Slot, Pending: next.Pending, Taken: next.Taken, Ended: next.Ended, Model: next.Model, Access: next.Access, Turn: next.Turn, Reports: reports, On: label}
+			o := engine.RemoteSeen{Cursor: next.Cursor, Run: next.Run, Silent: next.Silent, Slot: next.Slot, Pending: next.Pending, Taken: next.Taken, Ended: next.Ended, Model: next.Model, Access: next.Access, Turn: next.Turn, Hold: next.Hold, Reports: reports, On: label}
 			_, err = h.store.Observe(ctx, t.ID, o, h.clock(), 0)
 			if errors.Is(err, engine.ErrRefused) {
 				return progressed, errObsolete
