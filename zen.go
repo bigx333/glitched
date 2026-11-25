@@ -246,8 +246,8 @@ func (a *app) zenLine(c *ui.Context, t thread, f *zenFold) {
 func foldable(k entryKind) bool { return k == entryWork || k == entryPlan || k == entryAssistant }
 
 // zenView folds, in each turn, the work, plans and replies of each of its
-// runs into a line, but for the run's final reply, or the reply it's
-// writing or asks with. A run with no work or plan folds nothing. The
+// runs into a line, but for the run's final reply, the reply it's writing,
+// and the reply that explains a request waiting. A run with no work or plan folds nothing. The
 // folds open says are open list their rows under their lines.
 func zenView(es []entry, open map[string]bool) timelineView {
 	v := timelineView{es: es, items: make([]listItem, 0, len(es)), at: make([]int, len(es))}
@@ -271,6 +271,25 @@ func (v *timelineView) addTurn(start, end int, open map[string]bool) {
 			runs[es[i].run] = append(runs[es[i].run], i)
 		}
 	}
+	// A request waiting keeps the reply that explains it, its run's last
+	// before it, and its run's line says what it waits on.
+	kept := map[int]bool{}
+	paused := map[api.ID]string{}
+	for k := start; k < end; k++ {
+		r := es[k].request
+		if r == nil || r.State != api.RequestPending {
+			continue
+		}
+		paused[r.Run] = pausedFor[r.Kind != api.KindApproval]
+		for i := k - 1; i >= start; i-- {
+			if e := es[i]; e.kind == entryAssistant && e.run == r.Run {
+				kept[i] = true
+				break
+			} else if e.request != nil && e.request.Run == r.Run {
+				break
+			}
+		}
+	}
 	of := make([]*zenFold, end-start)
 	for r, rows := range runs {
 		final := func(i int) bool { return es[i].kind == entryAssistant && !es[i].turn.IsZero() }
@@ -281,10 +300,10 @@ func (v *timelineView) addTurn(start, end int, open map[string]bool) {
 				keepLast = false
 			}
 		}
-		f := &zenFold{key: "z/" + r.String() + "/" + es[start].key}
+		f := &zenFold{key: "z/" + r.String() + "/" + es[start].key, paused: paused[r]}
 		work := false
 		for _, i := range rows {
-			if final(i) || keepLast && i == last {
+			if final(i) || keepLast && i == last || kept[i] {
 				continue
 			}
 			f.rows = append(f.rows, i)
@@ -300,9 +319,6 @@ func (v *timelineView) addTurn(start, end int, open map[string]bool) {
 				f.failed += failedSteps(e.work)
 				f.worked += e.worked
 				f.working = f.working || e.working
-				if e.paused != "" {
-					f.paused = e.paused
-				}
 			}
 		}
 	}

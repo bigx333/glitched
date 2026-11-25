@@ -146,8 +146,7 @@ func TestZenKeepsTheReplyBeingWritten(t *testing.T) {
 
 func TestZenKeepsTheReplyThatAsksAndItsRequest(t *testing.T) {
 	r := api.NewID()
-	es := []entry{zenRow("u", entryUser, r), zenRow("a1", entryAssistant, r), zenWork("w1", r), zenRow("a2", entryAssistant, r), {key: "q", kind: entryRequest}}
-	es[2].paused = "Paused for approval"
+	es := []entry{zenRow("u", entryUser, r), zenRow("a1", entryAssistant, r), zenWork("w1", r), zenRow("a2", entryAssistant, r), zenAsk("q", r, api.KindApproval)}
 	v := zenView(es, nil)
 	wantShape(t, es, v, "u", "fold(a1 w1)", "a2", "q")
 	if v.fold(1).paused != "Paused for approval" {
@@ -157,8 +156,7 @@ func TestZenKeepsTheReplyThatAsksAndItsRequest(t *testing.T) {
 
 func TestZenKeepsThePauseAsMoreWorkFollowsTheRequest(t *testing.T) {
 	r := api.NewID()
-	es := []entry{zenRow("u", entryUser, r), zenWork("w1", r), {key: "q", kind: entryRequest}, zenWork("w2", r)}
-	es[1].paused = "Paused for approval"
+	es := []entry{zenRow("u", entryUser, r), zenWork("w1", r), zenAsk("q", r, api.KindApproval), zenWork("w2", r)}
 	v := zenView(es, nil)
 	wantShape(t, es, v, "u", "fold(w1 w2)", "q")
 	if got := v.fold(1).paused; got != "Paused for approval" {
@@ -302,8 +300,9 @@ func TestZenNeverHidesWhatMustShow(t *testing.T) {
 				}
 			case entryWork:
 				e.work = make([]client.WorkStep, r.IntN(3))
-				if r.IntN(4) == 0 {
-					e.paused = "Paused for approval"
+			case entryRequest:
+				if r.IntN(2) == 0 {
+					e.request = &client.RequestEntry{Run: e.run, Kind: api.KindApproval, State: api.RequestState(r.IntN(2))}
 				}
 			}
 			es[i] = e
