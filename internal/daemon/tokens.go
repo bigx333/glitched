@@ -75,24 +75,31 @@ func Pair(dir, label string) (string, error) {
 // PairLink mints a token for the engine of the machine label names, scoped
 // to l: Label and ID are its own. The scope may be no wider than this
 // engine's setting for children from other machines, which must be on.
+//
+// It mints under engine.json's lock, as Edit changes the setting, so a
+// link is never minted while the setting turns off.
 func PairLink(dir, label string, l api.Link) (string, api.Link, error) {
 	l.ID, l.Label = api.NewID(), label
-	token, err := mint(dir, label, func(hash string) (Token, error) {
-		cfg, err := Defaults(dir)
-		if err != nil {
-			return Token{}, err
-		}
+	var token string
+	_, err := Edit(dir, func(cfg *Config) error {
 		switch ceiling := cfg.ChildrenFromOtherMachines; {
 		case ceiling == nil:
-			return Token{}, errors.New("pair: children from other machines are off on this machine; turn them on first")
+			return errors.New("pair: children from other machines are off on this machine; turn them on first")
 		case l.Access > *ceiling:
-			return Token{}, fmt.Errorf("pair: a link may run children at %s at most here, as this machine's setting for children from other machines says", AccessName(*ceiling))
+			return fmt.Errorf("pair: a link may run children at %s at most here, as this machine's setting for children from other machines says", AccessName(*ceiling))
 		case l.Working < 0 || l.All < 0:
-			return Token{}, errors.New("pair: a link's counts can't be negative")
+			return errors.New("pair: a link's counts can't be negative")
 		}
-		return Token{Label: label, Link: &LinkToken{ID: l.ID, Hash: hash, Access: l.Access, Working: l.Working, All: l.All}}, nil
+		var err error
+		token, err = mint(dir, label, func(hash string) (Token, error) {
+			return Token{Label: label, Link: &LinkToken{ID: l.ID, Hash: hash, Access: l.Access, Working: l.Working, All: l.All}}, nil
+		})
+		if err != nil {
+			return err
+		}
+		return ErrUnchanged
 	})
-	if err != nil {
+	if !errors.Is(err, ErrUnchanged) {
 		return "", api.Link{}, err
 	}
 	return token, l, nil
