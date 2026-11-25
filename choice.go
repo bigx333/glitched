@@ -84,8 +84,10 @@ func (a *app) starting(file choice) choice {
 	if e := effortFor(m, file.Effort); strings.EqualFold(e, file.Effort) {
 		ch.Effort = e
 	}
+	// Speed is a preference, not a capability decision: keep it as chosen
+	// while a catalog is uncertain or moves, and narrow it only where it is
+	// shown or sent (speedFor).
 	ch.Fast, ch.Ultrafast = file.Fast, file.Ultrafast
-	ch.Fast, ch.Ultrafast = boolsOfSpeed(a.speedFor(ch.Model, ch.Fast, ch.Ultrafast))
 	if _, ok := accessOf[file.Access]; ok {
 		ch.Access = file.Access
 	}
@@ -94,8 +96,7 @@ func (a *app) starting(file choice) choice {
 
 // choice is what the pickers show now.
 func (a *app) choice() choice {
-	fast, ultrafast := boolsOfSpeed(a.speed())
-	return choice{Model: a.model, Effort: a.effort, Fast: fast, Ultrafast: ultrafast, Access: a.access, Follow: a.followsCLI}
+	return choice{Model: a.model, Effort: a.effort, Fast: a.fast, Ultrafast: a.ultrafast, Access: a.access, Follow: a.followsCLI}
 }
 
 func (a *app) show(ch choice) {

@@ -51,6 +51,29 @@ func TestAStaleComposerFileKeepsTheDefaults(t *testing.T) {
 	}
 }
 
+// A speed a model can't take now is still the preference the composer
+// keeps: a catalog that lacks Ultrafast only narrows what runs meanwhile,
+// and the choice is Ultrafast again when the catalog offers it.
+func TestAnUnsupportedSpeedPreferenceSurvivesCatalogUncertainty(t *testing.T) {
+	dir := t.TempDir()
+	key := keyNamed("GPT-5.5")
+	file := `{"model":{"provider":"codex","id":"gpt-5.5"},"effort":"high","fast":true,"ultrafast":true}`
+	if err := os.WriteFile(filepath.Join(dir, "composer.json"), []byte(file), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := testApp(t, dir, nil, func(func()) {})
+	if !a.fast || !a.ultrafast || a.speed() != api.SpeedFast {
+		t.Fatalf("before the catalog, the preference is %t/%t shown as %s, want ultrafast shown as fast", a.fast, a.ultrafast, a.speed())
+	}
+	if got := a.choice(); !got.Fast || !got.Ultrafast {
+		t.Fatalf("the composer choice is %+v, want ultrafast kept", got)
+	}
+	a.models.reported["codex"] = []provider.Model{{ID: key.ID, Name: "GPT-5.5", Speeds: []api.Speed{api.SpeedFast, api.SpeedUltrafast}, SpeedsKnown: true}}
+	if got := a.speed(); got != api.SpeedUltrafast {
+		t.Errorf("with an ultrafast catalog the preference shows as %s", got)
+	}
+}
+
 // Two windows on one state directory each choose a default. What one chose
 // isn't undone by the other choosing something else, and a window that
 // chose shows what a restart would: the other's choice with its own.
