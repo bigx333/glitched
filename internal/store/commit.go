@@ -468,14 +468,7 @@ type step struct {
 func (s *Store) commit(ctx context.Context, r *receipt, done int64, plan func(q querier) ([]step, error)) (api.Cursor, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// ctx cancels the transaction up to its fence, and no further: one
-	// rolled back once its fence is synced leaves the fence ahead, which
-	// the next open takes for a restore.
-	txCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	defer cancel()
-	untilFence := context.AfterFunc(ctx, cancel)
-	defer untilFence()
-	tx, err := s.db.BeginTx(txCtx, nil)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return api.Cursor{}, err
 	}
@@ -524,14 +517,6 @@ func (s *Store) commit(ctx context.Context, r *receipt, done int64, plan func(q 
 			return api.Cursor{}, err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO commands (id, hash, seq, revision) VALUES (?, ?, ?, ?)`, r.id[:], r.hash, head, r.revision); err != nil {
-			return api.Cursor{}, err
-		}
-	}
-	if !untilFence() {
-		return api.Cursor{}, ctx.Err()
-	}
-	if len(c.Events) > 0 {
-		if err := s.writeFence(head); err != nil {
 			return api.Cursor{}, err
 		}
 	}
