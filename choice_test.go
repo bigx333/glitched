@@ -535,7 +535,9 @@ func TestAThreadsPickerSendsOnlyWhatItChanged(t *testing.T) {
 		Body: api.ThreadConfigure{Access: new(api.AccessAsk)}}); err != nil {
 		t.Fatal(err)
 	}
-	h.click("Model")
+	if err := h.tt.Click("Model"); err != nil {
+		t.Fatal(err)
+	}
 	h.tt.Advance(time.Second)
 	at, y := effortAt(t, h.tt)
 	h.tt.Press(at(0), y)

@@ -39,8 +39,12 @@ func writeOwnPlugin(t *testing.T, a *app, folder, manifest, js string) {
 }
 
 func replacing(id, at string) string {
+	caps := `"ui.place", "ui.replace"`
+	if need := plugins.ComponentNamed(at).Needs; need != "" {
+		caps += `, "` + need + `"`
+	}
 	return `{"id": "` + id + `", "name": "` + id + `", "main": "index.js", "contract": "glitched", "contractVersion": 2,
-	"capabilities": ["ui.place", "ui.replace"], "glitched": {"places": [{"id": "row", "at": "` + at + `", "replaces": true}]}}`
+	"capabilities": [` + caps + `], "glitched": {"places": [{"id": "row", "at": "` + at + `", "replaces": true}]}}`
 }
 
 const mineModule = `export function place({ items }) {

@@ -125,18 +125,14 @@ func TestThreadMenuWorkspace(t *testing.T) {
 	if err := h.tt.ChooseMenuItem("Copy branch name"); err != nil {
 		t.Fatal(err)
 	}
-	if h.tt.Clipboard() != "t3code/sidebar-sort" {
-		t.Errorf("clipboard %q", h.tt.Clipboard())
-	}
+	h.until("the branch copied", func() bool { return h.tt.Clipboard() == "t3code/sidebar-sort" })
 	if err := h.tt.RightClick("Sort sidebar threads by recent activity"); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.tt.ChooseMenuItem("Open in editor"); err != nil {
 		t.Fatal(err)
 	}
-	if opened != ws {
-		t.Errorf("opened %q, want the workspace %q", opened, ws)
-	}
+	h.until("the workspace opened", func() bool { return opened == ws })
 }
 
 // A thread on a server offers nothing that needs its workspace here.

@@ -517,7 +517,7 @@ func TestTheCLIUpdateButtonSaysWhichUpdateRunsFailedOrNeedsYou(t *testing.T) {
 	local := h.a.backend.Envs()[0]
 	h.a.models.served["codex"].Update.Manual = "Codex is installed where only an administrator can change it."
 	h.a.clis.runs[cliKey{local, "claude"}] = &cliRun{running: true}
-	h.tt.Frame()
+	settleTester(h.tt)
 	if !showing(h, "Updating") {
 		t.Errorf("an update running doesn't show: %q", h.tt.Texts())
 	}
@@ -526,7 +526,7 @@ func TestTheCLIUpdateButtonSaysWhichUpdateRunsFailedOrNeedsYou(t *testing.T) {
 	}
 	h.a.clis.runs[cliKey{local, "claude"}] = &cliRun{failed: "claude update failed: exit status 1."}
 	h.tt.Move(0, 0)
-	h.tt.Frame()
+	settleTester(h.tt)
 	if showing(h, "Updating") || !showing(h, "Updates") {
 		t.Errorf("a failed update still shows as running: %q", h.tt.Texts())
 	}
@@ -545,7 +545,7 @@ func TestAnUpdatingCLIWithNoVersionsStaysOnTheButton(t *testing.T) {
 	p := h.a.models.served["claude"]
 	p.Update = nil
 	h.a.models.served["claude"] = p
-	h.tt.Frame()
+	settleTester(h.tt)
 	if !showing(h, "Updating") {
 		t.Errorf("the update running doesn't show: %q", h.tt.Texts())
 	}

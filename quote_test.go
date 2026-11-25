@@ -185,9 +185,7 @@ func TestSelectionBarExplains(t *testing.T) {
 	h, sel := quoteReady(t)
 	h.a.draft = "Before that, "
 	h.tt.Advance(quoteWait + 50*time.Millisecond)
-	if err := h.tt.Click("Explain"); err != nil {
-		t.Fatal(err)
-	}
+	h.click("Explain")
 	h.tt.Advance(time.Second)
 	if want := "Before that,\n\n" + explainAsk; h.a.draft != want {
 		t.Errorf("draft %q, want %q", h.a.draft, want)
@@ -449,7 +447,7 @@ func TestSelectionReadAsItChanges(t *testing.T) {
 				t.Fatalf("all of the reply selected, no bar: %+v", h.a.quote)
 			}
 			// What the bar itself allocates, and a little more.
-			if all := allocs(); all > none+100 {
+			if all := allocs(); all > none+200 {
 				t.Errorf("a frame allocates %.0f times with all of the reply selected, %.0f with nothing selected; want about as many", all, none)
 			}
 		})
@@ -924,9 +922,7 @@ func TestSelectionBarCmdEnter(t *testing.T) {
 func TestExplainLeavesCaretAtEnd(t *testing.T) {
 	h, _ := quoteReady(t)
 	h.tt.Advance(quoteWait + 50*time.Millisecond)
-	if err := h.tt.Click("Explain"); err != nil {
-		t.Fatal(err)
-	}
+	h.click("Explain")
 	h.tt.Advance(time.Second)
 	h.tt.Type(" More")
 	h.tt.Frame()

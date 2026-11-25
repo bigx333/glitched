@@ -111,8 +111,8 @@ func TestAPluginTurnedOffInSettingsIsNoLongerNamedAsDrawing(t *testing.T) {
 	const part, id, backup = "timeline.message", "a-null", "b-backup"
 	writeOwnPlugin(t, a, id, replacing(id, part), nullRows)
 	writeOwnPlugin(t, a, backup, replacing(backup, part), rowsModule(rowsOfB))
-	allow(t, a, id, "ui.replace")
-	allow(t, a, backup, "ui.replace")
+	allowRows(t, a, id)
+	allowRows(t, a, backup)
 	settlePlugins(t, a, h.tt, h.p)
 	if !h.tt.HasText("Replacement marker from B") {
 		t.Fatal("B never drew the timeline")
@@ -155,8 +155,8 @@ func TestAPluginNamedGlitchedIsNotGlitchedsOwnRow(t *testing.T) {
 	turnOff(t, a, "timeline")
 	writeOwnPlugin(t, a, id, replacing(id, part), nullRows)
 	writeOwnPlugin(t, a, backup, strings.Replace(replacing(backup, part), `"name": "b-backup"`, `"name": "Glitched"`, 1), rowsModule(rowsOfB))
-	allow(t, a, id, "ui.replace")
-	allow(t, a, backup, "ui.replace")
+	allowRows(t, a, id)
+	allowRows(t, a, backup)
 	settlePlugins(t, a, h.tt, h.p)
 	if !h.tt.HasText("Replacement marker from B") || installed(a, backup).Name != "Glitched" {
 		t.Fatal("the user plugin named Glitched did not draw")
@@ -178,7 +178,7 @@ func TestAPluginLoadedAgainLeavesNoNullOfItsLastLoad(t *testing.T) {
 	const id, part = "a-timeline-null", "timeline.message"
 	manifest := replacing(id, part)
 	writeOwnPlugin(t, a, id, manifest, nullRows)
-	allow(t, a, id, "ui.replace")
+	allowRows(t, a, id)
 	settlePlugins(t, a, h.tt, h.p)
 	if !h.tt.HasText(turnText(1)) {
 		t.Fatal("the selected timeline did not draw")
@@ -257,8 +257,9 @@ func TestAGrantAheadOfTheDrawerExpiresWhoSettingsNames(t *testing.T) {
 	writeOwnPlugin(t, a, top, replacing(top, part), nullRows)
 	writeOwnPlugin(t, a, higher, replacing(higher, part), rowsModule(rowsOfB))
 	writeOwnPlugin(t, a, former, replacing(former, part), rowsModule(strings.Replace(rowsOfB, "Replacement marker from B", "Former drawer marker", 1)))
-	allow(t, a, top, "ui.replace")
-	allow(t, a, former, "ui.replace")
+	allowRows(t, a, top)
+	allowRows(t, a, former)
+	allow(t, a, higher, "messages:read")
 	settlePlugins(t, a, h.tt, h.p)
 	if !h.tt.HasText("Former drawer marker") || h.tt.HasText("Replacement marker from B") {
 		t.Fatal("the granted lower-priority fixture did not draw ahead of the ungranted one")
@@ -349,7 +350,7 @@ export async function place({items}) {
 	await glitched.app.settings.get()
 	return items.map(() => (`+rowsOfB+`))
 }`)
-	allow(t, a, id, "ui.replace")
+	allowRows(t, a, id)
 	tt.Frame()
 	if !tt.HasText(turnText(1)) || tt.HasText("Replacement marker from B") {
 		t.Fatalf("the normal timeline did not take the first pending frame")
@@ -394,7 +395,7 @@ export async function place({items}) {
 	if (items.some(it => it.context.streaming)) await glitched.app.settings.get()
 	return items.map(it => it.context.streaming ? (`+rowsOfB+`) : null)
 }`)
-	allow(t, a, id, "ui.replace")
+	allowRows(t, a, id)
 	settlePlugins(t, a, tt, h.p)
 	if !tt.HasText(turnText(1)) || tt.HasText("Replacement marker from B") {
 		t.Fatal("initial native rows did not appear")

@@ -266,7 +266,10 @@ func startWith(t *testing.T, dir string, engine func(*daemon.Config)) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { a.backend.Close() })
-	h := &harness{t, a, ui.NewTester(a.view, 1320, 860), p}
+	tt := ui.NewTester(a.view, 1320, 860)
+	settlers.Store(tt, func() { settlePlugins(t, a, tt, p) })
+	t.Cleanup(func() { settlers.Delete(tt) })
+	h := &harness{t, a, tt, p}
 	h.until("this machine's engine", func() bool { return a.backend.Envs()[0].Status == client.Status(client.Online{}) })
 	return h
 }
