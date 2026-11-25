@@ -162,7 +162,6 @@ CREATE TABLE commands (
 	seq      INTEGER NOT NULL,
 	revision INTEGER
 ) STRICT;
-CREATE INDEX commands_by_seq ON commands (seq);
 
 CREATE TABLE threads (
 	id          BLOB PRIMARY KEY,
@@ -389,12 +388,11 @@ ALTER TABLE threads ADD COLUMN origin TEXT;
 `,
 	// Retire old outbox work without replaying changes to the worktree.
 	16: `UPDATE effects SET state = 'done' WHERE kind IN ('checkpoint.capture', 'checkpoint.drop', 'thread.revert') AND state <> 'done';`,
-	// Add covering indexes for snapshot batch reads, event-type queries, and command pruning.
+	// Add covering indexes for snapshot batch reads and event-type queries.
 	17: `
 CREATE INDEX IF NOT EXISTS events_by_thread_type ON events (thread, type, seq);
 CREATE INDEX IF NOT EXISTS threads_live_updated ON threads (deleted, updated_at DESC, id);
 CREATE INDEX IF NOT EXISTS threads_by_parent ON threads (parent, deleted, id) WHERE parent IS NOT NULL;
-CREATE INDEX IF NOT EXISTS commands_by_seq ON commands (seq);
 `,
 }
 

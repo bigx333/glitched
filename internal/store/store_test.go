@@ -702,7 +702,6 @@ const indexesV17 = `
 	DROP INDEX IF EXISTS events_by_thread_type;
 	DROP INDEX IF EXISTS threads_live_updated;
 	DROP INDEX IF EXISTS threads_by_parent;
-	DROP INDEX IF EXISTS commands_by_seq;
 `
 
 // The runs table up to version 6, before a run kept its model and access.
@@ -1656,7 +1655,7 @@ func TestAVersion17DatabaseUpgradesWithIndexes(t *testing.T) {
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 18 {
 		t.Fatalf("user_version = %d (%v), want 18", version, err)
 	}
-	for _, idx := range []string{"events_by_thread_type", "threads_live_updated", "threads_by_parent", "commands_by_seq"} {
+	for _, idx := range []string{"events_by_thread_type", "threads_live_updated", "threads_by_parent"} {
 		var count int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?`, idx).Scan(&count); err != nil || count != 1 {
 			t.Errorf("index %s missing after upgrade (count=%d, err=%v)", idx, count, err)
@@ -1759,20 +1758,20 @@ func TestMaintainPrunesDoneEffectsOldCommandsAndCheckpointsWAL(t *testing.T) {
 		// i == 5 stays leased.
 	}
 
-	res, err := s.Maintain(ctx, store.MaintainOptions{KeepCommands: 5, EffectBatch: 2})
+	res, err := s.Maintain(ctx, store.MaintainOptions{KeepCommands: 5, Batch: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.PrunedEffects != 2 || res.PrunedCommands != 7 {
-		t.Fatalf("first Maintain = %+v, want PrunedEffects=2 PrunedCommands=7", res)
+	if res.PrunedEffects != 4 || res.PrunedCommands != 7 {
+		t.Fatalf("first Maintain = %+v, want PrunedEffects=4 PrunedCommands=7, in batches of 2", res)
 	}
 
-	res2, err := s.Maintain(ctx, store.MaintainOptions{KeepCommands: 5, EffectBatch: 10})
+	res2, err := s.Maintain(ctx, store.MaintainOptions{KeepCommands: 5, Batch: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res2.PrunedEffects != 2 || res2.PrunedCommands != 0 {
-		t.Fatalf("second Maintain = %+v, want PrunedEffects=2 PrunedCommands=0", res2)
+	if res2.PrunedEffects != 0 || res2.PrunedCommands != 0 {
+		t.Fatalf("second Maintain = %+v, want nothing left to prune", res2)
 	}
 
 	// Pending and leased effects remain untouched.
