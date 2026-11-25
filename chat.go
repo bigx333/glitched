@@ -532,17 +532,24 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) (laid bool) {
 	a.drew, a.drawn = a.drawn, map[api.ID]sight{}
 	a.laidAt, a.builtAt = a.builtAt, a.now
 	l := a.listFor(t.id())
-	l.Key = func(i int) any { return es[i].key }
+	// In Zen mode, an item is a row or a line folding rows.
+	v := a.viewFor(t.id(), rs)
+	a.keepPlace(t.id(), l, v)
+	l.Key = func(j int) any { return v.key(j) }
 	l.FollowEnd = true
 	l.FollowAnimation = &ui.Smooth
 	// The agents strip sits over the composer: the end clears it too.
 	room := composerRoom + a.agentsRoom(t) + a.queueRoom(t)
-	at := thinkingAt(t, rs)
-	list := ui.List(c.Key(t.id()), l, len(es), func(i int) {
+	at := v.thinkingPos(thinkingAt(t, rs))
+	list := ui.List(c.Key(t.id()), l, v.len(), func(j int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).MaxWidth(contentWidth).Gap(22).Children(func() {
-				a.entry(c, t, rs, i)
-				if i == at {
+				if f := v.fold(j); f != nil {
+					a.zenLine(c, t, f)
+				} else {
+					a.entry(c, t, rs, v.row(j))
+				}
+				if j == at {
 					a.thinkingRow(c, t)
 				}
 			})
@@ -565,7 +572,7 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) (laid bool) {
 			})
 		}
 	})
-	a.turnMarkers(c, t.id(), rs, l)
+	a.turnMarkers(c, t.id(), rs, l, v)
 	return !leaving && list.Bounds().H > 0
 }
 

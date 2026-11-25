@@ -139,8 +139,9 @@ func fmtTokens(n int64) string {
 }
 
 // pruneThreadState drops what the app keeps by thread for threads no
-// longer there: the sidebar's open children and the composers seen. Rows
-// derived from a transcript the manager no longer holds go too.
+// longer there: the sidebar's open children, the composers seen, and the
+// timeline's markers and views with their open Zen lines. Rows derived
+// from a transcript the manager no longer holds go too.
 func (a *app) pruneThreadState() {
 	gone := func(id api.ID, _ bool) bool {
 		_, ok := a.find(id)
@@ -153,6 +154,7 @@ func (a *app) pruneThreadState() {
 		return !id.IsZero() && (!ok || t.Transcript != c.tr)
 	})
 	maps.DeleteFunc(a.markers, func(id api.ID, _ *markerState) bool { return gone(id, false) })
+	maps.DeleteFunc(a.listed, func(id api.ID, _ *timelineMemo) bool { return gone(id, false) })
 }
 
 // --- Stopping and deleting trees
