@@ -2,7 +2,8 @@
 // a page shows, as lines of roles and names, each element an agent can act
 // on with a ref ("s<epoch>e<n>") that resolve finds again while the
 // snapshot is the page's latest. Evaluated at document start via PreloadScript
-// and as an async function body per call with args prepended by Go.
+// and as an async function body per call with args and the secret
+// prepended by Go.
 //
 // Its state is private inside install() under a per-run random key and a
 // closed-over per-run secret, frozen and non-configurable. Once installed at
@@ -10,9 +11,9 @@
 // change: every function, getter, and setter it uses is captured on install
 // and called through Reflect.apply; history.pushState/replaceState, popstate,
 // hashchange, and pagehide drop refs on route changes and navigations.
-const call = typeof window[args.key] === "function" ? window[args.key] : install(args.key, args.secret);
+const call = typeof window[args.key] === "function" ? window[args.key] : install(args.key, secret);
 if (args.op === "install") return true;
-return call(args.secret, args);
+return call(secret, args);
 
 function install(key, secret) {
   let epoch = 0;

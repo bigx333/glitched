@@ -123,8 +123,7 @@ var (
 // installs webtarget's dispatcher, captures pristine DOM built-ins, and
 // hooks SPA history state changes before any page script runs.
 func PreloadScript() string {
-	a, _ := json.Marshal(map[string]any{"op": "install", "key": key, "secret": secret})
-	return "(function(){\nconst args = " + string(a) + ";\n" + script + "\n})();"
+	return "(function(){\n" + Script(map[string]any{"op": "install"}) + "\n})();"
 }
 
 // What a page's answer may hold, beside the snapshot's own budgets: its
@@ -393,10 +392,13 @@ func run(ctx context.Context, p Page, args map[string]any, out any) error {
 }
 
 // Script is the page's script for args, the body of an async function,
-// as Page.Eval runs statements.
+// as Page.Eval runs statements. Its args have no prototype, so the
+// script reading one a call left out finds no getter the page put on
+// Object.prototype, and the secret is apart from them.
 func Script(args map[string]any) string {
 	args["key"] = key
-	args["secret"] = secret
+	args["__proto__"] = nil
 	a, _ := json.Marshal(args)
-	return "const args = " + string(a) + ";\n" + script
+	s, _ := json.Marshal(secret)
+	return "const args = " + string(a) + ";\nconst secret = " + string(s) + ";\n" + script
 }

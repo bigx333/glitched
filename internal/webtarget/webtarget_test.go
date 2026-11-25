@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -219,8 +220,40 @@ func TestPreloadScriptAndSecret(t *testing.T) {
 	}
 	call := Script(map[string]any{"op": "snapshot"})
 	args := argsOf(t, call)
-	if args["key"] != key || args["secret"] != secret {
-		t.Errorf("Script args missing key/secret: %v", args)
+	if args["key"] != key || !strings.Contains(call, secret) {
+		t.Errorf("Script missing key/secret: %v", args)
+	}
+	if _, ok := args["secret"]; ok {
+		t.Errorf("Script's args carry the secret: %v", args)
+	}
+}
+
+// A page's getter on Object.prototype never sees the script's args, as
+// the script reads an argument a call left out.
+func TestScriptArgsReachNoPrototype(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node")
+	}
+	body, _ := json.Marshal(Script(map[string]any{"op": "scroll", "direction": "down"}))
+	k, _ := json.Marshal(key)
+	prog := `globalThis.window = globalThis;
+const seen = [];
+for (const k of ["ref", "hasLabel"]) Object.defineProperty(Object.prototype, k, {get() { seen.push(this.secret); }, configurable: true});
+window[` + string(k) + `] = (s, a) => { a.ref; a.hasLabel; return true; };
+const AsyncFunction = (async () => {}).constructor;
+new AsyncFunction(` + string(body) + `)().finally(() => {
+	delete Object.prototype.ref;
+	delete Object.prototype.hasLabel;
+	console.log(JSON.stringify(seen));
+});
+`
+	out, err := exec.Command(node, "-e", prog).CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+	if got := strings.TrimSpace(string(out)); got != "[]" {
+		t.Errorf("a prototype getter saw the args: %s", got)
 	}
 }
 
