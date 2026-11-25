@@ -2178,7 +2178,9 @@ func (a *app) cliEffort(t thread) bool { return a.cliDecides(t) && a.composerFil
 // effort they show (effortFor).
 func (a *app) modelRef() api.ModelRef {
 	m, _ := a.modelOf(a.model)
-	return api.ModelRef{Provider: a.model.Provider, Model: a.model.ID, Effort: effortFor(m, a.effort), Fast: a.fast}
+	ref := api.ModelRef{Provider: a.model.Provider, Model: a.model.ID, Effort: effortFor(m, a.effort)}
+	ref.SetSpeed(a.speed())
+	return ref
 }
 
 var accessOf = map[string]api.Access{accessAsk: api.AccessAsk, accessAuto: api.AccessAutoEdits, accessFull: api.AccessFull}

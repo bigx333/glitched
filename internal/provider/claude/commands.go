@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"glitched/internal/api"
 	"glitched/internal/provider"
 )
 
@@ -84,7 +85,7 @@ func (r initialized) models(def string) []provider.Model {
 		for _, e := range m.Efforts {
 			efforts = append(efforts, provider.Effort{ID: e})
 		}
-		out = append(out, provider.Model{ID: cmp.Or(m.ResolvedModel, m.Value), Name: name, Description: strings.Join(parts, " · "), Efforts: efforts})
+		out = append(out, provider.Model{ID: cmp.Or(m.ResolvedModel, m.Value), Name: name, Description: strings.Join(parts, " · "), Efforts: efforts, Speeds: []api.Speed{api.SpeedFast}, SpeedsKnown: true})
 	}
 	if def == "" {
 		return out
@@ -93,7 +94,7 @@ func (r initialized) models(def string) []provider.Model {
 		out[i].Default = true
 		return out
 	}
-	row := provider.Model{ID: def, Name: def, Default: true}
+	row := provider.Model{ID: def, Name: def, Default: true, Speeds: []api.Speed{api.SpeedFast}, SpeedsKnown: true}
 	for _, m := range r.Models {
 		// "Use the default model (currently Opus 5.5) · $4/$20 per Mtok"
 		if _, rest, ok := strings.Cut(m.Description, "(currently "); ok && m.Value == "default" && m.ResolvedModel == def {

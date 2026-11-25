@@ -307,15 +307,22 @@ func (f *fake) take(m message, raw []byte) {
 			}
 			return out
 		}
+		tiers := func(ids ...string) []map[string]any {
+			var out []map[string]any
+			for _, id := range ids {
+				out = append(out, map[string]any{"id": id})
+			}
+			return out
+		}
 		if p.Cursor == "" {
 			f.reply(m.ID, map[string]any{"data": []map[string]any{
-				{"id": "gpt-6-luna", "model": "gpt-6-luna", "displayName": "GPT-6 Luna", "description": "Fast and cheap", "hidden": false, "isDefault": false, "defaultReasoningEffort": "medium", "supportedReasoningEfforts": effort("low", "medium")},
+				{"id": "gpt-6-luna", "model": "gpt-6-luna", "displayName": "GPT-6 Luna", "description": "Fast and cheap", "hidden": false, "isDefault": false, "defaultReasoningEffort": "medium", "supportedReasoningEfforts": effort("low", "medium"), "serviceTiers": tiers("priority"), "additionalSpeedTiers": []string{"fast"}},
 				{"id": "codex-auto-review", "model": "codex-auto-review", "displayName": "Auto review", "hidden": true, "isDefault": false},
 			}, "nextCursor": "2"})
 			return
 		}
 		f.reply(m.ID, map[string]any{"data": []map[string]any{
-			{"id": "gpt-6.2-sol", "model": "gpt-6.2-sol", "displayName": "GPT-6.2 Sol", "description": "The default", "hidden": false, "isDefault": true, "defaultReasoningEffort": "medium", "supportedReasoningEfforts": effort("low", "medium", "high", "xhigh")},
+			{"id": "gpt-6.2-sol", "model": "gpt-6.2-sol", "displayName": "GPT-6.2 Sol", "description": "The default", "hidden": false, "isDefault": true, "defaultReasoningEffort": "medium", "supportedReasoningEfforts": effort("low", "medium", "high", "xhigh"), "serviceTiers": tiers("priority", "ultrafast"), "additionalSpeedTiers": []string{"fast", "ultrafast"}},
 		}, "nextCursor": nil})
 	case "thread/resume":
 		var p struct{ ThreadID string }

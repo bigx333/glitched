@@ -220,6 +220,10 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 				SupportedReasoningEfforts           []struct {
 					ReasoningEffort string `json:"reasoningEffort"`
 				} `json:"supportedReasoningEfforts"`
+				ServiceTiers []struct {
+					ID string `json:"id"`
+				} `json:"serviceTiers"`
+				AdditionalSpeedTiers []string `json:"additionalSpeedTiers"`
 			} `json:"data"`
 			NextCursor *string `json:"nextCursor"`
 		}
@@ -232,10 +236,32 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 				slices.ContainsFunc(rest, func(o provider.Model) bool { return o.ID == id }) {
 				continue
 			}
-			pm := provider.Model{ID: id, Name: cmp.Or(m.DisplayName, id), Description: m.Description, DefaultEffort: m.DefaultReasoningEffort}
+			pm := provider.Model{ID: id, Name: cmp.Or(m.DisplayName, id), Description: m.Description, DefaultEffort: m.DefaultReasoningEffort, SpeedsKnown: m.ServiceTiers != nil || m.AdditionalSpeedTiers != nil}
 			for _, e := range m.SupportedReasoningEfforts {
 				if e.ReasoningEffort != "" {
 					pm.Efforts = append(pm.Efforts, provider.Effort{ID: e.ReasoningEffort})
+				}
+			}
+			for _, tier := range m.ServiceTiers {
+				switch tier.ID {
+				case fastTier, string(api.SpeedFast):
+					pm.Speeds = append(pm.Speeds, api.SpeedFast)
+				case ultrafastTier:
+					pm.Speeds = append(pm.Speeds, api.SpeedUltrafast)
+				}
+			}
+			// app-servers before serviceTiers named their extra speed tiers
+			// directly, with fast rather than the tier priority is served as.
+			for _, tier := range m.AdditionalSpeedTiers {
+				switch tier {
+				case string(api.SpeedFast):
+					if !slices.Contains(pm.Speeds, api.SpeedFast) {
+						pm.Speeds = append(pm.Speeds, api.SpeedFast)
+					}
+				case string(api.SpeedUltrafast):
+					if !slices.Contains(pm.Speeds, api.SpeedUltrafast) {
+						pm.Speeds = append(pm.Speeds, api.SpeedUltrafast)
+					}
 				}
 			}
 			if m.IsDefault {

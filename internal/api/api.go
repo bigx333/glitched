@@ -35,11 +35,42 @@ const (
 	AccessFull
 )
 
+// Speed is how fast a model is asked to answer: its provider's ordinary
+// tier, its fast one, or Codex's ultrafast one.
+type Speed string
+
+const (
+	SpeedStandard  Speed = ""
+	SpeedFast      Speed = "fast"
+	SpeedUltrafast Speed = "ultrafast"
+)
+
 type ModelRef struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 	Effort   string `json:"effort,omitempty"`
-	Fast     bool   `json:"fast,omitempty"`
+	// Fast is kept as the form older logs and clients know: ultrafast is
+	// fast to them, and Ultrafast tells a new one the two apart.
+	Fast      bool `json:"fast,omitempty"`
+	Ultrafast bool `json:"ultrafast,omitempty"`
+}
+
+// Speed is the speed m asks for.
+func (m ModelRef) Speed() Speed {
+	if m.Ultrafast {
+		return SpeedUltrafast
+	}
+	if m.Fast {
+		return SpeedFast
+	}
+	return SpeedStandard
+}
+
+// SetSpeed sets m's speed, keeping Fast's old meaning for readers that
+// don't know Ultrafast.
+func (m *ModelRef) SetSpeed(s Speed) {
+	m.Fast = s != SpeedStandard
+	m.Ultrafast = s == SpeedUltrafast
 }
 
 type DispatchMode uint8
@@ -255,7 +286,7 @@ type ThreadRename struct {
 
 // ThreadConfigure changes the model and the access the thread's next turn
 // runs at: a turn already running keeps its own. It gives only what its
-// sender chose: the model's name, its effort, fast mode, the access. What
+// sender chose: the model's name, its effort, its speed, the access. What
 // it leaves out stays as the engine has it when it decides, so a configure
 // sent again, or chosen on a view the thread has moved past, undoes
 // nothing another client changed since. It names no provider: that stays
@@ -263,10 +294,11 @@ type ThreadRename struct {
 // be wider than its parent's, and a narrower access narrows the threads
 // under it to it too.
 type ThreadConfigure struct {
-	Model  *string `json:"model,omitempty"`
-	Effort *string `json:"effort,omitempty"`
-	Fast   *bool   `json:"fast,omitempty"`
-	Access *Access `json:"access,omitempty"`
+	Model     *string `json:"model,omitempty"`
+	Effort    *string `json:"effort,omitempty"`
+	Fast      *bool   `json:"fast,omitempty"`
+	Ultrafast *bool   `json:"ultrafast,omitempty"`
+	Access    *Access `json:"access,omitempty"`
 }
 
 // Onto is the model and access c makes of m and a: what it gives in
@@ -280,6 +312,15 @@ func (c ThreadConfigure) Onto(m ModelRef, a Access) (ModelRef, Access) {
 	}
 	if c.Fast != nil {
 		m.Fast = *c.Fast
+		if !m.Fast {
+			m.Ultrafast = false
+		}
+	}
+	if c.Ultrafast != nil {
+		m.Ultrafast = *c.Ultrafast
+		if m.Ultrafast {
+			m.Fast = true
+		}
 	}
 	if c.Access != nil {
 		a = *c.Access

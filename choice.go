@@ -17,7 +17,7 @@ import (
 )
 
 // choice is what the composer's pickers show: the model by its key, its
-// effort by its id, fast mode and the access by the name its picker gives it. In a new
+// effort by its id, speed and the access by the name its picker gives it. In a new
 // thread's draft it's the default a new thread takes; in a thread, that
 // thread's own. composer.json holds the default's fields the user chose:
 // one never chosen is the app's own. Follow is that the default's model
@@ -26,11 +26,18 @@ import (
 // is the one its engine last reported the program runs where given none,
 // which moves with what the engine reports.
 type choice struct {
-	Model  modelKey `json:"model,omitzero"`
-	Effort string   `json:"effort,omitempty"`
-	Fast   bool     `json:"fast,omitempty"`
-	Access string   `json:"access,omitempty"`
-	Follow bool     `json:"-"`
+	Model     modelKey `json:"model,omitzero"`
+	Effort    string   `json:"effort,omitempty"`
+	Fast      bool     `json:"fast,omitempty"`
+	Ultrafast bool     `json:"ultrafast,omitempty"`
+	Access    string   `json:"access,omitempty"`
+	Follow    bool     `json:"-"`
+}
+
+// boolsOfSpeed is s in ModelRef's compatible form: ultrafast is fast to
+// a reader that doesn't know it.
+func boolsOfSpeed(s api.Speed) (fast, ultrafast bool) {
+	return s != api.SpeedStandard, s == api.SpeedUltrafast
 }
 
 // ownChoice is the default a new thread takes where the user chose none
@@ -77,7 +84,10 @@ func (a *app) starting(file choice) choice {
 	if e := effortFor(m, file.Effort); strings.EqualFold(e, file.Effort) {
 		ch.Effort = e
 	}
-	ch.Fast = file.Fast
+	// Speed is a preference, not a capability decision: keep it as chosen
+	// while a catalog is uncertain or moves, and narrow it only where it is
+	// shown or sent (speedFor).
+	ch.Fast, ch.Ultrafast = file.Fast, file.Ultrafast
 	if _, ok := accessOf[file.Access]; ok {
 		ch.Access = file.Access
 	}
@@ -86,11 +96,11 @@ func (a *app) starting(file choice) choice {
 
 // choice is what the pickers show now.
 func (a *app) choice() choice {
-	return choice{Model: a.model, Effort: a.effort, Fast: a.fast, Access: a.access, Follow: a.followsCLI}
+	return choice{Model: a.model, Effort: a.effort, Fast: a.fast, Ultrafast: a.ultrafast, Access: a.access, Follow: a.followsCLI}
 }
 
 func (a *app) show(ch choice) {
-	a.model, a.effort, a.fast, a.access, a.followsCLI = ch.Model, ch.Effort, ch.Fast, ch.Access, ch.Follow
+	a.model, a.effort, a.fast, a.ultrafast, a.access, a.followsCLI = ch.Model, ch.Effort, ch.Fast, ch.Ultrafast, ch.Access, ch.Follow
 }
 
 func (a *app) composerPath() string { return filepath.Join(a.dir, "composer.json") }
@@ -160,8 +170,8 @@ func (a *app) saveComposer() {
 		case ch.Effort != had.Effort:
 			f.Effort = ch.Effort
 		}
-		if ch.Fast != had.Fast {
-			f.Fast = ch.Fast
+		if ch.Fast != had.Fast || ch.Ultrafast != had.Ultrafast {
+			f.Fast, f.Ultrafast = ch.Fast, ch.Ultrafast
 		}
 		if ch.Access != had.Access {
 			f.Access = ch.Access
@@ -218,7 +228,8 @@ func threadModel(t thread, m api.ModelRef) modelKey {
 // A model or effort the pickers don't list shows by its own name.
 func (a *app) threadChoice(t thread) choice {
 	m, acc := configured(t)
-	ch := choice{Model: threadModel(t, m), Effort: m.Effort, Fast: m.Fast, Access: accessAuto, Follow: m.Model == ""}
+	fast, ultrafast := boolsOfSpeed(a.speedFor(threadModel(t, m), m.Fast, m.Ultrafast))
+	ch := choice{Model: threadModel(t, m), Effort: m.Effort, Fast: fast, Ultrafast: ultrafast, Access: accessAuto, Follow: m.Model == ""}
 	for name, v := range accessOf {
 		if v == acc {
 			ch.Access = name
@@ -257,6 +268,10 @@ func (a *app) threadControls(t thread, build func()) {
 	defer func() { a.pickerLock, a.pickerFamily = "", family }()
 	build()
 	after := a.choice()
+	// The raw choice keeps a speed preference across models, but a thread
+	// is configured at what its model can run: moving off Ultrafast's model
+	// is a downgrade even though the preference's flags did not change.
+	after.Fast, after.Ultrafast = boolsOfSpeed(a.speedFor(after.Model, after.Fast, after.Ultrafast))
 	if after == before || t.env == nil {
 		return
 	}
@@ -271,8 +286,8 @@ func (a *app) threadControls(t thread, build func()) {
 	if after.Effort != before.Effort {
 		c.Effort = new(after.Effort)
 	}
-	if after.Fast != before.Fast {
-		c.Fast = new(after.Fast)
+	if after.Fast != before.Fast || after.Ultrafast != before.Ultrafast {
+		c.Fast, c.Ultrafast = new(after.Fast), new(after.Ultrafast)
 	}
 	if after.Access != before.Access {
 		c.Access = new(accessOf[after.Access])
@@ -343,31 +358,32 @@ func (a *app) modelRecords() any {
 	return out
 }
 
-// configureEffect is threads.configure: the model, effort and fast mode of
+// configureEffect is threads.configure: the model, effort and speed of
 // the thread's next turn, as its picker sets them, and only those. The
 // access is the access picker's alone, so a configure that names it, or
 // anything else, is refused whole.
 func (a *app) configureEffect(args json.RawMessage) (any, error) {
 	var in struct {
-		Type   string // the call's own, threads.configure
-		Thread string
-		Model  *string
-		Effort *string
-		Fast   *bool
+		Type      string // the call's own, threads.configure
+		Thread    string
+		Model     *string
+		Effort    *string
+		Fast      *bool
+		Ultrafast *bool
 	}
 	d := json.NewDecoder(bytes.NewReader(args))
 	d.DisallowUnknownFields()
 	if err := d.Decode(&in); err != nil {
-		return nil, fmt.Errorf("threads.configure sets a model, an effort and fast mode, and nothing else: %v", err)
+		return nil, fmt.Errorf("threads.configure sets a model, an effort and a speed, and nothing else: %v", err)
 	}
-	if in.Model == nil && in.Effort == nil && in.Fast == nil {
-		return nil, errors.New("threads.configure needs a model, an effort or fast mode")
+	if in.Model == nil && in.Effort == nil && in.Fast == nil && in.Ultrafast == nil {
+		return nil, errors.New("threads.configure needs a model, an effort or a speed")
 	}
 	t, err := a.pluginFind(args)
 	if err != nil {
 		return nil, err
 	}
-	c := api.ThreadConfigure{Fast: in.Fast}
+	c := api.ThreadConfigure{Fast: in.Fast, Ultrafast: in.Ultrafast}
 	now, _ := configured(t)
 	// A thread keeps its provider: its session is that provider's.
 	m, _ := a.modelOf(threadModel(t, now))
@@ -395,6 +411,17 @@ func (a *app) configureEffect(args json.RawMessage) (any, error) {
 			return nil, fmt.Errorf("%s's effort is one of %s", m.name, strings.Join(ids, ", "))
 		}
 		c.Effort = in.Effort
+	}
+	if in.Model != nil || in.Fast != nil || in.Ultrafast != nil {
+		candidate := now
+		if c.Model != nil {
+			candidate.Model = *c.Model
+		}
+		candidate, _ = (api.ThreadConfigure{Fast: in.Fast, Ultrafast: in.Ultrafast}).Onto(candidate, api.AccessAsk)
+		if a.speedFor(threadModel(t, candidate), candidate.Fast, candidate.Ultrafast) != candidate.Speed() {
+			cm, _ := a.modelOf(threadModel(t, candidate))
+			return nil, fmt.Errorf("%s doesn't offer %s mode", cm.name, candidate.Speed())
+		}
 	}
 	return nil, a.sendConfigure(t, c)
 }

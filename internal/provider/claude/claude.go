@@ -333,6 +333,10 @@ func (ad *Adapter) argv(spec provider.SessionSpec) []string {
 	if e := spec.Model.Effort; e != "" {
 		a = append(a, "--effort", e)
 	}
+	// Say the speed explicitly either way: Claude Code otherwise takes
+	// fastMode from the user's settings, where Glitched's speed choice
+	// can't hold a thread to what it shows.
+	a = append(a, "--settings", fmt.Sprintf(`{"fastMode":%t}`, spec.Model.Fast))
 	if r := spec.Skills.Root; r != "" {
 		a = append(a, "--plugin-dir", r)
 	}

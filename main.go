@@ -350,12 +350,14 @@ type app struct {
 	fenceSaw string
 	typed    string // the draft the wind last saw: typing keeps it blowing
 	wind     *wind.Texture
-	// The model picker: open, fast mode, and when fast mode came on and
-	// effort went Max, for their effects.
+	// The model picker: open, speed mode, and when it came on and effort
+	// went Max, for their effects. Ultrafast implies fast in what the
+	// engine and older clients read, as api.ModelRef does.
 	pickerOpen   bool
 	pickerFamily string
 	pickerReveal pickerReveal
 	fast         bool
+	ultrafast    bool
 	fastAt       time.Time
 	// The effort slider's drag: held, where it was pressed and last held,
 	// in levels, to tell a click from a drag, and the level the held

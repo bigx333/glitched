@@ -150,6 +150,11 @@ type Model struct {
 	Efforts       []Effort `json:"efforts,omitempty"`
 	Default       bool     `json:"default,omitempty"`
 	DefaultEffort string   `json:"defaultEffort,omitempty"`
+	// Speeds are the accelerated tiers the model offers: fast, or fast
+	// and ultrafast. SpeedsKnown is whether the provider said: without it,
+	// none means not yet known rather than ordinary speed only.
+	Speeds      []api.Speed `json:"speeds,omitempty"`
+	SpeedsKnown bool        `json:"speedsKnown,omitempty"`
 }
 
 // Effort is a level of effort a model runs at: ID is what a session's

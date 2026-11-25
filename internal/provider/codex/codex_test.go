@@ -276,13 +276,16 @@ func TestDescribeListsModelsAndEfforts(t *testing.T) {
 	}
 	var got []string
 	for _, m := range info.Models {
-		var efforts []string
+		var efforts, speeds []string
 		for _, e := range m.Efforts {
 			efforts = append(efforts, e.ID)
 		}
-		got = append(got, fmt.Sprintf("%s=%s:%s@%s default=%t", m.ID, m.Name, strings.Join(efforts, ","), m.DefaultEffort, m.Default))
+		for _, speed := range m.Speeds {
+			speeds = append(speeds, string(speed))
+		}
+		got = append(got, fmt.Sprintf("%s=%s:%s@%s default=%t speeds=%s:%t", m.ID, m.Name, strings.Join(efforts, ","), m.DefaultEffort, m.Default, strings.Join(speeds, ","), m.SpeedsKnown))
 	}
-	if want := []string{"gpt-6.2-sol=GPT-6.2 Sol:low,medium,high,xhigh@medium default=true", "gpt-6-luna=GPT-6 Luna:low,medium@medium default=false"}; !slices.Equal(got, want) {
+	if want := []string{"gpt-6.2-sol=GPT-6.2 Sol:low,medium,high,xhigh@medium default=true speeds=fast,ultrafast:true", "gpt-6-luna=GPT-6 Luna:low,medium@medium default=false speeds=fast:true"}; !slices.Equal(got, want) {
 		t.Errorf("models %q, want %q", got, want)
 	}
 	if n := len(sent(t, log, "turn/start")); n != 0 {
@@ -1032,12 +1035,14 @@ func TestACommandShowsTheAccessItAsksFor(t *testing.T) {
 	}
 }
 
-// Fast is Codex's priority tier, and off is no tier, on every turn.
-func TestFastIsCodexsPriorityTier(t *testing.T) {
+// Fast is Codex's priority tier, ultrafast its ultrafast one, and off no
+// tier, on every turn.
+func TestSpeedIsCodexsServiceTier(t *testing.T) {
 	a, log := fake(t, "hi")
 	s := spec(t)
-	for _, fast := range []bool{true, false} {
-		s.Run, s.Model.Fast = api.NewID(), fast
+	for _, speed := range []api.Speed{api.SpeedFast, api.SpeedUltrafast, api.SpeedStandard} {
+		s.Run = api.NewID()
+		s.Model.SetSpeed(speed)
 		g := open(t, a, s)
 		do(t, g, provider.Start{Text: "hi"})
 		turn(t, g)
@@ -1059,7 +1064,7 @@ func TestFastIsCodexsPriorityTier(t *testing.T) {
 		}
 		tiers = append(tiers, tier)
 	}
-	if strings.Join(tiers, " ") != "priority null" {
+	if strings.Join(tiers, " ") != "priority ultrafast null" {
 		t.Errorf("tiers %q", tiers)
 	}
 }

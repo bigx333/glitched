@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
+	"glitched/internal/provider"
 )
 
 const pickerManifest = `{"id": "mine", "name": "mine", "main": "index.js", "contract": "glitched", "contractVersion": 2,
@@ -189,6 +190,98 @@ func TestTheModelPickersRowsKeepTheirWays(t *testing.T) {
 	}
 	if _, ok := h.tt.AccessByRole(ui.RoleSlider, "Effort"); !ok {
 		t.Error("the popover has no effort slider")
+	}
+}
+
+// reportModels replaces what a provider reported after the engine's first
+// answer, as a test of exactly what its catalog says. It runs with the
+// app's posts, where the answer itself is applied, and puts the next
+// recheck past the test.
+func reportModels(h *harness, provider string, models []provider.Model) {
+	h.t.Helper()
+	h.until("the first model answer", func() bool { return !h.a.models.asking && !h.a.models.next.IsZero() })
+	h.a.post(func() {
+		h.a.models.reported[provider] = models
+		h.a.models.next = time.Now().Add(time.Hour)
+	})
+	h.p.run()
+	h.tt.Frame()
+}
+
+// Speed controls follow what the model's provider and catalog accept:
+// Claude has fast alone, a provider with no speed tier has neither, and
+// Codex's ultrafast appears only on a model whose service tiers offer it.
+func TestSpeedControlsFollowTheModelsProviderAndCatalog(t *testing.T) {
+	h := start(t, tempDir(t))
+	h.click("Model")
+	pickerSettle(t, h)
+	if _, ok := h.tt.AccessByRole(ui.RoleSwitch, "Fast mode"); !ok {
+		t.Fatal("Claude offers no fast-mode control")
+	}
+	if _, ok := h.tt.AccessByRole(ui.RoleSwitch, "Ultrafast mode"); ok {
+		t.Fatal("Claude offers an ultrafast-mode control")
+	}
+
+	h.hover("Gemini")
+	pickerSettle(t, h)
+	h.click("Gemini 3 Pro")
+	pickerSettle(t, h)
+	for _, label := range []string{"Fast mode", "Ultrafast mode"} {
+		if _, ok := h.tt.AccessByRole(ui.RoleSwitch, label); ok {
+			t.Errorf("Gemini offers a %s control", label)
+		}
+	}
+	if got := h.a.speedFor(h.a.model, false, true); got != api.SpeedStandard {
+		t.Errorf("ultrafast alone on Gemini chose %s, want ordinary speed", got)
+	}
+	h.a.fast = true
+	if ref := h.a.modelRef(); ref.Fast || ref.Ultrafast {
+		t.Errorf("a new Gemini thread starts at %+v, want ordinary speed", ref)
+	}
+	h.a.fast = false
+
+	reportModels(h, "codex", []provider.Model{
+		{ID: "gpt-fast-only", Name: "Fast only", Speeds: []api.Speed{api.SpeedFast}, SpeedsKnown: true},
+		{ID: "gpt-ultra", Name: "Ultra capable", Speeds: []api.Speed{api.SpeedFast, api.SpeedUltrafast}, SpeedsKnown: true},
+	})
+	h.hover("Codex")
+	pickerSettle(t, h)
+	h.click("Fast only")
+	pickerSettle(t, h)
+	if _, ok := h.tt.AccessByRole(ui.RoleSwitch, "Fast mode"); !ok {
+		t.Error("a fast-only Codex model offers no fast-mode control")
+	}
+	if _, ok := h.tt.AccessByRole(ui.RoleSwitch, "Ultrafast mode"); ok {
+		t.Error("a fast-only Codex model offers an ultrafast-mode control")
+	}
+
+	h.click("Ultra capable")
+	pickerSettle(t, h)
+	if _, ok := h.tt.AccessByRole(ui.RoleSwitch, "Ultrafast mode"); !ok {
+		t.Fatal("an ultrafast Codex model offers no ultrafast-mode control")
+	}
+	h.click("Ultrafast mode")
+	pickerSettle(t, h)
+	if got := h.a.speed(); got != api.SpeedUltrafast || !h.a.fast || !h.a.ultrafast {
+		t.Fatalf("ultrafast's switch chose %s (%t/%t)", got, h.a.fast, h.a.ultrafast)
+	}
+	if ref := h.a.modelRef(); !ref.Fast || !ref.Ultrafast {
+		t.Errorf("a new ultrafast thread starts at %+v", ref)
+	}
+	h.click("Fast mode")
+	pickerSettle(t, h)
+	if got := h.a.speed(); got != api.SpeedFast {
+		t.Errorf("choosing fast under ultrafast chose %s, want fast", got)
+	}
+	h.click("Ultrafast mode")
+	pickerSettle(t, h)
+	h.click("Ultrafast mode")
+	pickerSettle(t, h)
+	if got := h.a.speed(); got != api.SpeedStandard {
+		t.Errorf("choosing ultrafast twice chose %s, want ordinary speed", got)
+	}
+	if got := h.a.speedFor(h.a.model, false, true); got != api.SpeedUltrafast {
+		t.Errorf("ultrafast without its compatible fast bit chose %s, want ultrafast", got)
 	}
 }
 

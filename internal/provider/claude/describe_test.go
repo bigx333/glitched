@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"glitched/internal/api"
 	"glitched/internal/provider"
 	"glitched/internal/provider/claude"
 )
@@ -41,9 +42,9 @@ func TestDescribeSaysTheAccountsModels(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []provider.Model{
-		{ID: "claude-fable-5-2", Name: "Fable 5.2", Description: "Most capable for your hardest tasks", Efforts: []provider.Effort{{ID: "low"}, {ID: "high"}, {ID: "max"}}},
-		{ID: "claude-sonnet-5-5", Name: "Sonnet 5.5", Description: "Smart and fast"},
-		{ID: "claude-opus-5-5", Name: "Opus 5.5", Default: true},
+		{ID: "claude-fable-5-2", Name: "Fable 5.2", Description: "Most capable for your hardest tasks", Efforts: []provider.Effort{{ID: "low"}, {ID: "high"}, {ID: "max"}}, Speeds: []api.Speed{api.SpeedFast}, SpeedsKnown: true},
+		{ID: "claude-sonnet-5-5", Name: "Sonnet 5.5", Description: "Smart and fast", Speeds: []api.Speed{api.SpeedFast}, SpeedsKnown: true},
+		{ID: "claude-opus-5-5", Name: "Opus 5.5", Default: true, Speeds: []api.Speed{api.SpeedFast}, SpeedsKnown: true},
 	}
 	if !reflect.DeepEqual(info.Models, want) || info.Name != "claude" || info.Version != "2.1.330" {
 		t.Errorf("Describe = %+v; want claude 2.1.330 running %+v", info, want)

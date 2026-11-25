@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
+	"glitched/internal/api"
 	"glitched/internal/provider"
 )
 
@@ -27,10 +29,10 @@ func TestInitializeReportsTheAccountsModels(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []provider.Model{
-		{ID: "claude-opus-5-5", Name: "Opus 5.5", Description: "Best for everyday, complex tasks", Default: true},
-		{ID: "claude-fable-5-2", Name: "Fable 5.2", Description: "Most capable for your hardest and longest-running tasks", Efforts: []provider.Effort{{ID: "low"}, {ID: "medium"}, {ID: "high"}, {ID: "xhigh"}, {ID: "max"}}},
-		{ID: "claude-haiku-5-5", Name: "Haiku 5.5", Description: "Fastest for quick answers"},
-		{ID: "claude-next", Name: "Next", Description: "Coming soon"},
+		{ID: "claude-opus-5-5", Name: "Opus 5.5", Description: "Best for everyday, complex tasks", Default: true, Speeds: []api.Speed{api.SpeedFast}, SpeedsKnown: true},
+		{ID: "claude-fable-5-2", Name: "Fable 5.2", Description: "Most capable for your hardest and longest-running tasks", Efforts: []provider.Effort{{ID: "low"}, {ID: "medium"}, {ID: "high"}, {ID: "xhigh"}, {ID: "max"}}, Speeds: []api.Speed{api.SpeedFast}, SpeedsKnown: true},
+		{ID: "claude-haiku-5-5", Name: "Haiku 5.5", Description: "Fastest for quick answers", Speeds: []api.Speed{api.SpeedFast}, SpeedsKnown: true},
+		{ID: "claude-next", Name: "Next", Description: "Coming soon", Speeds: []api.Speed{api.SpeedFast}, SpeedsKnown: true},
 	}
 	if got := r.models(r.defaultModel(os.Getenv, "")); !reflect.DeepEqual(got, want) || r.Version != "2.1.330" {
 		t.Errorf("models = %+v, version %q; want %+v", got, r.Version, want)
@@ -125,5 +127,21 @@ func TestTheDefaultIsTheModelClaudeRunsGivenNone(t *testing.T) {
 				t.Errorf("the Default is %+v, want %s named %q", defaults, tc.want, tc.wantName)
 			}
 		})
+	}
+}
+
+// A run says fastMode either way: without false, the user's own settings
+// could turn fast on for a thread Glitched shows at ordinary speed.
+func TestArgvSaysFastModeEitherWay(t *testing.T) {
+	for _, fast := range []bool{true, false} {
+		args := (&Adapter{}).argv(provider.SessionSpec{Access: api.AccessAsk, Model: api.ModelRef{Provider: "claude", Fast: fast}})
+		i := slices.Index(args, "--settings")
+		want := `{"fastMode":false}`
+		if fast {
+			want = `{"fastMode":true}`
+		}
+		if i < 0 || i+1 >= len(args) || args[i+1] != want {
+			t.Errorf("fast %t: argv %q, want --settings %s", fast, args, want)
+		}
 	}
 }
