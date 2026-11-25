@@ -37,15 +37,28 @@ type Options struct {
 // Status describes the installed state and live health of the background
 // service. Binary, Dir and LogPath are what the installed definition runs.
 type Status struct {
-	Supported bool   `json:"supported"`
-	Installed bool   `json:"installed"`
-	Running   bool   `json:"running"`
-	PID       int    `json:"pid,omitempty"`
-	UnitPath  string `json:"unitPath,omitempty"`
-	LogPath   string `json:"logPath,omitempty"`
-	Binary    string `json:"binary,omitempty"`
-	Dir       string `json:"dir,omitempty"`
-	Detail    string `json:"detail,omitempty"`
+	Supported bool `json:"supported"`
+	Installed bool `json:"installed"`
+	// Foreign: the service is installed for Dir, a state directory other
+	// than the caller's. Install and Uninstall from the caller's leave it be.
+	Foreign bool `json:"foreign,omitempty"`
+	health
+	UnitPath string `json:"unitPath,omitempty"`
+	LogPath  string `json:"logPath,omitempty"`
+	Binary   string `json:"binary,omitempty"`
+	Dir      string `json:"dir,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+}
+
+// health is what the manager says of the job it runs.
+type health struct {
+	Running bool `json:"running"`
+	// Starting: the manager starts the job, or restarts it after it exited,
+	// as in a crash loop. It does not serve yet.
+	Starting bool `json:"starting,omitempty"`
+	PID      int  `json:"pid,omitempty"`
+	// LastExit is how a job that does not run last exited, when it failed.
+	LastExit string `json:"lastExit,omitempty"`
 }
 
 // manager is the OS's service manager, which runs the definition Install
@@ -63,7 +76,7 @@ type manager interface {
 	// unload stops the job and has the manager drop it. The definition
 	// stays on disk.
 	unload(ctx context.Context) error
-	state(ctx context.Context) (running bool, pid int)
+	state(ctx context.Context) health
 }
 
 // osManager is this OS's manager, nil where none is supported.
@@ -102,6 +115,11 @@ func Install(ctx context.Context, opts Options) (Status, error) {
 	had := err == nil
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return Status{}, err
+	}
+	if had {
+		if err := ownedBy(m, old, opts.Home, opts.Dir); err != nil {
+			return Inspect(ctx, opts), fmt.Errorf("service: install: %w", err)
+		}
 	}
 	if had && bytes.Equal(old, data) {
 		if err := m.load(ctx, path, false); err != nil {
@@ -147,8 +165,15 @@ func Uninstall(ctx context.Context, opts Options) (Status, error) {
 	}
 	opts.Home = home
 	path := m.path(home)
-	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
 		return Inspect(ctx, opts), nil
+	}
+	if err != nil {
+		return Inspect(ctx, opts), err
+	}
+	if err := ownedBy(m, data, home, stateDir(opts.Dir, home)); err != nil {
+		return Inspect(ctx, opts), fmt.Errorf("service: uninstall: %w", err)
 	}
 	if err := m.unload(ctx); err != nil {
 		return Inspect(ctx, opts), fmt.Errorf("service: uninstall: %w", err)
@@ -179,8 +204,32 @@ func Inspect(ctx context.Context, opts Options) Status {
 	}
 	st.Installed = true
 	st.Binary, st.Dir, st.LogPath = m.parse(data)
-	st.Running, st.PID = m.state(ctx)
+	st.Dir = stateDir(st.Dir, home)
+	st.Foreign = st.Dir != stateDir(opts.Dir, home)
+	st.health = m.state(ctx)
 	return st
+}
+
+// ownedBy refuses a definition that serves a state directory other than
+// dir. One service serves one directory, and another directory's app or
+// CLI must not stop it or take it over.
+func ownedBy(m manager, data []byte, home, dir string) error {
+	_, served, _ := m.parse(data)
+	if served = stateDir(served, home); served != dir {
+		return fmt.Errorf("the background service is installed for %s, not %s; uninstall it from there first: glitched service uninstall -dir %s", served, dir, served)
+	}
+	return nil
+}
+
+// stateDir is dir made absolute, or serve's default when it is empty.
+func stateDir(dir, home string) string {
+	if dir == "" {
+		dir = filepath.Join(home, ".glitched")
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		return abs
+	}
+	return filepath.Clean(dir)
 }
 
 func homeOf(opts Options) (string, error) {
@@ -243,12 +292,7 @@ func resolveOptions(opts Options) (Options, error) {
 		return opts, err
 	}
 	opts.Home = home
-	if opts.Dir == "" {
-		opts.Dir = filepath.Join(home, ".glitched")
-	}
-	if abs, err := filepath.Abs(opts.Dir); err == nil {
-		opts.Dir = abs
-	}
+	opts.Dir = stateDir(opts.Dir, home)
 	bin, err := ResolveBinary(opts.Binary)
 	if err != nil {
 		return opts, err

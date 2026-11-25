@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -25,12 +27,12 @@ case "$me $*" in
 $(cat "$STUB_DIR/fail" 2>/dev/null)) echo "refused by the stub" >&2; exit 1 ;;
 esac
 case "$me $*" in
-"launchctl print"*) [ -e "$STUB_DIR/loaded" ] || exit 113; echo "	state = running"; echo "	pid = 42" ;;
+"launchctl print"*) [ -e "$STUB_DIR/loaded" ] || exit 113; if [ -e "$STUB_DIR/print" ]; then cat "$STUB_DIR/print"; else echo "	state = running"; echo "	pid = 42"; fi ;;
 "launchctl bootstrap"*) : > "$STUB_DIR/loaded" ;;
 "launchctl bootout"*) [ -e "$STUB_DIR/loaded" ] || exit 3; rm -f "$STUB_DIR/loaded" ;;
 "systemctl --user start"*|"systemctl --user restart"*) : > "$STUB_DIR/active" ;;
 "systemctl --user disable --now"*) rm -f "$STUB_DIR/active" ;;
-"systemctl --user show"*) if [ -e "$STUB_DIR/active" ]; then echo ActiveState=active; echo MainPID=42; else echo ActiveState=inactive; echo MainPID=0; fi ;;
+"systemctl --user show"*) if [ -e "$STUB_DIR/show" ]; then cat "$STUB_DIR/show"; elif [ -e "$STUB_DIR/active" ]; then echo ActiveState=active; echo MainPID=42; else echo ActiveState=inactive; echo MainPID=0; fi ;;
 esac
 `
 
@@ -69,6 +71,19 @@ func (s *stub) calls() []string {
 	}
 	os.Remove(path)
 	return strings.Fields(strings.ReplaceAll(strings.TrimSpace(string(data)), " ", "_"))
+}
+
+// report has the manager describe the job with out, as launchctl print or
+// systemctl show would.
+func (s *stub) report(out string) {
+	s.t.Helper()
+	name := "print"
+	if _, ok := s.m.(systemd); ok {
+		name = "show"
+	}
+	if err := os.WriteFile(filepath.Join(s.dir, name), []byte(out), 0o644); err != nil {
+		s.t.Fatal(err)
+	}
 }
 
 func (s *stub) opts(dir string) Options {
@@ -135,7 +150,9 @@ func TestReinstallRefusedPutsBackTheOldDefinition(t *testing.T) {
 			old, _ := s.definition()
 			s.calls()
 			s.fail(tc.apply)
-			if _, err := Install(context.Background(), s.opts("two")); err == nil {
+			two := s.opts("one")
+			two.Binary = "/opt/glitched/next/glitched"
+			if _, err := Install(context.Background(), two); err == nil {
 				t.Fatal("Install succeeded, want the manager's refusal")
 			}
 			if def, _ := s.definition(); def != old {
@@ -155,7 +172,7 @@ func TestUninstallRefusedKeepsTheDefinition(t *testing.T) {
 				t.Fatal(err)
 			}
 			s.fail(tc.stop)
-			st, err := Uninstall(context.Background(), Options{Home: s.home})
+			st, err := Uninstall(context.Background(), s.opts("state"))
 			if err == nil || !strings.Contains(err.Error(), "refused by the stub") {
 				t.Fatalf("Uninstall = %v, want the manager's refusal", err)
 			}
@@ -175,7 +192,7 @@ func TestUninstallRemovesTheDefinition(t *testing.T) {
 				t.Fatal(err)
 			}
 			s.calls()
-			st, err := Uninstall(context.Background(), Options{Home: s.home})
+			st, err := Uninstall(context.Background(), s.opts("state"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -209,15 +226,80 @@ func TestReinstallRestartsOnlyAChangedService(t *testing.T) {
 			if !st.Running {
 				t.Errorf("after an unchanged reinstall: %+v, want running", st)
 			}
-			st, err = Install(context.Background(), s.opts("two"))
+			next := s.opts("one")
+			next.Binary = "/opt/glitched/next/glitched"
+			st, err = Install(context.Background(), next)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if calls := s.calls(); !hasCall(calls, tc.restart) || !hasCall(calls, tc.apply) {
-				t.Errorf("a reinstall with another -dir called %q, want the engine restarted", calls)
+				t.Errorf("a reinstall with another binary called %q, want the engine restarted", calls)
 			}
-			if want := filepath.Join(s.home, "two"); st.Dir != want || !st.Running {
-				t.Errorf("after the changed reinstall: %+v, want running on %s", st, want)
+			if st.Binary != next.Binary || !st.Running {
+				t.Errorf("after the changed reinstall: %+v, want %s running", st, next.Binary)
+			}
+		})
+	}
+}
+
+// One service serves one state directory. Another directory's calls,
+// such as the dev GUI's, see it as that directory's and leave it be:
+// they neither stop it nor point it at themselves.
+func TestAServiceForAnotherDirectoryIsLeftBe(t *testing.T) {
+	for _, tc := range managers {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStub(t, tc.m)
+			prod := s.opts("prod")
+			if _, err := Install(context.Background(), prod); err != nil {
+				t.Fatal(err)
+			}
+			def, _ := s.definition()
+			s.calls()
+			dev := s.opts("dev")
+
+			st := Inspect(context.Background(), dev)
+			if !st.Installed || !st.Foreign || st.Dir != prod.Dir {
+				t.Errorf("status from the other directory %+v, want installed for %s and foreign", st, prod.Dir)
+			}
+			if ours := Inspect(context.Background(), prod); ours.Foreign {
+				t.Errorf("status from its own directory reads foreign: %+v", ours)
+			}
+
+			if _, err := Install(context.Background(), dev); err == nil || !strings.Contains(err.Error(), prod.Dir) {
+				t.Errorf("Install from the other directory = %v, want a refusal naming %s", err, prod.Dir)
+			}
+			if _, err := Uninstall(context.Background(), dev); err == nil || !strings.Contains(err.Error(), prod.Dir) {
+				t.Errorf("Uninstall from the other directory = %v, want a refusal naming %s", err, prod.Dir)
+			}
+			if now, _ := s.definition(); now != def {
+				t.Errorf("the other directory rewrote the definition to\n%s", now)
+			}
+			if calls := s.calls(); hasCall(calls, tc.stop) || hasCall(calls, tc.restart) || hasCall(calls, tc.start) {
+				t.Errorf("the other directory called %q on the service", calls)
+			}
+		})
+	}
+}
+
+// A job the manager keeps restarting, as after a crash, is not running.
+// Status says it restarts, and why it last stopped.
+func TestStatusReportsACrashLoopAsRestarting(t *testing.T) {
+	for _, tc := range []struct {
+		name, out string
+		m         manager
+	}{
+		{"systemd", "ActiveState=activating\nSubState=auto-restart\nResult=exit-code\nExecMainStatus=1\nMainPID=0\n", systemd{}},
+		{"launchd", "\tstate = spawn scheduled\n\tlast exit code = 1\n", launchd{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStub(t, tc.m)
+			if _, err := Install(context.Background(), s.opts("state")); err != nil {
+				t.Fatal(err)
+			}
+			s.report(tc.out)
+			st := Inspect(context.Background(), s.opts("state"))
+			if st.Running || !st.Starting || !strings.Contains(st.LastExit, "1") {
+				t.Errorf("status %+v, want restarting, not running, with its last exit", st)
 			}
 		})
 	}
@@ -281,5 +363,62 @@ func TestScriptUsesTheServiceLabel(t *testing.T) {
 	}
 	if want := `LAUNCHD_LABEL="` + Label + `"`; !strings.Contains(string(data), want) {
 		t.Errorf("scripts/glitched lacks %s", want)
+	}
+}
+
+// scripts/glitched run for one state directory, as GLITCHED_DIR names it,
+// leaves a service installed for another be, and still manages its own.
+func TestScriptLeavesAnotherDirectorysServiceBe(t *testing.T) {
+	if osManager == nil {
+		t.Skip("no background service on this OS")
+	}
+	s := newStub(t, osManager)
+	script, err := filepath.Abs(filepath.Join("..", "..", "scripts", "glitched"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	glitched := func(dir string, args ...string) (string, error) {
+		cmd := exec.Command("bash", append([]string{script}, args...)...)
+		cmd.Env = append(os.Environ(), "HOME="+s.home, "GLITCHED_DIR="+dir, "GLITCHED_BIN_DIR="+t.TempDir())
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	for _, tc := range []struct{ name, def string }{
+		{"Settings' definition", ""},
+		{"the script's definition", map[string]string{
+			"darwin": "<plist>\n<dict>\n  <key>ProgramArguments</key>\n  <array>\n    <string>/bin/glitched</string>\n    <string>serve</string>\n    <string>-dir</string>\n    <string>" + filepath.Join(s.home, "prod") + "</string>\n    <string>-wait-lock</string>\n  </array>\n</dict>\n</plist>\n",
+			"linux":  "[Service]\nExecStart=\"/bin/glitched\" serve -dir \"" + filepath.Join(s.home, "prod") + "\" -wait-lock\n",
+		}[runtime.GOOS]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Install(context.Background(), s.opts("prod")); err != nil {
+				t.Fatal(err)
+			}
+			if tc.def != "" {
+				if err := os.WriteFile(s.m.path(s.home), []byte(tc.def), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			def, _ := s.definition()
+			s.calls()
+			for _, action := range []string{"stop", "uninstall", "restart", "install"} {
+				out, err := glitched(filepath.Join(s.home, "dev"), "daemon", action)
+				if err == nil || !strings.Contains(out, filepath.Join(s.home, "prod")) {
+					t.Errorf("daemon %s from the other directory = %v:\n%s\nwant a refusal naming the service's directory", action, err, out)
+				}
+			}
+			if now, _ := s.definition(); now != def {
+				t.Errorf("the other directory rewrote the definition to\n%s", now)
+			}
+			if calls := s.calls(); len(calls) > 0 && (hasCall(calls, "launchctl bootout*") || hasCall(calls, "systemctl --user disable*") || hasCall(calls, "systemctl --user stop*")) {
+				t.Errorf("the other directory called %q", calls)
+			}
+			if out, err := glitched(filepath.Join(s.home, "prod"), "daemon", "uninstall"); err != nil {
+				t.Fatalf("daemon uninstall from its own directory: %v\n%s", err, out)
+			}
+			if _, ok := s.definition(); ok {
+				t.Error("daemon uninstall from its own directory left the definition")
+			}
+		})
 	}
 }

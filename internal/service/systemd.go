@@ -90,11 +90,13 @@ func (systemd) unload(ctx context.Context) error {
 	return systemctl(ctx, "disable", "--now", unitName)
 }
 
-func (systemd) state(ctx context.Context) (running bool, pid int) {
-	out, err := command(ctx, "systemctl", "--user", "show", unitName, "--property=ActiveState,MainPID")
+func (systemd) state(ctx context.Context) health {
+	out, err := command(ctx, "systemctl", "--user", "show", unitName, "--property=ActiveState,SubState,Result,ExecMainStatus,MainPID")
 	if err != nil {
-		return false, 0
+		return health{}
 	}
+	var h health
+	var result, status string
 	for _, line := range strings.Split(string(out), "\n") {
 		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if !ok {
@@ -102,12 +104,24 @@ func (systemd) state(ctx context.Context) (running bool, pid int) {
 		}
 		switch k {
 		case "ActiveState":
-			running = v == "active" || v == "activating"
+			h.Running = v == "active"
+			// activating: starting, or waiting to restart after it exited.
+			h.Starting = v == "activating"
+		case "Result":
+			result = v
+		case "ExecMainStatus":
+			status = v
 		case "MainPID":
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				pid = n
+				h.PID = n
 			}
 		}
 	}
-	return running, pid
+	if !h.Running && result != "" && result != "success" {
+		h.LastExit = result
+		if status != "" && status != "0" {
+			h.LastExit += " (status " + status + ")"
+		}
+	}
+	return h
 }

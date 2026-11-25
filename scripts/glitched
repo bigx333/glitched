@@ -287,6 +287,33 @@ wait_for_daemon() {
   return 1
 }
 
+# --- One service, one state directory ---
+
+# The state directory the installed service serves, empty when none is
+# installed. Settings and `glitched service` write the same definitions.
+service_dir() {
+  local dir=""
+  if [ "$GOOS" = "darwin" ]; then
+    [ -f "$LAUNCHD_PLIST" ] || return 0
+    dir="$(awk '/<string>-dir<\/string>/ { getline; sub(/^[ \t]*<string>/, ""); sub(/<\/string>.*/, ""); print; exit }' "$LAUNCHD_PLIST" |
+      sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&quot;/"/g' -e "s/&apos;/'/g" -e 's/&amp;/\&/g')"
+  else
+    [ -f "$SYSTEMD_UNIT_PATH" ] || return 0
+    dir="$(sed -n 's/^ExecStart=.*-dir"\{0,1\} "\([^"]*\)".*/\1/p' "$SYSTEMD_UNIT_PATH" | sed -e 's/%%/%/g' -e 's/\$\$/$/g')"
+  fi
+  printf '%s' "${dir:-$HOME/.glitched}"
+}
+
+# Refuse to stop or replace a service another state directory installed,
+# such as the main one from a dev checkout's GLITCHED_DIR.
+require_own_service() {
+  local dir
+  dir="$(service_dir)"
+  if [ -n "$dir" ] && [ "${dir%/}" != "${GLITCHED_DIR%/}" ]; then
+    die "the background service is installed for $dir, not $GLITCHED_DIR; run with GLITCHED_DIR=$dir to manage it, or uninstall it there first"
+  fi
+}
+
 # --- macOS launchd service ---
 
 write_launchd_plist() {
@@ -396,6 +423,7 @@ systemd_install() {
 # --- Cross-platform daemon commands ---
 
 daemon_install() {
+  require_own_service
   [ -x "$GLITCHED_CLI" ] || build_daemon
   log "Installing and starting daemon service"
   if [ "$GOOS" = "darwin" ]; then
@@ -407,6 +435,7 @@ daemon_install() {
 }
 
 daemon_start() {
+  require_own_service
   if [ "$GOOS" = "darwin" ]; then
     if [ ! -f "$LAUNCHD_PLIST" ]; then
       daemon_install
@@ -431,6 +460,7 @@ daemon_start() {
 }
 
 daemon_stop() {
+  require_own_service
   log "Stopping daemon service"
   if [ "$GOOS" = "darwin" ]; then
     launchctl bootout "$(launchd_target)" >/dev/null 2>&1 || true
@@ -442,6 +472,7 @@ daemon_stop() {
 }
 
 daemon_restart() {
+  require_own_service
   [ -x "$GLITCHED_CLI" ] || die "$GLITCHED_CLI not installed (run ./scripts/glitched first)"
   log "Restarting daemon service"
   if [ "$GOOS" = "darwin" ]; then
@@ -454,6 +485,7 @@ daemon_restart() {
 }
 
 daemon_uninstall() {
+  require_own_service
   log "Uninstalling daemon service (keeping $GLITCHED_DIR data)"
   if [ "$GOOS" = "darwin" ]; then
     launchctl bootout "$(launchd_target)" >/dev/null 2>&1 || true
@@ -470,6 +502,11 @@ daemon_uninstall() {
 }
 
 daemon_status() {
+  local dir
+  dir="$(service_dir)"
+  if [ -n "$dir" ] && [ "${dir%/}" != "${GLITCHED_DIR%/}" ]; then
+    printf '%-10s %s\n' "installed" "for another directory, $dir, not $GLITCHED_DIR"
+  fi
   if [ "$GOOS" = "darwin" ]; then
     if launchctl print "$(launchd_target)" >/dev/null 2>&1; then
       printf '%-10s %s\n' "service" "launchd loaded ($LAUNCHD_LABEL)"
@@ -519,6 +556,10 @@ cmd_up() {
   done
   if [ "$gui_only" -eq 1 ] && [ "$daemon_only" -eq 1 ]; then
     die "--gui-only and --daemon-only cannot be used together"
+  fi
+
+  if [ "$gui_only" -eq 0 ]; then
+    require_own_service
   fi
 
   if [ "$no_pull" -eq 0 ]; then

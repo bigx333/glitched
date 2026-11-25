@@ -106,21 +106,33 @@ func (l launchd) unload(ctx context.Context) error {
 	return err
 }
 
-func (launchd) state(ctx context.Context) (running bool, pid int) {
+func (launchd) state(ctx context.Context) health {
 	out, err := command(ctx, "launchctl", "print", serviceTarget())
 	if err != nil {
-		return false, 0
+		return health{}
 	}
+	var h health
+	var exit string
 	for _, line := range strings.Split(string(out), "\n") {
 		t := strings.TrimSpace(line)
 		if v, ok := strings.CutPrefix(t, "pid = "); ok {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				pid, running = n, true
+				h.PID, h.Running = n, true
 			}
 		}
-		if t == "state = running" {
-			running = true
+		if v, ok := strings.CutPrefix(t, "last exit code = "); ok {
+			exit = v
+		}
+		switch t {
+		case "state = running":
+			h.Running = true
+		case "state = spawn scheduled":
+			// KeepAlive starts it again after it exited.
+			h.Starting = true
 		}
 	}
-	return running, pid
+	if !h.Running && exit != "" && exit != "0" && !strings.HasPrefix(exit, "(") {
+		h.LastExit = "exit code " + exit
+	}
+	return h
 }

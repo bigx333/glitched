@@ -67,20 +67,36 @@ func serviceCmd(ctx context.Context, args []string) error {
 	switch {
 	case !st.Supported:
 		fmt.Printf("supported  no (%s)\n", st.Detail)
+		return nil
 	case !st.Installed:
 		fmt.Printf("installed  no (%s)\n", st.UnitPath)
-	case st.Running && st.PID > 0:
-		fmt.Printf("status     running (pid %d)\nunit       %s\n", st.PID, st.UnitPath)
-	case st.Running:
-		fmt.Printf("status     running\nunit       %s\n", st.UnitPath)
-	default:
-		fmt.Printf("status     installed (stopped)\nunit       %s\n", st.UnitPath)
+		return nil
+	case st.Foreign:
+		fmt.Printf("installed  for another directory, %s, not %s; manage it with -dir %s\n", st.Dir, *dir, st.Dir)
 	}
-	if st.Dir != "" && st.Installed {
+	fmt.Printf("status     %s\nunit       %s\n", health(st), st.UnitPath)
+	if st.Dir != "" {
 		fmt.Printf("dir        %s\n", st.Dir)
 	}
-	if st.LogPath != "" && st.Installed {
+	if st.LogPath != "" {
 		fmt.Printf("log        %s\n", st.LogPath)
 	}
 	return nil
+}
+
+// health says whether an installed service runs.
+func health(st service.Status) string {
+	switch {
+	case st.Running && st.PID > 0:
+		return fmt.Sprintf("running (pid %d)", st.PID)
+	case st.Running:
+		return "running"
+	case st.Starting && st.LastExit != "":
+		return "restarting, last exited " + st.LastExit
+	case st.Starting:
+		return "starting"
+	case st.LastExit != "":
+		return "installed (stopped), last exited " + st.LastExit
+	}
+	return "installed (stopped)"
 }
