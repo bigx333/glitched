@@ -114,7 +114,7 @@ func apply(t Thread, e Event) (Thread, error) {
 		}
 		r := *t.Remote
 		r.Cursor, r.Run, r.Silent, r.Slot, r.Pending, r.Taken, r.Ended = b.Cursor, b.Run, b.Silent, b.State, b.Pending, b.Taken, b.Ended
-		r.Model, r.Access, r.Turn = b.Model, b.Access, b.Turn
+		r.Model, r.Access, r.Turn, r.Held = b.Model, b.Access, b.Turn, b.Held
 		r.Reported = slices.Concat(r.Reported, b.Keys)
 		t.Remote = &r
 	case api.DispositionChanged:

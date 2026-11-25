@@ -542,13 +542,26 @@ type Thread struct {
 	// Remote is set on a remote child's placeholder: where its child runs,
 	// whose run Run is as this engine last heard.
 	Remote *Placement `json:"remote,omitempty"`
+	// Origin is set on a thread another machine's link started: the
+	// thread there that started it, through which link.
+	Origin *Origin `json:"origin,omitempty"`
 }
 
 // Placement is where a remote child runs: on the machine labelled
-// Machine, which this engine last heard from for it at Heard, zero before
-// it has since it started; Lost is why it no longer follows the child.
-// A read fills Machine and Heard; a stream's view leaves them out.
+// Machine, whose engine is Engine, through the link Link, as the thread
+// Thread there, zero until that machine took the create, whose last run
+// there is Run. This engine last
+// heard from it for the child at Heard, zero before it has since it
+// started; Lost is why it no longer follows the child. A read fills
+// Machine and Heard; a stream's view leaves them out.
 type Placement struct {
+	Engine ID `json:"engine"`
+	Link   ID `json:"link"`
+	Thread ID `json:"thread,omitzero"`
+	Run    ID `json:"run,omitzero"`
+	// Held is that a stop there left messages or reports waiting, which
+	// only a resume there starts.
+	Held    bool      `json:"held,omitempty"`
 	Machine string    `json:"machine,omitempty"`
 	Heard   time.Time `json:"heard,omitzero"`
 	Lost    string    `json:"lost,omitempty"`
@@ -633,9 +646,13 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // still forgotten; version 20 takes a link's create of a thread settled
 // on its machine first, which a version 19 engine would start, and fences
 // a link's messages by its settles, which a version 19 engine would let a
-// late message reopen; version 21 removes thread.revert and records fork
-// handoffs separately from old conversation rewinds.
-const Protocol = 21
+// late message reopen; version 21 says in a view where a remote child runs
+// and where a link's thread came from, which a version 20 GUI would show
+// as a child it can't open and a thread of the user's, and sends a link's
+// thread stream its views, without which a version 20 engine's follower
+// can't say what a stop there holds; version 22 removes thread.revert and
+// records fork handoffs separately from old conversation rewinds.
+const Protocol = 22
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host
@@ -683,6 +700,10 @@ func (t Tailnet) Running() bool { return t.State == "Running" }
 type Query struct {
 	Thread ID     `json:"thread,omitzero"`
 	After  Cursor `json:"after,omitzero"`
+	// Views is that a thread's subscription also sends the thread's view,
+	// as a StreamThread item, after a catch-up that replays its events
+	// and after each commit that moves it. A Read ignores it.
+	Views bool `json:"views,omitempty"`
 }
 
 type Snapshot struct {

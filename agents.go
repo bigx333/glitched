@@ -334,7 +334,11 @@ func (a *app) agentRow(c *ui.Context, n node, s float32) {
 		a.statusDot(c, a.statusOf(k), failedLast(k))
 		ui.Text(c, title(k)).FontSize(12.5).TextColor(palette.text).SingleLine().Shrink(1)
 		ui.Spacer(c)
-		if !hovered {
+		switch {
+		case !hovered && remote(k) != nil:
+			a.remoteMark(c, k, 11)
+			return
+		case !hovered:
 			ui.Text(c, ago(k.View.UpdatedAt, a.now)).FontSize(11).TextColor(palette.faint).Shrink(0)
 			return
 		}
@@ -345,8 +349,12 @@ func (a *app) agentRow(c *ui.Context, n node, s float32) {
 	}
 }
 
-// failedLast is whether the thread's last turn failed.
+// failedLast is whether the thread's last turn failed, or, a remote
+// child's placeholder, its child was lost.
 func failedLast(t thread) bool {
+	if r := remote(t); r != nil && r.Lost != "" {
+		return true
+	}
 	return t.View.LastTurn != nil && t.View.LastTurn.Outcome == api.OutcomeFailed && !t.View.Live()
 }
 

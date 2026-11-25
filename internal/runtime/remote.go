@@ -448,7 +448,10 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 	if (r.Turn == nil || r.Ended == nil) && !r.Run.IsZero() {
 		after = api.Cursor{}
 	}
-	st, err := m.Open(ctx, api.Subscription{Thread: r.Thread, After: after})
+	// Its views come with the commits that move it: whether it holds what
+	// waits on it after a stop is that machine's to say, from more than
+	// the events this engine reads, at the commit it says it in.
+	st, err := m.Open(ctx, api.Subscription{Thread: r.Thread, After: after, Views: true})
 	if err != nil {
 		return false, err
 	}
@@ -485,6 +488,10 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			case it.Kind == api.StreamSnapshot && it.Snapshot != nil:
 				events, fresh, snapshot = it.Snapshot.Events, true, true
 				next.Cursor = it.Snapshot.Cursor
+				next.Held = len(it.Snapshot.Threads) == 1 && it.Snapshot.Threads[0].Resumable
+			case it.Kind == api.StreamThread && it.Thread != nil && it.Thread.ID == r.Thread:
+				next.Held = it.Thread.Resumable
+				continue
 			case it.Kind == api.StreamEvent && it.Event != nil:
 				events = []api.Event{*it.Event}
 				next.Cursor = it.Event.Cursor
@@ -520,13 +527,13 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			}
 			reports[i].Reply = reply.Text
 		}
-		if snapshot || next.Run != r.Run || next.Silent != r.Silent || next.Slot != r.Slot || !slices.Equal(next.Pending, r.Pending) || next.Taken != r.Taken || next.Ended != r.Ended || next.Model != r.Model || next.Access != r.Access || next.Turn != r.Turn || len(reports) > 0 {
+		if snapshot || next.Held != r.Held || next.Run != r.Run || next.Silent != r.Silent || next.Slot != r.Slot || !slices.Equal(next.Pending, r.Pending) || next.Taken != r.Taken || next.Ended != r.Ended || next.Model != r.Model || next.Access != r.Access || next.Turn != r.Turn || len(reports) > 0 {
 			_, listed, err := h.dial(at)
 			if err != nil {
 				return progressed, err
 			}
 			listed.Close()
-			o := engine.RemoteSeen{Cursor: next.Cursor, Run: next.Run, Silent: next.Silent, Slot: next.Slot, Pending: next.Pending, Taken: next.Taken, Ended: next.Ended, Model: next.Model, Access: next.Access, Turn: next.Turn, Reports: reports, On: label}
+			o := engine.RemoteSeen{Cursor: next.Cursor, Run: next.Run, Silent: next.Silent, Slot: next.Slot, Pending: next.Pending, Taken: next.Taken, Ended: next.Ended, Model: next.Model, Access: next.Access, Turn: next.Turn, Held: next.Held, Reports: reports, On: label}
 			_, err = h.store.Observe(ctx, t.ID, o, h.clock(), 0)
 			if errors.Is(err, engine.ErrRefused) {
 				return progressed, errObsolete

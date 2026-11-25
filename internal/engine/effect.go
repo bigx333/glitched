@@ -449,6 +449,7 @@ type RemoteSeen struct {
 	Model   api.ModelRef
 	Access  api.Access
 	Turn    *api.TurnResult
+	Held    bool
 	Reports []RemoteReport
 	On      string
 }

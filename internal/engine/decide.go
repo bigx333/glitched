@@ -939,14 +939,17 @@ func (d *decision) interrupt(drop bool) error {
 		// A stop of a link's thread with nothing running holds what
 		// waits, as its first message before its worktree is made or
 		// while its access is over the cap, and stops its last run, so
-		// its wakes wait as a stopped run's do.
+		// its wakes wait as a stopped run's do. With no run yet the stop
+		// is still asked, so whose it was is kept.
+		var last api.ID
 		for i := len(d.t.Runs) - 1; i >= 0; i-- {
 			if r := d.t.Runs[i]; !r.Silent {
-				if err := d.emit(api.StopAsked{Run: r.ID, By: d.by}); err != nil {
-					return err
-				}
+				last = r.ID
 				break
 			}
+		}
+		if err := d.emit(api.StopAsked{Run: last, By: d.by}); err != nil {
+			return err
 		}
 		return d.hold()
 	case r == nil:
@@ -1526,10 +1529,10 @@ func (d *decision) remote(o Observation) error {
 				keys, reports = append(keys, p.Key), append(reports, p)
 			}
 		}
-		if o.Cursor == r.Cursor && o.Run == r.Run && o.Silent == r.Silent && o.Slot == r.Slot && slices.Equal(o.Pending, r.Pending) && o.Taken == r.Taken && reflect.DeepEqual(o.Ended, r.Ended) && o.Model == r.Model && o.Access == r.Access && reflect.DeepEqual(o.Turn, r.Turn) && len(keys) == 0 {
+		if o.Cursor == r.Cursor && o.Run == r.Run && o.Silent == r.Silent && o.Slot == r.Slot && slices.Equal(o.Pending, r.Pending) && o.Taken == r.Taken && reflect.DeepEqual(o.Ended, r.Ended) && o.Model == r.Model && o.Access == r.Access && reflect.DeepEqual(o.Turn, r.Turn) && o.Held == r.Held && len(keys) == 0 {
 			return nil
 		}
-		if err := d.emit(api.RemoteSeen{Cursor: o.Cursor, Run: o.Run, Silent: o.Silent, State: o.Slot, Pending: o.Pending, Taken: o.Taken, Ended: o.Ended, Model: o.Model, Access: o.Access, Turn: o.Turn, Keys: keys}); err != nil {
+		if err := d.emit(api.RemoteSeen{Cursor: o.Cursor, Run: o.Run, Silent: o.Silent, State: o.Slot, Pending: o.Pending, Taken: o.Taken, Ended: o.Ended, Model: o.Model, Access: o.Access, Turn: o.Turn, Held: o.Held, Keys: keys}); err != nil {
 			return err
 		}
 		for _, p := range reports {

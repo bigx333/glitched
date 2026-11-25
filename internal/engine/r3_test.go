@@ -28,9 +28,9 @@ func TestR3QuietSurvivesMaintenance(t *testing.T) {
 	}
 	when := expires.Add(-6 * time.Minute)
 	silent := api.NewID()
-	fold(engine.ObserveWith(th, engine.IdleCompact{Run: silent, AfterRun: last}, env, when))
-	fold(engine.ObserveWith(th, engine.Started{Run: silent}, env, when))
-	fold(engine.ObserveWith(th, engine.Ended{Run: silent, Outcome: api.OutcomeCompleted}, env, when))
+	if _, _, err := engine.ObserveWith(th, engine.IdleCompact{Run: silent, AfterRun: last}, env, when); err == nil {
+		t.Fatal("a link's thread was compacted on its own")
+	}
 	fold(engine.ObserveWith(th, engine.Reported{Report: api.ChildReported{Child: api.NewID(), Run: api.NewID(), Kind: api.ReportDone}, Reply: "done"}, env, when))
 	if live := th.Live(); live != nil && !live.Silent {
 		t.Fatal("idle stop, silent maintenance, then child report: ordinary turn admitted without a user message or resume")

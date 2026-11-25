@@ -120,6 +120,9 @@ type RemoteSeen struct {
 	Model  ModelRef    `json:"model,omitzero"`
 	Access Access      `json:"access,omitempty"`
 	Turn   *TurnResult `json:"turn,omitempty"`
+	// Held is that the child there holds what waits on it after a stop,
+	// which only a resume there starts, as that machine's view of it says.
+	Held bool `json:"held,omitempty"`
 }
 
 // RemoteLost is a placeholder whose child this engine no longer reaches

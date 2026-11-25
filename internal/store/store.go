@@ -108,9 +108,20 @@ func (s *Store) ReadLog(ctx context.Context, after uint64, limit int) ([]api.Eve
 // deleted thread's read is ErrNotFound, wherever after is: only a stream
 // that was open when the tombstone committed sees it.
 func (s *Store) Since(ctx context.Context, thread api.ID, after uint64, limit int) ([]api.Event, uint64, error) {
+	events, head, _, err := s.since(ctx, thread, after, limit, false)
+	return events, head, err
+}
+
+// SinceView is Since of one thread, with its view at the same head, zero
+// while it doesn't exist.
+func (s *Store) SinceView(ctx context.Context, thread api.ID, after uint64, limit int) ([]api.Event, uint64, api.Thread, error) {
+	return s.since(ctx, thread, after, limit, true)
+}
+
+func (s *Store) since(ctx context.Context, thread api.ID, after uint64, limit int, withView bool) ([]api.Event, uint64, api.Thread, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, api.Thread{}, err
 	}
 	defer tx.Rollback()
 	if !thread.IsZero() {
@@ -118,17 +129,27 @@ func (s *Store) Since(ctx context.Context, thread api.ID, after uint64, limit in
 		switch err := tx.QueryRowContext(ctx, `SELECT deleted FROM threads WHERE id = ?`, thread[:]).Scan(&gone); {
 		case errors.Is(err, sql.ErrNoRows):
 		case err != nil:
-			return nil, 0, err
+			return nil, 0, api.Thread{}, err
 		case gone:
-			return nil, 0, api.ErrNotFound
+			return nil, 0, api.Thread{}, api.ErrNotFound
+		}
+	}
+	var view api.Thread
+	if withView {
+		t, err := loadThread(ctx, tx, thread)
+		if err != nil {
+			return nil, 0, api.Thread{}, err
+		}
+		if t.Exists() {
+			view = s.view(t)
 		}
 	}
 	head, err := headSeq(ctx, tx)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, api.Thread{}, err
 	}
 	events, err := s.events(ctx, tx, thread, after, head, limit)
-	return events, head, err
+	return events, head, view, err
 }
 
 const schema = `
