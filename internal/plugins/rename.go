@@ -89,6 +89,11 @@ func moveRevoked(m map[string][]string, oldID, newID string) {
 	delete(m, oldID)
 }
 
+func userPluginInstalled(stateDir, id string) bool {
+	entries, err := os.ReadDir(Dir(stateDir))
+	return err == nil && userPluginIDs(stateDir, entries)[id]
+}
+
 // userPluginIDs are the manifest ids of the plugins installed under the
 // user's plugins folder, whether or not they load.
 func userPluginIDs(stateDir string, entries []os.DirEntry) map[string]bool {

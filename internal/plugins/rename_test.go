@@ -131,6 +131,28 @@ func TestARenamedBuiltInsSwitchDoesntMoveToAPluginOfItsNewID(t *testing.T) {
 	}
 }
 
+func TestRevertOfARenamedBuiltInKeepsAnInstalledCopysSwitch(t *testing.T) {
+	state := t.TempDir()
+	bundled, release := checklistBuiltIn(t)
+	for _, id := range []string{"checklist", "plan"} {
+		dst := filepath.Join(Dir(state), id)
+		writeReplacer(t, dst, replacerManifest(id, "thread.header.actions", "2"), actionsModule)
+		signAsOwn(t, state, dst)
+	}
+	writePluginPrefs(t, state, prefs{Disabled: []string{"plan"}})
+	h := openBuiltIn(t, state, bundled, release)
+
+	if err := h.Revert("checklist"); err != nil {
+		t.Fatal(err)
+	}
+	if p := readPluginPrefs(t, state); !slices.Contains(p.Disabled, "plan") {
+		t.Fatalf("revert turned the installed copy back on: %v", p.Disabled)
+	}
+	if p := installedAs(h, filepath.Join(Dir(state), "plan")); p.Enabled {
+		t.Fatalf("the installed copy is on after the revert: %+v", p)
+	}
+}
+
 func TestRevertOfARenamedBuiltInClearsItsOldSwitch(t *testing.T) {
 	state := t.TempDir()
 	bundled, release := checklistBuiltIn(t)

@@ -172,8 +172,10 @@ func (h *Host) Revert(id string) error {
 		return err
 	}
 	copyID := in.manifest.ID
+	oldID := renamedBuiltins[base]
+	clearOld := oldID != "" && !userPluginInstalled(h.state, oldID)
 	return h.edit(func(p *prefs) {
-		p.Disabled = slices.DeleteFunc(p.Disabled, func(s string) bool { return s == base || s == copyID || s == renamedBuiltins[base] })
+		p.Disabled = slices.DeleteFunc(p.Disabled, func(s string) bool { return s == base || s == copyID || clearOld && s == oldID })
 	})
 }
 
