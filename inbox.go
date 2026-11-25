@@ -116,6 +116,7 @@ func (a *app) sortThreads() {
 		return
 	}
 	a.projects = a.gather()
+	a.settleShownMarks()
 	a.kids = a.kidsOf()
 	// A project gone, as with its server, leaves the filter, lest it hide
 	// every thread left.

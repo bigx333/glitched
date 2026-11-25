@@ -1,11 +1,23 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"log"
+	"maps"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"glitched/internal/daemon"
+	"glitched/internal/provider/fake"
 )
 
 // The hash picks below are written out, not computed by the code under test:
@@ -532,5 +544,236 @@ func TestMarksSettleForAnySetOfProjects(t *testing.T) {
 		if other, _ := settleMarks(stored, p); !slices.Equal(other, out) {
 			t.Fatalf("%d: the order of %d names changed the marks", iter, len(shown))
 		}
+	}
+}
+
+// marksDir is a state directory whose engine holds a thread in each of
+// the folders, under /work, and the engine.
+func marksDir(t *testing.T, folders ...string) (string, *daemon.Daemon) {
+	t.Helper()
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	for _, f := range folders {
+		seed(t, d, "/work/"+f, "A thread in "+f)
+	}
+	return dir, d
+}
+
+// listed is each project's mark as projects.list gives it, once every
+// one of names is listed.
+func (h *harness) listed(names ...string) map[string]projectMark {
+	h.t.Helper()
+	got := map[string]projectMark{}
+	h.until(fmt.Sprint("projects ", names), func() bool {
+		clear(got)
+		for _, r := range h.a.projectRecords() {
+			got[r.Name] = projectMark{r.Name, r.Icon, r.Color}
+		}
+		for _, n := range names {
+			if _, ok := got[n]; !ok {
+				return false
+			}
+		}
+		return true
+	})
+	return got
+}
+
+// rebuild has the sidebar sort its projects again, as a change does.
+func (h *harness) rebuild() {
+	h.a.sorted = sortedThreads{}
+	h.a.sortThreads()
+	h.tt.Frame()
+}
+
+func readMarks(t *testing.T, dir string) ([]projectMark, time.Time) {
+	t.Helper()
+	path := filepath.Join(dir, "marks.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ms []projectMark
+	if err := json.Unmarshal(b, &ms); err != nil {
+		t.Fatalf("marks.json: %v: %s", err, b)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ms, fi.ModTime()
+}
+
+func TestProjectsThatHashToOneIconAreListedOnThreeAndKeptSo(t *testing.T) {
+	dir, _ := marksDir(t, "glitched", "mygo", "pstack-t3")
+	h := start(t, dir)
+	got := h.listed("glitched", "mygo", "pstack-t3")
+	if got["glitched"] != (projectMark{"glitched", "wind", "#ec4899"}) {
+		t.Errorf("glitched is %v", got["glitched"])
+	}
+	if a, b, c := got["glitched"].Icon, got["mygo"].Icon, got["pstack-t3"].Icon; a == b || b == c || a == c {
+		t.Errorf("icons %s %s %s", a, b, c)
+	}
+	ms, mtime := readMarks(t, dir)
+	want := []projectMark{got["glitched"], got["mygo"], got["pstack-t3"]}
+	if !slices.Equal(ms, want) {
+		t.Errorf("marks.json holds %v; want %v", ms, want)
+	}
+
+	// Every thread's tile, and quick ask's projects, draw the same.
+	for _, p := range h.a.projects {
+		for _, th := range p.threads {
+			icon, color := h.a.projectOf(th).markNames()
+			if m := got[p.name()]; icon != m.Icon || color != m.Color {
+				t.Errorf("%q's tile is %s %s; listed %v", th.View.Title, icon, color, m)
+			}
+		}
+	}
+	quick := 0
+	for _, p := range h.a.localProjects() {
+		if m, ok := got[p.name()]; ok {
+			quick++
+			if icon, color := p.markNames(); icon != m.Icon || color != m.Color {
+				t.Errorf("quick ask draws %s %s %s; listed %v", p.name(), icon, color, m)
+			}
+		}
+	}
+	if quick != 3 {
+		t.Errorf("quick ask has %d of the projects", quick)
+	}
+
+	// Started again, the app draws them as it did, and writes nothing.
+	again := start(t, dir)
+	if g := again.listed("glitched", "mygo", "pstack-t3"); !maps.Equal(g, got) {
+		t.Errorf("after a restart %v; before %v", g, got)
+	}
+	if _, m := readMarks(t, dir); !m.Equal(mtime) {
+		t.Error("a restart wrote marks.json")
+	}
+}
+
+func TestANewProjectMovesOffTheIconsOfThoseSeenBefore(t *testing.T) {
+	dir, d := marksDir(t, "glitched", "mygo", "pstack-t3")
+	h := start(t, dir)
+	before := h.listed("glitched", "mygo", "pstack-t3")
+	seed(t, d, "/work/sparky", "A thread in sparky")
+	got := h.listed("glitched", "mygo", "pstack-t3", "sparky")
+	for n, m := range before {
+		if got[n] != m {
+			t.Errorf("%s moved from %v to %v", n, m, got[n])
+		}
+		if got["sparky"].Icon == m.Icon {
+			t.Errorf("sparky has %s's icon: %v", n, got["sparky"])
+		}
+	}
+	if ms, _ := readMarks(t, dir); len(ms) != 4 || ms[3].Name != "sparky" {
+		t.Errorf("marks.json holds %v", ms)
+	}
+}
+
+func TestRebuildingTheSidebarWritesNoMarks(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	seed(t, d, "/a/app", "One app")
+	seed(t, d, "/b/app", "Another app")
+	seed(t, d, "/work/mygo", "A thread in mygo")
+	h := start(t, dir)
+	h.listed("app", "mygo")
+	h.until("both apps", func() bool { return len(h.a.projects) >= 3 })
+	h.rebuild()
+	ms, mtime := readMarks(t, dir)
+	if len(ms) != 2 {
+		t.Errorf("marks.json holds %v", ms)
+	}
+	for range 5 {
+		h.rebuild()
+	}
+	if again, m := readMarks(t, dir); !m.Equal(mtime) || !slices.Equal(again, ms) {
+		t.Errorf("rebuilds wrote marks.json: %v to %v", ms, again)
+	}
+}
+
+func TestAMarkAnotherWindowWroteIsDrawn(t *testing.T) {
+	dir, _ := marksDir(t, "glitched", "mygo", "pstack-t3")
+	h := start(t, dir)
+	h.listed("glitched", "mygo", "pstack-t3")
+	ms, mtime := readMarks(t, dir)
+	i := slices.IndexFunc(ms, func(m projectMark) bool { return m.Name == "glitched" })
+	ms[i] = projectMark{"glitched", "folder", "#14b8a6"}
+	b, _ := json.Marshal(ms)
+	path := filepath.Join(dir, "marks.json")
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Chtimes(path, mtime.Add(time.Second), mtime.Add(time.Second))
+	h.rebuild()
+	if got := h.listed("glitched")["glitched"]; got != ms[i] {
+		t.Errorf("glitched is %v; another window wrote %v", got, ms[i])
+	}
+}
+
+func TestAnAppWithNoStateDirectoryWritesNoMarks(t *testing.T) {
+	t.Chdir(t.TempDir())
+	a := &app{}
+	a.projects = []*project{{key: keyOf(nil, "/work/glitched")}, {key: keyOf(nil, "/work/mygo")}}
+	a.settleShownMarks()
+	if _, err := os.Stat("marks.json"); err == nil {
+		t.Error("marks.json was written")
+	}
+	if len(a.marks) != 2 {
+		t.Errorf("marks %v", a.marks)
+	}
+	if i, _ := a.projects[0].markNames(); i == func() string { i, _ := a.projects[1].markNames(); return i }() {
+		t.Errorf("both drawn on %s", i)
+	}
+}
+
+// syncBuffer is a log's output, which the app may write as a test reads.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func TestMarksThatDoNotParseAreMadeAgain(t *testing.T) {
+	dir, _ := marksDir(t, "glitched", "mygo", "pstack-t3")
+	if err := os.WriteFile(filepath.Join(dir, "marks.json"), []byte("\x00not json{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var logged syncBuffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	h := start(t, dir)
+	got := h.listed("glitched", "mygo", "pstack-t3")
+	if a, b, c := got["glitched"].Icon, got["mygo"].Icon, got["pstack-t3"].Icon; a == b || b == c || a == c {
+		t.Errorf("icons %s %s %s", a, b, c)
+	}
+	if !strings.Contains(logged.String(), "glitched: marks:") {
+		t.Errorf("nothing logged: %q", logged.String())
+	}
+	if ms, _ := readMarks(t, dir); len(ms) != 3 {
+		t.Errorf("marks.json holds %v", ms)
+	}
+}
+
+func TestAThreadOutOfTheListDrawsItsProjectsMark(t *testing.T) {
+	dir, _ := marksDir(t, "glitched", "mygo", "pstack-t3")
+	h := start(t, dir)
+	got := h.listed("glitched", "mygo", "pstack-t3")
+	th := h.thread("A thread in mygo")
+	h.a.projects = slices.DeleteFunc(h.a.projects, func(p *project) bool { return p.name() == "mygo" })
+	if icon, color := h.a.projectOf(th).markNames(); icon != got["mygo"].Icon || color != got["mygo"].Color {
+		t.Errorf("mygo out of the list draws %s %s; listed %v", icon, color, got["mygo"])
 	}
 }

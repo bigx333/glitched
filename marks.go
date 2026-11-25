@@ -1,9 +1,15 @@
 package main
 
 import (
+	"errors"
 	"hash/fnv"
+	"log"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+
+	"glitched/internal/jsonfile"
 )
 
 // projectMark is a project's mark as marks.json keeps it, in the order the
@@ -222,4 +228,74 @@ func marksByName(marks []projectMark) map[string]projectMark {
 		by[m.Name] = projectMark{m.Name, projectIcons[icon], projectColors[color]}
 	}
 	return by
+}
+
+func (a *app) marksPath() string { return filepath.Join(a.dir, "marks.json") }
+
+// loadMarks takes the projects' marks as marks.json holds them.
+func (a *app) loadMarks() {
+	a.marks = nil
+	if err := jsonfile.Load(a.marksPath(), &a.marks); err != nil {
+		log.Printf("glitched: marks: %v", err)
+		a.marks = nil
+	}
+	if fi, err := os.Stat(a.marksPath()); err == nil {
+		a.marksRead = fi.ModTime()
+	}
+	a.drawnMarks = marksByName(a.marks)
+}
+
+// errMarksSettled leaves marks.json as it is: what another window wrote
+// there settles the projects shown here already.
+var errMarksSettled = errors.New("marks settled")
+
+// settleShownMarks gives the projects the sidebar has a mark each, as
+// settleMarks does, onto what another window wrote to marks.json since,
+// and writes the file only when that changes it. Marks it couldn't save
+// hold here for as long as the app runs.
+func (a *app) settleShownMarks() {
+	if a.dir != "" {
+		if fi, err := os.Stat(a.marksPath()); err == nil && !fi.ModTime().Equal(a.marksRead) {
+			a.loadMarks()
+		}
+	}
+	var names []string
+	for _, p := range a.projects {
+		if !p.noProject {
+			names = append(names, p.name())
+		}
+	}
+	if out, changed := settleMarks(a.marks, names); changed {
+		a.marks = out
+		if a.dir != "" {
+			ms, err := jsonfile.EditOrReset(a.marksPath(), func(ms *[]projectMark) error {
+				out, changed := settleMarks(*ms, names)
+				if !changed {
+					return errMarksSettled
+				}
+				*ms = out
+				return nil
+			})
+			switch {
+			case err == nil || errors.Is(err, errMarksSettled):
+				a.marks = ms
+				if fi, err := os.Stat(a.marksPath()); err == nil {
+					a.marksRead = fi.ModTime()
+				}
+			default:
+				log.Printf("glitched: marks: %v", err)
+			}
+		}
+	}
+	a.drawnMarks = marksByName(a.marks)
+	for _, p := range a.projects {
+		a.markProject(p)
+	}
+}
+
+// markProject gives p the mark drawn for its name, if it has one.
+func (a *app) markProject(p *project) {
+	if m, ok := a.drawnMarks[p.name()]; ok && !p.noProject {
+		p.icon, p.color = m.Icon, m.Color
+	}
 }
