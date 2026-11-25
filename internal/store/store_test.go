@@ -1786,22 +1786,33 @@ func TestMaintainPrunesDoneEffectsOldCommandsAndCheckpointsWAL(t *testing.T) {
 }
 
 // Commands that write no event share one seq. Maintain keeps exactly the
-// newest receipts, and a command whose receipt it dropped is refused as
-// expired, not applied a second time.
+// receipts of the highest command IDs, and a command whose receipt it
+// dropped is refused as expired, not applied a second time.
 func TestMaintainKeepsTheNewestReceiptsAndRefusesAForgottenOne(t *testing.T) {
 	ctx := context.Background()
 	s := open(t, filepath.Join(t.TempDir(), "host.db"))
+	// IDs made in one millisecond order at random: a millisecond each
+	// orders them as made.
+	at := time.Now()
+	next := func() api.ID {
+		at = at.Add(time.Millisecond)
+		id, err := api.IDAt(at, [10]byte{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
 	thread := api.NewID()
-	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
+	if _, err := s.Submit(ctx, api.Command{ID: next(), Target: thread, Body: api.ThreadCreate{Workspace: "w", Title: "t", Model: api.ModelRef{Provider: "fake"}}}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	first := api.Command{ID: api.NewID(), Target: thread, Body: api.MessageDispatch{Text: "first", Mode: api.AfterActive}}
+	first := api.Command{ID: next(), Target: thread, Body: api.MessageDispatch{Text: "first", Mode: api.AfterActive}}
 	if _, err := s.Submit(ctx, first, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	var renames []api.Command
 	for range 3 {
-		c := api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadRename{Title: "t"}}
+		c := api.Command{ID: next(), Target: thread, Body: api.ThreadRename{Title: "t"}}
 		if _, err := s.Submit(ctx, c, time.Now()); err != nil {
 			t.Fatal(err)
 		}
@@ -1830,7 +1841,7 @@ func TestMaintainKeepsTheNewestReceiptsAndRefusesAForgottenOne(t *testing.T) {
 	if _, after, err := s.Since(ctx, thread, 0, 1000); err != nil || after != before {
 		t.Fatalf("the refused message wrote events: head %d, want %d (%v)", after, before, err)
 	}
-	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.TurnInterrupt{}}, time.Now()); err != nil {
+	if _, err := s.Submit(ctx, api.Command{ID: next(), Target: thread, Body: api.TurnInterrupt{}}, time.Now()); err != nil {
 		t.Fatalf("a new command after pruning: %v", err)
 	}
 }
