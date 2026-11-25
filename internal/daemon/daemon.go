@@ -74,6 +74,8 @@ type Config struct {
 	// program on PATH as it is. The claude_path, codex_path and agy_path
 	// of older files are read as its Paths.
 	Launch map[string]provider.Launch `json:"providers,omitempty"`
+	// CustomACP defines additional user-configured ACP providers in engine.json.
+	CustomACP []acp.CustomProfile `json:"custom_acp,omitempty"`
 	// Children caps the child threads agents start. Its zero fields take
 	// engine.DefaultLimits'.
 	Children engine.Limits `json:"children,omitzero"`
@@ -204,6 +206,19 @@ func (cfg *Config) WithAgents() {
 	l := cfg.Launch[codex.Provider]
 	cfg.Providers[codex.Provider] = &codex.Adapter{Path: l.Path, Home: l.Home, Args: l.Args}
 	for _, p := range acp.Profiles {
+		l := cfg.Launch[p.Provider]
+		cfg.Providers[p.Provider] = &acp.Adapter{Profile: p, Path: l.Path, Home: l.Home, Args: l.Args}
+	}
+	for _, c := range cfg.CustomACP {
+		p, err := c.ToProfile()
+		if err != nil {
+			slog.Warn("skipping invalid custom ACP profile", "provider", c.Provider, "err", err)
+			continue
+		}
+		if _, exists := cfg.Providers[p.Provider]; exists {
+			slog.Warn("skipping duplicate custom ACP profile", "provider", p.Provider)
+			continue
+		}
 		l := cfg.Launch[p.Provider]
 		cfg.Providers[p.Provider] = &acp.Adapter{Profile: p, Path: l.Path, Home: l.Home, Args: l.Args}
 	}

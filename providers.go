@@ -3,11 +3,14 @@ package main
 import (
 	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/client"
+	"glitched/internal/daemon"
+	"glitched/internal/provider/acp"
 	"glitched/internal/transport"
 )
 
@@ -348,6 +351,99 @@ func (a *app) providers(c *ui.Context) {
 			}
 		})
 		settingRow(c, "Check now", "Ask every machine's providers again, and where their CLIs are published.", func() { a.checkAgain(c) })
+	})
+	a.customACPCard(c)
+}
+
+func (a *app) customACPCard(c *ui.Context) {
+	m := a.backend.Machine()
+	card(c, "CUSTOM ACP PROVIDERS", func() {
+		if len(m.Config.CustomACP) == 0 {
+			ui.Text(c, "No custom ACP providers configured. Add any ACP-compatible coding agent CLI below.").
+				Key("custom-acp-none").FontSize(12).TextColor(palette.muted).Padding(14, 16)
+		}
+		for _, p := range m.Config.CustomACP {
+			desc := p.Binary
+			if len(p.Args) > 0 {
+				desc += " " + strings.Join(p.Args, " ")
+			}
+			label := p.Name
+			if label == "" {
+				label = p.Provider
+			}
+			ui.Row(c).Key("custom-acp:"+p.Provider).Padding(12, 16).Gap(12).AlignItems(ui.Center).Children(func() {
+				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
+					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, label).FontWeight(500)
+						ui.Text(c, p.Provider).FontSize(11.5).Font("monospace").TextColor(palette.faint)
+					})
+					ui.Text(c, desc).FontSize(12).Font("monospace").TextColor(palette.muted).SingleLine()
+				})
+				ui.Button(c.Key("remove"), "Remove").TextColor(palette.red).OnClick(func() {
+					id := p.Provider
+					a.configure(func(cfg *daemon.Config) {
+						cfg.CustomACP = slices.DeleteFunc(cfg.CustomACP, func(cur acp.CustomProfile) bool {
+							return cur.Provider == id
+						})
+					})
+					a.checkAgain(c)
+				})
+			})
+		}
+		ui.Column(c).Key("custom-acp-add").Padding(16).Gap(12).Children(func() {
+			ui.Row(c).Gap(12).Children(func() {
+				ui.Column(c).Grow(1).Children(func() {
+					ui.Field(c, "Provider ID", func() {
+						ui.TextInput(c.Key("acp-id"), &a.customACP.Provider).Placeholder("my-agent").Font("monospace")
+					})
+				})
+				ui.Column(c).Grow(1).Children(func() {
+					ui.Field(c, "Display name", func() {
+						ui.TextInput(c.Key("acp-name"), &a.customACP.Name).Placeholder("My Agent")
+					})
+				})
+			})
+			ui.Row(c).Gap(12).Children(func() {
+				ui.Column(c).Grow(1).Children(func() {
+					ui.Field(c, "Binary", func() {
+						ui.TextInput(c.Key("acp-bin"), &a.customACP.Binary).Placeholder("/usr/local/bin/my-agent").Font("monospace")
+					})
+				})
+				ui.Column(c).Grow(1).Children(func() {
+					ui.Field(c, "Arguments", func() {
+						ui.TextInput(c.Key("acp-args"), &a.customACPArgs).Placeholder("acp").Font("monospace")
+					})
+				})
+			})
+			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, a.customACPErr).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
+				ui.Button(c.Key("add-acp"), "Add ACP provider").OnClick(func() {
+					cand := acp.CustomProfile{
+						Provider: strings.TrimSpace(a.customACP.Provider),
+						Name:     strings.TrimSpace(a.customACP.Name),
+						Binary:   strings.TrimSpace(a.customACP.Binary),
+						Args:     strings.Fields(a.customACPArgs),
+					}
+					if _, err := cand.ToProfile(); err != nil {
+						a.customACPErr = err.Error()
+						return
+					}
+					for _, cur := range a.backend.Machine().Config.CustomACP {
+						if cur.Provider == cand.Provider {
+							a.customACPErr = fmt.Sprintf("custom ACP provider %q already exists", cand.Provider)
+							return
+						}
+					}
+					a.customACPErr = ""
+					a.configure(func(cfg *daemon.Config) {
+						cfg.CustomACP = append(cfg.CustomACP, cand)
+					})
+					a.customACP = acp.CustomProfile{}
+					a.customACPArgs = ""
+					a.checkAgain(c)
+				})
+			})
+		})
 	})
 }
 

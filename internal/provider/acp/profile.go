@@ -1,6 +1,11 @@
 package acp
 
 import (
+	"errors"
+	"fmt"
+	"maps"
+	"regexp"
+	"slices"
 	"strings"
 
 	"glitched/internal/api"
@@ -81,5 +86,119 @@ var Antigravity = Profile{
 	},
 }
 
-// Profiles are the ACP agents Glitched knows.
-var Profiles = []Profile{Antigravity}
+// Gemini is Google's Gemini CLI running its ACP stdio server.
+var Gemini = Profile{
+	Provider:     "gemini",
+	IdleCompacts: func(model string) bool { return strings.HasPrefix(strings.ToLower(model), "gemini") },
+	Name:         "Gemini CLI",
+	Binaries:     []string{"gemini"},
+	Args:         []string{"--experimental-acp"},
+	Env:          map[string]string{"BROWSER": "true"},
+	Install:      "Gemini CLI is not installed.\nInstall it with: npm install -g @google/gemini-cli\nor set its path in Settings › Providers.",
+	Reserved:     []provider.Reserved{{Flags: []string{"--experimental-acp", "--yolo", "--approval-mode"}}},
+	SignIn:       "Gemini CLI is signed out. Run gemini in Terminal to sign in.",
+	Access: provider.Grants{
+		api.AccessAsk:       {Mode: "default"},
+		api.AccessAutoEdits: {Mode: "autoEdit", Else: "default"},
+		api.AccessFull:      {Args: []string{"--yolo"}},
+	},
+	SignedOut: []string{
+		"Authentication required",
+		"Please sign in",
+		"Please log in",
+		"API_KEY",
+	},
+}
+
+// OpenCode is OpenCode's ACP agent server.
+var OpenCode = Profile{
+	Provider: "opencode",
+	Name:     "OpenCode",
+	Binaries: []string{"opencode"},
+	Args:     []string{"acp"},
+	Env:      map[string]string{"BROWSER": "true"},
+	Install:  "OpenCode is not installed.\nInstall it from https://opencode.ai or brew install anomalyco/tap/opencode\nor set its path in Settings › Providers.",
+	SignIn:   "OpenCode needs a model provider configured. Run opencode in Terminal to sign in.",
+	Access: provider.Grants{
+		api.AccessAsk:       {Mode: "default"},
+		api.AccessAutoEdits: {Mode: "auto", Else: "default"},
+		api.AccessFull:      {Mode: "yolo", Else: "auto"},
+	},
+	SignedOut: []string{
+		"Authentication required",
+		"Please sign in",
+		"No API key",
+	},
+}
+
+// Profiles are the built-in ACP agents Glitched knows.
+var Profiles = []Profile{Antigravity, Gemini, OpenCode}
+
+// CustomProfile describes a user-configured ACP CLI in engine.json.
+type CustomProfile struct {
+	Provider string            `json:"provider"`
+	Name     string            `json:"name,omitempty"`
+	Binary   string            `json:"binary"`
+	Args     []string          `json:"args,omitempty"`
+	Env      map[string]string `json:"env,omitempty"`
+}
+
+var customProviderIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+
+var reservedProviderIDs = map[string]bool{
+	"claude":      true,
+	"codex":       true,
+	"antigravity": true,
+	"gemini":      true,
+	"opencode":    true,
+	"fake":        true,
+}
+
+// ToProfile validates c and converts it into a runnable ACP Profile.
+func (c CustomProfile) ToProfile() (Profile, error) {
+	id := strings.TrimSpace(c.Provider)
+	if !customProviderIDRe.MatchString(id) {
+		return Profile{}, fmt.Errorf("acp: provider id %q must be 1-32 lowercase letters, digits, '-' or '_'", c.Provider)
+	}
+	if reservedProviderIDs[id] {
+		return Profile{}, fmt.Errorf("acp: provider id %q is reserved for a built-in provider", id)
+	}
+	bin := strings.TrimSpace(c.Binary)
+	if bin == "" {
+		return Profile{}, errors.New("acp: binary command or path is required")
+	}
+	name := strings.TrimSpace(c.Name)
+	if name == "" {
+		name = id
+	}
+	args := slices.Clone(c.Args)
+	if len(args) == 0 {
+		args = []string{"acp"}
+	}
+	env := maps.Clone(c.Env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	if _, ok := env["BROWSER"]; !ok {
+		env["BROWSER"] = "true"
+	}
+	return Profile{
+		Provider: id,
+		Name:     name,
+		Binaries: []string{bin},
+		Args:     args,
+		Env:      env,
+		Install:  fmt.Sprintf("%s is not installed.\nCheck its binary path (%s) in Settings › Providers.", name, bin),
+		SignIn:   fmt.Sprintf("%s requires authentication. Run %s in Terminal to sign in.", name, bin),
+		Access: provider.Grants{
+			api.AccessAsk:       {Mode: "default"},
+			api.AccessAutoEdits: {Mode: "auto", Else: "default"},
+			api.AccessFull:      {Mode: "bypassPermissions", Else: "auto"},
+		},
+		SignedOut: []string{
+			"Authentication required",
+			"Please sign in",
+			"Please log in",
+		},
+	}, nil
+}

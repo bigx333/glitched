@@ -62,6 +62,11 @@ func (m *Manager) Configure(change func(*daemon.Config)) error {
 		was = *cfg
 		was.Listen = slices.Clone(cfg.Listen)
 		was.Launch = maps.Clone(cfg.Launch)
+		was.CustomACP = slices.Clone(cfg.CustomACP)
+		for i := range was.CustomACP {
+			was.CustomACP[i].Args = slices.Clone(was.CustomACP[i].Args)
+			was.CustomACP[i].Env = maps.Clone(was.CustomACP[i].Env)
+		}
 		change(cfg)
 		if reflect.DeepEqual(*cfg, was) {
 			return daemon.ErrUnchanged
