@@ -232,7 +232,15 @@ func (a *app) childRows(c *ui.Context, t thread, depth int) {
 // menu is the thread menu.
 func (a *app) childRow(c *ui.Context, k thread, depth int) {
 	selected := k.id() == a.selected && a.router.Path() == "/"
-	r := row(c, k.id(), selected).Height(28).Padding(0, 6, 0, 8+float32(depth)*16).Gap(8).Transition(fold)
+	// While the section it shows in, its depth up, opens or shuts, the
+	// section's curtain alone moves the row.
+	fx := fold
+	if a.folding() {
+		if up := a.ancestors(k); len(up) >= depth && a.foldingNamed(sectionNames[a.shownIn(up[len(up)-depth])]) {
+			fx = foldStill
+		}
+	}
+	r := row(c, k.id(), selected).Height(28).Padding(0, 6, 0, 8+float32(depth)*16).Gap(8).Transition(fx)
 	if a.revealRow(k.id()) {
 		r.ScrollIntoView()
 	}
