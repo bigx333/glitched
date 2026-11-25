@@ -145,34 +145,32 @@ var ErrUnchanged = errors.New("daemon: engine.json unchanged")
 // jsonfile.Edit does: change gets the Config the file holds now, read as
 // Defaults reads it. It returns the Config written.
 //
-// Turning children from other machines on removes every link's token
-// first, so none left over comes back; and an Edit that leaves them off,
-// a retry or a change to anything else included, removes them after
-// writing, so a link minted meanwhile goes too. Off thus ends every link,
-// and on starts with none.
+// An Edit that turns children from other machines on, or leaves them off
+// (a retry, or a change to anything else, included), removes every link's
+// token before it writes. PairLink mints under the same lock, so no link
+// is minted between the removal and the write: off ends every link, and
+// on starts with none, even when the writer stops halfway.
 func Edit(dir string, change func(*Config) error) (Config, error) {
 	var cfg Config
-	var was bool
 	_, err := jsonfile.Edit(filepath.Join(dir, configFile), func(raw *map[string]json.RawMessage) error {
 		var err error
 		if cfg, err = Defaults(dir); err != nil {
 			return err
 		}
-		was = cfg.ChildrenFromOtherMachines != nil
-		if err := change(&cfg); err != nil {
+		was := cfg.ChildrenFromOtherMachines != nil
+		err = change(&cfg)
+		if err != nil && !errors.Is(err, ErrUnchanged) {
 			return err
 		}
-		if !was && cfg.ChildrenFromOtherMachines != nil {
+		if !was || cfg.ChildrenFromOtherMachines == nil {
 			if err := endLinks(dir); err != nil {
 				return err
 			}
 		}
+		if err != nil {
+			return err
+		}
 		return cfg.write(raw)
 	})
-	if (err == nil || errors.Is(err, ErrUnchanged)) && cfg.ChildrenFromOtherMachines == nil {
-		if e := endLinks(dir); e != nil {
-			return cfg, e
-		}
-	}
 	return cfg, err
 }
