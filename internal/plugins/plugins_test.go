@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,7 +51,7 @@ func install(t *testing.T, state, name string) {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"plugin.json", "index.js"} {
+	for _, f := range []string{"plugin.json", "index.ts"} {
 		b, err := os.ReadFile(filepath.Join(hello, f))
 		if err != nil {
 			t.Fatal(err)
@@ -161,5 +162,61 @@ func TestActRunsCommandsAndOpensOnlyWebPages(t *testing.T) {
 	}
 	if _, err := h.Page("gone", "home"); err == nil {
 		t.Fatal("a page of a plugin not installed")
+	}
+}
+
+func TestEveryExamplePluginUsesTypeScriptAndCompiles(t *testing.T) {
+	const root = "../../examples/plugins"
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		count++
+		dir := filepath.Join(root, e.Name())
+		b, err := os.ReadFile(filepath.Join(dir, "plugin.json"))
+		if err != nil {
+			t.Fatalf("%s: %v", e.Name(), err)
+		}
+		var m struct {
+			Main     string `json:"main"`
+			Glitched struct {
+				Service string `json:"service"`
+			} `json:"glitched"`
+		}
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatalf("%s: %v", e.Name(), err)
+		}
+		if !strings.HasSuffix(m.Main, ".ts") {
+			t.Errorf("%s: main = %q, want .ts", e.Name(), m.Main)
+		}
+		if m.Glitched.Service != "" && !strings.HasSuffix(m.Glitched.Service, ".ts") {
+			t.Errorf("%s: service = %q, want .ts", e.Name(), m.Glitched.Service)
+		}
+		js, _ := filepath.Glob(filepath.Join(dir, "*.js"))
+		if len(js) > 0 {
+			t.Errorf("%s: unexpected .js files %v", e.Name(), js)
+		}
+		p, err := plugin.Load(dir, plugin.Options{Main: m.Main, Prelude: Prelude, Contract: Contract, ContractVersion: ContractVersion, DataDir: t.TempDir()})
+		if err != nil {
+			t.Errorf("%s (%s): %v", e.Name(), m.Main, err)
+			continue
+		}
+		p.Shutdown()
+		if m.Glitched.Service != "" {
+			svc, err := plugin.Load(dir, plugin.Options{Main: m.Glitched.Service, Prelude: Prelude, Contract: Contract, ContractVersion: ContractVersion, DataDir: t.TempDir()})
+			if err != nil {
+				t.Errorf("%s (%s): %v", e.Name(), m.Glitched.Service, err)
+				continue
+			}
+			svc.Shutdown()
+		}
+	}
+	if count == 0 {
+		t.Fatal("found no example plugins")
 	}
 }

@@ -533,34 +533,41 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) (laid bool) {
 	a.drew, a.drawn = a.drawn, map[api.ID]sight{}
 	a.laidAt, a.builtAt = a.builtAt, a.now
 	l := a.listFor(t.id())
-	l.Key = func(i int) any { return es[i].key }
+	// In Zen mode, an item is a row or a line folding rows.
+	v := a.viewFor(t.id(), rs)
+	a.keepPlace(t.id(), l, v)
+	l.Key = func(j int) any { return v.key(j) }
 	l.FollowEnd = true
 	l.FollowAnimation = &ui.Smooth
 	// The agents strip sits over the composer: the end clears it too.
 	room := composerRoom + a.agentsRoom(t) + a.queueRoom(t)
-	at := thinkingAt(t, rs)
+	at := v.thinkingPos(thinkingAt(t, rs))
 	var matchSet map[int]bool
 	activeMatch := -1
 	if a.findOpen && strings.TrimSpace(a.findQuery) != "" && t.id() == a.findThread {
 		if ms := findMatches(rs.es, a.findQuery); len(ms) > 0 {
 			matchSet = make(map[int]bool, len(ms))
 			for _, idx := range ms {
-				matchSet[idx] = true
+				matchSet[v.pos(idx)] = true
 			}
-			activeMatch = ms[max(0, min(a.findIndex, len(ms)-1))]
+			activeMatch = v.pos(ms[max(0, min(a.findIndex, len(ms)-1))])
 		}
 	}
-	list := ui.List(c.Key(t.id()), l, len(es), func(i int) {
+	list := ui.List(c.Key(t.id()), l, v.len(), func(j int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
 			col := ui.Column(c).Grow(1).MinWidth(0).MaxWidth(contentWidth).Gap(22)
-			if i == activeMatch {
+			if j == activeMatch {
 				col.Background(palette.accent.Alpha(0.10)).Border(1, palette.accent.Alpha(0.45)).Radius(10).Padding(6, 8)
-			} else if matchSet[i] {
+			} else if matchSet[j] {
 				col.Background(palette.accent.Alpha(0.05)).Border(1, palette.border).Radius(10).Padding(6, 8)
 			}
 			col.Children(func() {
-				a.entry(c, t, rs, i)
-				if i == at {
+				if f := v.fold(j); f != nil {
+					a.zenLine(c, t, f)
+				} else {
+					a.entry(c, t, rs, v.row(j))
+				}
+				if j == at {
 					a.thinkingRow(c, t)
 				}
 			})
@@ -583,7 +590,7 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) (laid bool) {
 			})
 		}
 	})
-	a.turnMarkers(c, t.id(), rs, l)
+	a.turnMarkers(c, t.id(), rs, l, v)
 	return !leaving && list.Bounds().H > 0
 }
 
@@ -926,7 +933,7 @@ var (
 )
 
 // timelineRow is the built-in Timeline rows plugin's drawing of the row m,
-// as its main.js draws it. Glitched draws the same while no plugin has
+// as its main.ts draws it. Glitched draws the same while no plugin has
 // drawn the row, so that the body keeps its state, as a selection, when
 // the plugin's drawing comes.
 func timelineRow(m timelineMessage) *widget.Node {

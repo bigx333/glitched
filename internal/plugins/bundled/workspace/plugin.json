@@ -3,7 +3,7 @@
   "name": "Workspace",
   "description": "The button under the composer that says where the thread runs, and a new thread's menu of where it could start. Built into Glitched; make a copy in Settings › Plugins to change it.",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "main.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": ["ui.place", "ui.replace", "threads:read"],

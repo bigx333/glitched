@@ -19,12 +19,22 @@ func TestAViewSaysWhereARemoteChildRunsAndWhereItCameFrom(t *testing.T) {
 	p := newRemotes(t, fake.New(fake.Turn(false)), "fake", engine.Limits{})
 	kid := p.place("there")
 	r := p.bound(kid)
+	// A binds before it hears of the run there, which it follows.
+	var run api.ID
+	until(t, "A followed the run there", func() bool {
+		runs := p.onB(r.Thread).Runs
+		if len(runs) == 0 {
+			return false
+		}
+		run = runs[len(runs)-1].ID
+		return p.placeholder(kid).Remote.Run == run
+	})
 	snap, err := p.a.Endpoint().Read(context.Background(), api.Query{Thread: kid})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := snap.Threads[0].Remote; v == nil || v.Engine != p.engineB || v.Link != p.link.ID || v.Thread != r.Thread || v.Run != r.Run || v.Machine != "b" {
-		t.Fatalf("the placeholder's view places it at %+v; want b's engine %v, link %v and thread %v", v, p.engineB, p.link.ID, r.Thread)
+	if v := snap.Threads[0].Remote; v == nil || v.Engine != p.engineB || v.Link != p.link.ID || v.Thread != r.Thread || v.Run != run || v.Machine != "b" {
+		t.Fatalf("the placeholder's view places it at %+v; want b's engine %v, link %v, thread %v and run %v", v, p.engineB, p.link.ID, r.Thread, run)
 	}
 	there := p.there()
 	if len(there) != 1 {

@@ -100,7 +100,7 @@ func TestUIReplaceIsListedOnlyForAPluginGlitchedDidntSign(t *testing.T) {
 				return err
 			}
 			b, err := fs.ReadFile(was, path)
-			if path == "greetings/main.js" {
+			if path == "greetings/main.ts" {
 				b = append(b, "\n// changed\n"...)
 			}
 			changed[path] = &fstest.MapFile{Data: b, Mode: 0o644}

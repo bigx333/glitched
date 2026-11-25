@@ -52,7 +52,7 @@ func schedulesRuntimeWith(t *testing.T, clock string, hooks *scheduleHooks) (*pl
 		t.Fatal(err)
 	}
 	if clock != "" {
-		main := filepath.Join(folder, "service.js")
+		main := filepath.Join(folder, "service.ts")
 		src, err := os.ReadFile(main)
 		if err != nil {
 			t.Fatal(err)
@@ -111,7 +111,7 @@ func schedulesRuntimeWith(t *testing.T, clock string, hooks *scheduleHooks) (*pl
 			return out, err
 		}
 	}
-	p, err := plugin.Load(folder, plugin.Options{Main: "service.js", Prelude: Prelude, Contract: Contract, ContractVersion: ContractVersion, DataDir: DataDir(state),
+	p, err := plugin.Load(folder, plugin.Options{Main: "service.ts", Prelude: Prelude, Contract: Contract, ContractVersion: ContractVersion, DataDir: DataDir(state),
 		Functions: map[string]plugin.Function{"db.query": d.query, "db.exec": after(d.exec), "app": app}})
 	if err != nil {
 		t.Fatal(err)

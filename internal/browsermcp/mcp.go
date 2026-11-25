@@ -1,17 +1,18 @@
 // Package browsermcp gives agents the app's browser as tools: an MCP
-// server on stdio, which Claude Code starts for each run (glitched
-// browser-mcp), and the socket it reaches the app through, where the
-// browser pane is (docs/browser.md, Agents).
+// server on stdio, which agents start for each run (glitched browser-mcp),
+// and the socket it reaches the app through, where the browser pane is
+// (docs/browser.md, Agents).
 //
 // The server knows nothing of tabs or pages: each tool call goes to the
-// app as it comes, which acts on its tabs and answers in text. An app not
-// open answers nothing, and the tool says so, so the tools are there for
-// every run, and work as soon as the app is.
+// app as it comes, which acts on its tabs and answers with a Reply. An app
+// not open answers nothing, and the tool says so, so the tools are there
+// for every run, and work as soon as the app is.
 package browsermcp
 
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -34,18 +35,21 @@ type Annotations struct {
 	OpenWorld   bool `json:"openWorldHint"`
 }
 
-const tabArg = `"tab": {"type": "integer", "description": "The tab's id, as browser_tabs lists it; the tab shown when left out."}`
+const tabArg = `"tab": {"type": "integer", "description": "The tab's id, as browser_tabs lists it; when left out, the tab the user is shown, unless another thread leases it, then the tab this thread leases and used last."}`
 
 // Tools are the browser's tools.
 var Tools = []Tool{
 	{
 		Name: "browser_tabs",
-		Description: "List, open, show or close the tabs of the browser in the Glitched app, the pane beside the user's chat. " +
-			"Each tab has an id the other tools take. Opening one at a url loads it and returns its snapshot.",
+		Description: "List, open, show, close, or release the tabs of the browser in the Glitched app, the pane beside the user's chat. " +
+			"Each tab has an id the other tools take. Opening one at a url loads it, leases it to this thread so other threads won't overwrite it, and returns its snapshot. " +
+			"Every tool using a tab leases it the same way, and refuses a tab another thread leases. " +
+			"A tool given no tab acts on the tab the user is shown; when another thread leases that one, on the tab this thread used last. " +
+			"Action \"release\" drops this thread's lease on a tab (or all its tabs when tab is omitted).",
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {
-			"action": {"type": "string", "enum": ["list", "new", "select", "close"]},
+			"action": {"type": "string", "enum": ["list", "new", "select", "close", "release"]},
 			"url": {"type": "string", "description": "For new: the address to open."},
-			"tab": {"type": "integer", "description": "For select and close: the tab's id."}
+			"tab": {"type": "integer", "description": "For select, close, and release: the tab's id."}
 		}, "required": ["action"]}`),
 		Annotations: Annotations{Destructive: true, OpenWorld: true}, // close closes the user's tab
 	},
@@ -63,13 +67,21 @@ var Tools = []Tool{
 	{
 		Name: "browser_snapshot",
 		Description: "Read what a tab of the Glitched browser shows, as lines of roles and names, as an accessibility tree reads. " +
-			"Each element to act on has a ref, as [ref=s12e3], which browser_click and browser_type take while this snapshot is the tab's latest.",
+			"Each element to act on has a ref, as [ref=s12e3], which browser_click, browser_type, and browser_select take while this snapshot is the tab's latest.",
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {
 			"full": {"type": "boolean", "description": "Also list the page's structure (landmarks, lists, tables) around the elements to act on."},
 			` + tabArg + `
 		}}`),
 		// Not read-only: a tab never shown loads its page, and a snapshot
 		// replaces the tab's refs.
+		Annotations: Annotations{OpenWorld: true},
+	},
+	{
+		Name:        "browser_screenshot",
+		Description: "Capture a PNG screenshot of a tab in the Glitched browser so you can visually inspect layout, styling, and rendering.",
+		InputSchema: json.RawMessage(`{"type": "object", "properties": {
+			` + tabArg + `
+		}}`),
 		Annotations: Annotations{OpenWorld: true},
 	},
 	{
@@ -92,11 +104,70 @@ var Tools = []Tool{
 		}, "required": ["ref", "text"]}`),
 		Annotations: Annotations{Destructive: true, OpenWorld: true},
 	},
+	{
+		Name: "browser_select",
+		Description: "Choose an option in a <select> dropdown in the Glitched browser, by its ref from the tab's latest snapshot, " +
+			"matching by value or visible label. Waits for any page update and returns the new snapshot.",
+		InputSchema: json.RawMessage(`{"type": "object", "properties": {
+			"ref": {"type": "string", "description": "The <select> element's ref, as s12e3."},
+			"value": {"type": "string", "description": "Option value attribute to select."},
+			"label": {"type": "string", "description": "Visible option text/label to select when value is omitted."}
+		}, "required": ["ref"]}`),
+		Annotations: Annotations{Destructive: true, OpenWorld: true},
+	},
+	{
+		Name:        "browser_scroll",
+		Description: "Scroll the page or a specific element by ref in the Glitched browser, then return a fresh snapshot.",
+		InputSchema: json.RawMessage(`{"type": "object", "properties": {
+			"direction": {"type": "string", "enum": ["up", "down", "left", "right", "top", "bottom"], "description": "Direction or edge to scroll toward. If omitted with ref, scrolls the element into view."},
+			"amount": {"type": "integer", "description": "Scroll distance in CSS pixels for up/down/left/right (defaults to 400)."},
+			"ref": {"type": "string", "description": "Optional element ref to scroll or scroll into view."},
+			` + tabArg + `
+		}}`),
+		Annotations: Annotations{OpenWorld: true},
+	},
+	{
+		Name:        "browser_wait_for",
+		Description: "Wait until a page in the Glitched browser shows or hides matching text, CSS selector, or URL substring (up to timeout_ms), then return its snapshot.",
+		InputSchema: json.RawMessage(`{"type": "object", "properties": {
+			"text": {"type": "string", "description": "Visible page text substring to wait for."},
+			"selector": {"type": "string", "description": "CSS selector for a visible element to wait for."},
+			"url": {"type": "string", "description": "URL substring to wait for."},
+			"gone": {"type": "boolean", "description": "Invert the condition: wait until it is no longer present."},
+			"timeout_ms": {"type": "integer", "description": "Maximum time to wait in milliseconds (default 10000, max 30000)."},
+			` + tabArg + `
+		}}`),
+		Annotations: Annotations{OpenWorld: true},
+	},
 }
 
-// Call runs a tool: it answers the agent in text, or says why the tool
-// failed.
-type Call func(ctx context.Context, tool string, args json.RawMessage) (string, error)
+// Reply is what a tool call answers with: Text, optionally accompanied by
+// a PNG Image (encoded as an MCP image content block).
+type Reply struct {
+	Text     string `json:"text,omitempty"`
+	Image    []byte `json:"image,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+}
+
+// Text constructs a plain-text Reply.
+func Text(s string) Reply { return Reply{Text: s} }
+
+type threadKey struct{}
+
+// WithThread attaches the calling agent's Glitched thread id to ctx.
+func WithThread(ctx context.Context, thread string) context.Context {
+	return context.WithValue(ctx, threadKey{}, thread)
+}
+
+// ThreadFromContext returns the calling thread id from ctx, or "" if unset.
+func ThreadFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(threadKey{}).(string)
+	return v
+}
+
+// Call runs a tool: it answers the agent with a Reply, or says why the
+// tool failed.
+type Call func(ctx context.Context, tool string, args json.RawMessage) (Reply, error)
 
 // Versions are the protocol versions the server speaks, the latest first.
 var Versions = []string{"2025-06-18", "2025-03-26", "2024-11-05"}
@@ -121,8 +192,10 @@ type rpcError struct {
 }
 
 type content struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Data     string `json:"data,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
 }
 
 type callResult struct {
@@ -130,8 +203,9 @@ type callResult struct {
 	IsError bool      `json:"isError,omitempty"`
 }
 
-// maxMessage is the longest message the server reads.
-const maxMessage = 4 << 20
+// maxMessage is the longest message the server and bridge read (fits
+// high-DPI PNG screenshots).
+const maxMessage = 16 << 20
 
 // Serve answers the MCP client on in and out, one JSON-RPC message a
 // line, until in ends or ctx does. Tool calls run as they come, each on
@@ -222,7 +296,7 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, call Call) error {
 				"capabilities":    map[string]any{"tools": map[string]any{}},
 				"serverInfo":      map[string]string{"name": "glitched-browser", "version": "1"},
 				"instructions": "These tools drive the browser in the Glitched app, beside the user's chat, which the user sees. " +
-					"Take a snapshot to find an element's ref, then click or type by ref.",
+					"Take a snapshot to find an element's ref, then click, type, select, or scroll by ref, or take a screenshot.",
 			}})
 		case "ping":
 			send(response{ID: req.ID, Result: map[string]any{}})
@@ -251,7 +325,7 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, call Call) error {
 			wg.Add(1)
 			go func(id json.RawMessage) {
 				defer wg.Done()
-				text, err := call(callCtx, p.Name, p.Arguments)
+				reply, err := call(callCtx, p.Name, p.Arguments)
 				calls.Lock()
 				_, open := running[string(id)]
 				delete(running, string(id))
@@ -262,9 +336,26 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, call Call) error {
 				if !open {
 					return
 				}
-				r := callResult{Content: []content{{"text", text}}}
+				var r callResult
 				if err != nil {
-					r = callResult{Content: []content{{"text", err.Error()}}, IsError: true}
+					r = callResult{Content: []content{{Type: "text", Text: err.Error()}}, IsError: true}
+				} else {
+					var items []content
+					if len(reply.Image) > 0 {
+						mime := reply.MimeType
+						if mime == "" {
+							mime = "image/png"
+						}
+						items = append(items, content{
+							Type:     "image",
+							Data:     base64.StdEncoding.EncodeToString(reply.Image),
+							MimeType: mime,
+						})
+					}
+					if reply.Text != "" || len(items) == 0 {
+						items = append(items, content{Type: "text", Text: reply.Text})
+					}
+					r = callResult{Content: items}
 				}
 				send(response{ID: id, Result: r})
 			}(req.ID)

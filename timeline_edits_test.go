@@ -100,7 +100,7 @@ func TestShiftTabComesToTheLastMarker(t *testing.T) {
 	var l ui.ListState
 	tt := ui.NewTester(func(c *ui.Context) {
 		ui.Box(c).Grow(1).Children(func() {
-			a.turnMarkers(c, api.ID{}, rows{es: es, turns: turns}, &l)
+			a.turnMarkers(c, api.ID{}, rows{es: es, turns: turns}, &l, timelineView{es: es})
 			ui.Button(c.Key("after"), "After markers")
 		})
 	}, 480, 160)
@@ -205,7 +205,7 @@ func TestTabWalksPastTheWindow(t *testing.T) {
 		tt := ui.NewTester(func(c *ui.Context) {
 			ui.Column(c).Grow(1).Children(func() {
 				ui.Button(c.Key("before"), "Before markers")
-				ui.Box(c).Grow(1).Children(func() { a.turnMarkers(c, api.ID{}, rows{es: es, turns: turns}, &l) })
+				ui.Box(c).Grow(1).Children(func() { a.turnMarkers(c, api.ID{}, rows{es: es, turns: turns}, &l, timelineView{es: es}) })
 				ui.Button(c.Key("after"), "After markers")
 			})
 		}, 480, 220)

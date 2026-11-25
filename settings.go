@@ -258,6 +258,11 @@ func (a *app) appearance(c *ui.Context) {
 			ui.StepSlider(c, &s.fontSize, 11, 16, 1).Width(200).Label("Interface font size")
 		})
 	})
+	card(c, "CHAT", func() {
+		settingRow(c, "Zen mode", "Fold each turn's steps and in-between replies into one line you can open. Approvals, questions and errors always show.", func() {
+			ui.Switch(c, &a.settings.zen).Label("Zen mode")
+		})
+	})
 }
 
 // appearancePage is the context of settings.page.appearance.

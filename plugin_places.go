@@ -215,7 +215,7 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread, compact, know
 			row = row.Absolute().Invisible()
 		}
 		room += row.Bounds().W + headerGap
-		a.drawPlace(c, row, d.pl, key, d.ctx, d.app, d.node, nil, nil, nil, nil, nil)
+		a.drawPlace(c, row, d.pl, key, d.ctx, d.app, d.node, nil, nil, nil, nil, nil, nil)
 	}
 	return room, drawn, shown
 }
@@ -250,10 +250,11 @@ func controlsOf[K comparable](m map[K]*sessionControls, k K, s *plugins.Session)
 //
 // native draws the native widgets of a component's copy, nil elsewhere,
 // absent says which of them build nothing there, nil for none,
-// listRow does to its lists' rows what the app does to its own, and
-// after what Glitched draws over the drawing in box, as a message's
-// actions, nil for nothing.
-func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key string, ctx any, app *plugins.Session, node *widget.Node, native func(c *ui.Context, n *widget.Node, row string, fire func(any)), absent func(n *widget.Node) bool, listRow func(c *ui.Context, list *widget.Node, i int, e ui.Element) bool, reveal func(list *widget.Node, it widget.ListItem) bool, after func()) {
+// listRow does to its lists' rows what the app does to its own, reveal
+// and fold are the copy's render.Style.Reveal and Fold, and after what
+// Glitched draws over the drawing in box, as a message's actions, nil for
+// nothing.
+func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key string, ctx any, app *plugins.Session, node *widget.Node, native func(c *ui.Context, n *widget.Node, row string, fire func(any)), absent func(n *widget.Node) bool, listRow func(c *ui.Context, list *widget.Node, i int, e ui.Element) bool, reveal func(list *widget.Node, it widget.ListItem) bool, fold func(list *widget.Node, section string) (float32, bool), after func()) {
 	pk := placeKey{pl.Plugin, pl.Place.ID, key}
 	a.placeFrame.keys[pk] = true
 	cs := controlsOf(a.placeControls, pk, app)
@@ -269,6 +270,7 @@ func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key s
 		}
 		st.ListRow = listRow
 		st.Reveal = reveal
+		st.Fold = fold
 		st.Rows = func(list string, it widget.ListItem) *widget.Node {
 			return app.Row(plugins.RowAt{List: list, Place: ref}, it)
 		}
