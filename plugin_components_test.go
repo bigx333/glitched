@@ -182,6 +182,11 @@ func TestAFrameWaitsOnceForAComponentsNewCopies(t *testing.T) {
 // frame waiting for it again, wherever it moves.
 func TestACopyAnsweredNullIsNotWaitedForAgain(t *testing.T) {
 	a := offline(t)
+	// The built-in is the next replacer otherwise; the copy's null falling
+	// through to the native body is what this tests.
+	if err := a.plugins.SetEnabled("composer-send", false); err != nil {
+		t.Fatal(err)
+	}
 	writeOwnPlugin(t, a, "my-send", sendManifest, `export function place({ items }) {
 	return items.map(() => null)
 }`)

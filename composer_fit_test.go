@@ -44,6 +44,9 @@ func TestTheComposerActionsFitAtTheNarrowestWindow(t *testing.T) {
 			h.until("the queued message", func() bool { return h.a.current().View.Queued == 1 })
 			h.click("Stop")
 			h.until("Resume", func() bool { return h.tt.HasText("Resume") && !h.a.current().View.Live() })
+			// The click leaves the pointer where Stop was, over Attach once
+			// stopping swaps the controls; measure each unhovered.
+			h.tt.Move(0, 0)
 			h.a.draft = "And the changelog."
 			return h
 		}, []string{"Attach files", "Resume", "Send"}},

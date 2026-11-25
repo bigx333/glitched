@@ -24,7 +24,7 @@ function button(ctx) {
   ];
   if (ctx.fast) children.push(native("model.zap"));
   children.push({ type: "icon", name: "alt-arrow-down", fontSize: 11 });
-  return { type: "row", gap: 6, children };
+  return { type: "row", grow: true, gap: 6, children };
 }
 
 // The models' column is as tall as the longest list of the families it

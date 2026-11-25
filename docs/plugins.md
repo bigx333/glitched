@@ -439,9 +439,16 @@ Built-in plugins are compiled into Glitched (`internal/plugins/bundled`) and lis
 | `row-actions` | `thread.row.actions` | `ui.place`, `ui.replace`, `threads:read`, `threads:write` |
 | `project-strip` | `sidebar.projects` | `ui.place`, `ui.replace`, `threads:read`, `threads:write` |
 | `composer` | `composer` | `ui.place`, `ui.replace` |
+| `composer-access` | `composer.access` | `ui.place`, `ui.replace`, `threads:access` |
+| `composer-send` | `composer.send` | `ui.place`, `ui.replace`, `threads:write` |
+| `queue` | `composer.queue` | `ui.place`, `ui.replace` |
 | `timeline` | `timeline.message` | `ui.place`, `ui.replace`, `messages:read` |
+| `terminal-panel` | `thread.panel.terminal` | `ui.place`, `ui.replace`, `threads:read` |
+| `preview-panel` | `thread.panel.preview` | `ui.place`, `ui.replace` |
+| `selection-actions` | `selection.actions` | `ui.place`, `ui.replace`, `threads:write` |
 | `palette` | `palette` | `ui.place`, `ui.replace`, `threads:read`, `commands` |
 | `sidebar` | `sidebar.body` | `ui.place`, `ui.replace`, `threads:read` |
+| `cli-updates` | `sidebar.footer.updates` | `ui.place`, `ui.replace`, `providers:update` |
 | `agents` | `agents.body` | `ui.place`, `ui.replace`, `threads:read` |
 | `message-toolbar` | `message.toolbar` | `ui.place`, `ui.replace` |
 | `workspace` | `composer.workspace` | `ui.place`, `ui.replace`, `threads:read` |
@@ -452,6 +459,8 @@ Built-in plugins are compiled into Glitched (`internal/plugins/bundled`) and lis
 | `pull-requests` | a place in `thread.header` | `ui.place`, `threads:read`, `programs` (`git`, `gh`), `models:ask`, `clipboard`, `composer` |
 | `skills` | a place in `thread.header` | `ui.place`, `threads:read` |
 | `schedules` | nothing: a service in the engine, on a minute's timer | `service`, `threads:read`, `threads:write`, `threads:access` |
+| `themes` | no component: the Mocha and Dawn themes | nothing |
+| `thread-tools` | Copy branch name and Open in editor in `thread.menu` | `ui.place`, `threads:read`, `clipboard`, `programs` (`git`) |
 
 Header actions' **Open in** opens the thread's workspace in Cursor, VS Code, Zed or, below a line, the file manager, with `glitched.openIn`. Its **Commit & push** opens a dialog that lists every changed file, the branch, where it pushes, and a message (the thread's title to start), and says that your git hooks don't run for a plugin's git. On **Commit & push** in the dialog, which shows a spinner while git runs, it runs `git add -A`, `git commit -m <message>`, then `git push`, or `git push -u origin <branch>` when the branch tracks nothing yet. It never forces. It refuses before running anything when there is nothing to commit, HEAD is detached, a merge has conflicts, or the message is empty. A push that fails or takes over 20 seconds keeps the commit and says so. A repository with no `origin` keeps the commit here.
 

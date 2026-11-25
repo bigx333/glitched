@@ -1791,12 +1791,6 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 	empty := a.message(t) == ""
 	live := t.View.Stoppable()
 	working := live && empty
-	if live && !empty {
-		if t.View.Working() {
-			a.queueButton(c, t)
-		}
-		a.stopButton(c, t)
-	}
 	label := "Send"
 	if working {
 		label = "Stop"
@@ -1929,15 +1923,17 @@ func (a *app) sendControl(c *ui.Context, t thread, keys bool) {
 	if t.View.Resumable {
 		a.resumeButton(c, t)
 	}
-	if !a.pluginComponent(c, "composer.send", &t, componentCopy{key: composerKey(t), box: box, context: ctx}) {
-		a.sendButton(c, t, keys)
-		return
-	}
 	if t.View.Stoppable() {
 		if a.message(t) != "" && t.View.Working() {
 			a.queueButton(c, t)
 		}
 		a.stopButton(c, t).Shrink(0)
+	}
+	if !a.pluginComponent(c, "composer.send", &t, componentCopy{key: composerKey(t), box: box, builtinBox: func() ui.Element {
+		return ui.Row(c).Key("send-plugin").AlignItems(ui.Center).Shrink(0)
+	}, context: ctx}) {
+		a.sendButton(c, t, keys)
+		return
 	}
 	if keys && c.Shortcut(ui.Cmd, ui.KeyEnter) {
 		a.sendOrStop(t, false)

@@ -43,7 +43,7 @@ func TestAPluginsCommandsJoinTheAppsMenus(t *testing.T) {
 	if err := h.tt.RightClick(title); err != nil {
 		t.Fatal(err)
 	}
-	if m := h.tt.Menu(); len(m) != len(plain)+2 || m[len(m)-3] != "Tag thread" || m[len(m)-1] != "Delete…" {
+	if m := h.tt.Menu(); len(m) != len(plain)+1 || m[len(m)-5] != "Tag thread" || m[len(m)-1] != "Delete…" {
 		t.Fatalf("the thread's menu is %q; without the plugin %q", m, plain)
 	}
 	if err := h.tt.ChooseMenuItem("Tag thread"); err != nil {

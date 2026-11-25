@@ -17,7 +17,7 @@ export function place({ items }) {
 
 function header(ctx) {
   const address = ctx.draft || ctx.url;
-  return { type: "row", height: ctx.barHeight, padding: [0, 8 + ctx.barRight, 0, 10], gap: 4, align: "center", children: [
+  return { type: "row", height: ctx.barHeight, padding: [0, 10], gap: 4, align: "center", children: [
     iconButton("back", "arrow-left", "Back", click("back", ctx.active), !ctx.canBack),
     iconButton("forward", "arrow-right", "Forward", click("forward", ctx.active), !ctx.canForward),
     ctx.loading
@@ -27,6 +27,7 @@ function header(ctx) {
     iconButton("new-tab", "plus", "New tab  ⌘T", "newTab", false),
     iconButton("external", "square-share-line", "Open in browser", "external", !ctx.url),
     iconButton("close-preview", "close", "Close preview", "closePreview", false),
+    { type: "row", width: Math.max(0, ctx.barRight - 2) },
   ] };
 }
 

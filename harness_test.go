@@ -354,12 +354,9 @@ func (h *harness) click(text string) {
 	if err := h.tt.Click(text); err != nil {
 		h.t.Fatal(err)
 	}
-	// A click a plugin took is done once its session is: what it asked
-	// the app for is posted by then.
-	if h.a.plugins != nil && !h.a.plugins.Idle() {
-		h.until("the plugins to settle", h.a.plugins.Idle)
-		h.p.run()
-		h.tt.Frame()
+	// A click may be of a plugin's widget only once this frame runs it.
+	if h.a.plugins != nil {
+		settlePlugins(h.t, h.a, h.tt, h.p)
 	}
 }
 

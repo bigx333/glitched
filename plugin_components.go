@@ -32,11 +32,15 @@ import (
 // and over what Glitched draws over every drawing of it, in its box, as
 // a message's actions.
 type componentCopy struct {
-	key     string
-	box     func() ui.Element
-	context func(plugins.ThreadRecord) any
-	native  func(body *widget.Node)
-	retry   func()
+	key string
+	box func() ui.Element
+	// builtinBox, when set, is the copy's box while the built-in plugin
+	// draws it; nil uses box. It lets the built-in keep Glitched's own
+	// size while a replacement's drawing gives way first.
+	builtinBox func() ui.Element
+	context    func(plugins.ThreadRecord) any
+	native     func(body *widget.Node)
+	retry      func()
 	// action draws the message.* native n, one of a message's actions,
 	// unless absent says it has nothing to do under the message.
 	action  func(n *widget.Node)
@@ -212,6 +216,7 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 			continue
 		}
 		by.plugin = d.pl.Plugin
+		by.builtin = d.app.Builtin
 		drawn.copies = append(drawn.copies, by)
 		// The built-in's drawing of the copy as it was, as a message's
 		// note before it failed, is Glitched's of it as it is.
@@ -219,7 +224,11 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 			a.fallback(c, name, t, cp)
 			continue
 		}
-		box := cp.box()
+		boxOf := cp.box
+		if cp.builtinBox != nil && d.app.Builtin {
+			boxOf = cp.builtinBox
+		}
+		box := boxOf()
 		a.drawPlace(c, box, d.pl, cp.key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, row string, fire func(any)) {
 			a.drawNative(c, name, t, row, n, fire, cp)
 		}, cp.absent, func(c *ui.Context, list *widget.Node, i int, e ui.Element) bool {

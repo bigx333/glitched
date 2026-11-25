@@ -75,7 +75,7 @@ func TestAPluginDrawsSendButGlitchedKeepsStop(t *testing.T) {
 	if shows("My send") || !shows("Send") || !shows("Stop") {
 		t.Fatalf("a Send that threw left no Glitched Send: %q", h.tt.Texts())
 	}
-	if note := h.a.partState(installed(h.a, "my-send"), "composer.send").why; !strings.Contains(note, "broken on purpose") || !strings.Contains(note, "Glitched draws its own") {
+	if note := h.a.partState(installed(h.a, "my-send"), "composer.send").why; !strings.Contains(note, "broken on purpose") || !strings.Contains(note, "built-in draws it") {
 		t.Errorf("Settings says %q of the broken Send", note)
 	}
 

@@ -594,7 +594,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			t.Italic()
 		}
 		if n.SingleLine {
-			t.SingleLine().Shrink(1)
+			t.SingleLine().Shrink(1).MinWidth(0)
 		}
 		if n.FontSize != 0 {
 			t.FontSize(float32(n.FontSize))
