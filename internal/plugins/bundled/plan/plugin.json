@@ -3,7 +3,7 @@
   "name": "Plan",
   "description": "The thread's plan in its header: how many of the agent's steps are done, and the step it is at, with every step in its tooltip. Built into Glitched; make a copy in Settings › Plugins to change it.",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "main.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": ["ui.place", "ui.replace", "messages:read"],

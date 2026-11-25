@@ -1,0 +1,12 @@
+{
+  "name": "glitched-plugins",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.5.1",
+  "scripts": {
+    "typecheck": "vp check --no-fmt --no-lint internal/plugins/bundled examples/plugins"
+  },
+  "devDependencies": {
+    "vite-plus": "1.8.0"
+  }
+}

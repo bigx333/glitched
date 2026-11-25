@@ -337,7 +337,7 @@ type headerCrumb struct {
 }
 
 // breadcrumbRow is the built-in Child threads' drawing of the breadcrumb
-// b, as its main.js draws it: each ancestor's thread.crumb and a chevron
+// b, as its main.ts draws it: each ancestor's thread.crumb and a chevron
 // after it, narrow only the parent's, then thread.heading. Glitched draws
 // the same while no plugin has drawn it.
 func breadcrumbRow(b headerBreadcrumb) *widget.Node {
@@ -408,13 +408,13 @@ type headerUsage struct {
 }
 
 // usageBadge is the built-in Child threads' drawing of the usage u, as its
-// main.js draws it. Once the agent said how full the context is, a meter
+// main.ts draws it. Once the agent said how full the context is, a meter
 // of it: a ring and the share used, amber from 75% and red from 90%, or
 // what is known of it; the tokens move to its tooltip. Before, a pill of
 // the tokens, and with children, everything under the thread rolled up.
 func usageBadge(u headerUsage) *widget.Node {
 	label, tip := fmtTokens(u.Tokens)+" tokens", "This thread's tokens"
-	// Compared as main.js compares them, past 2^53 too.
+	// Compared as main.ts compares them, past 2^53 too.
 	children := float64(u.Total) != float64(u.Tokens)
 	if children {
 		label = fmtTokens(u.Tokens) + " · " + fmtTokens(u.Total) + " with children"
@@ -427,7 +427,7 @@ func usageBadge(u headerUsage) *widget.Node {
 	if !children {
 		tip = "This thread's tokens " + fmtTokens(u.Tokens)
 	}
-	// In float64, as main.js counts, so both draw the same.
+	// In float64, as main.ts counts, so both draw the same.
 	used, window := max(0, float64(c.Used)), float64(c.Window)
 	switch {
 	case c.Stale:
@@ -517,7 +517,7 @@ func (a *app) reportCard(c *ui.Context, t thread, key string, e entry) {
 }
 
 // reportCardRow is the built-in Report card plugin's drawing of the card
-// m, as its main.js draws it. Glitched draws the same while no plugin has
+// m, as its main.ts draws it. Glitched draws the same while no plugin has
 // drawn the card, so that the native body keeps its state.
 func reportCardRow(m timelineReport) *widget.Node {
 	children := []*widget.Node{{Type: "native", ID: "body", Name: "report.body"}}

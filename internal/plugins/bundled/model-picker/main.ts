@@ -1,0 +1,149 @@
+// The model picker, as Glitched draws it by default. Its button shows the
+// model's tile and name, the effort in its color, fast mode's lightning
+// while it's on, and a chevron. Its popover lists the families of models
+// beside the models of the one pointed at, as a submenu, over the effort
+// slider with fast mode's switch. Glitched keeps the button, its glow, the
+// popover, and what a row does: pointing at a family shows its models, and
+// a click on a model chooses it. Copy it in Settings › Plugins, and the
+// copy draws the picker in its place.
+
+const GAP = 1;
+const PAD = 6;
+
+export function init(): Update<Record<string, never>> {
+  return { state: {} };
+}
+
+const native = (name: "model.tile" | "model.level" | "model.zap" | "model.effort", props?: Record<string, unknown>): Widget =>
+  ({ type: "native", name, ...(props ? { props } : {}) }) as Widget;
+
+function button(ctx: ComposerModelContext): Widget {
+  const children: Widget[] = [
+    native("model.tile", { size: 18 }),
+    { type: "text", text: ctx.model, fontSize: 12, singleLine: true },
+    native("model.level"),
+  ];
+  if (ctx.fast) children.push(native("model.zap"));
+  children.push({ type: "icon", name: "alt-arrow-down", fontSize: 11 });
+  return { type: "row", grow: true, gap: 6, children };
+}
+
+// The models' column is as tall as the longest list of the families it
+// offers, whichever shows: the popover keeps its size as the pointer moves
+// between families. Past the most Glitched gives it, its rows scroll.
+function modelsHeight(ctx: ComposerModelContext): number {
+  const counts = new Map<string, number>();
+  for (const m of ctx.models) if (!ctx.lockKey || m.familyKey === ctx.lockKey) counts.set(m.familyKey, (counts.get(m.familyKey) ?? 0) + 1);
+  const n = Math.max(0, ...counts.values());
+  return Math.min(2 * PAD + n * ctx.modelRowHeight + Math.max(0, n - 1) * GAP, ctx.modelsMaxHeight);
+}
+
+function panel(ctx: ComposerModelContext): Widget {
+  const families = ctx.families.filter((f) => !ctx.lockKey || f.key === ctx.lockKey);
+  const models = ctx.models.filter((m) => m.familyKey === ctx.familyKey);
+  return {
+    type: "column",
+    children: [
+      {
+        type: "row",
+        align: "stretch",
+        children: [
+          {
+            type: "column",
+            width: 150,
+            padding: [PAD],
+            children: [
+              {
+                type: "list",
+                id: "families",
+                label: "Families",
+                noKeys: true,
+                height: 400,
+                rowHeight: ctx.familyRowHeight,
+                gap: GAP,
+                value: families.some((f) => f.key === ctx.familyKey) ? ctx.familyKey : undefined,
+                controlled: true,
+                items: families.map((f) => ({ key: f.key, label: f.name + " " + f.about })),
+              },
+            ],
+          },
+          { type: "divider", style: "vertical" },
+          {
+            type: "column",
+            grow: true,
+            height: modelsHeight(ctx),
+            padding: [PAD],
+            children: [
+              {
+                type: "list",
+                id: "models",
+                label: "Models",
+                noKeys: true,
+                height: ctx.modelsMaxHeight - 2 * PAD,
+                rowHeight: ctx.modelRowHeight,
+                gap: GAP,
+                value: models.some((m) => m.key === ctx.key) ? ctx.key : undefined,
+                controlled: true,
+                items: models.map((m) => ({ key: m.key, label: m.short + " " + m.about, version: m.key === ctx.key ? "chosen" : "" })),
+              },
+            ],
+          },
+        ],
+      },
+      { type: "divider" },
+      native("model.effort"),
+    ],
+  };
+}
+
+export function place({ items: copies }: PlaceArgs<Record<string, never>, ComposerModelContext>): (Widget | null)[] {
+  return copies.map((it) => {
+    if (!it.context) return null;
+    return it.context.part === "button" ? button(it.context) : panel(it.context);
+  });
+}
+
+export function rows({ list, keys, place }: RowsArgs<Record<string, never>, ComposerModelContext>): (Widget | null)[] {
+  const ctx = place?.context;
+  if (!ctx) return keys.map(() => null);
+  return keys.map((key): Widget | null => {
+    if (list === "families") {
+      const f = ctx.families.find((f) => f.key === key);
+      if (!f) return null;
+      return {
+        type: "row",
+        grow: true,
+        gap: 8,
+        padding: [6, 8],
+        children: [
+          native("model.tile", { family: f.key, size: 22 }),
+          {
+            type: "column",
+            grow: true,
+            gap: 1,
+            children: [
+              { type: "text", text: f.name, weight: 500, color: "$text" },
+              { type: "text", text: f.about, fontSize: 11, color: "$text.muted" },
+            ],
+          },
+          { type: "icon", name: "alt-arrow-right", fontSize: 11 },
+        ],
+      };
+    }
+    const m = ctx.models.find((m) => m.key === key);
+    if (!m) return null;
+    const children: Widget[] = [
+      {
+        type: "column",
+        grow: true,
+        gap: 1,
+        children: [
+          { type: "text", text: m.short, weight: 500, color: "$text", singleLine: true },
+          { type: "text", text: m.about, fontSize: 11.5, color: "$text.muted", singleLine: true },
+        ],
+      },
+    ];
+    if (m.key === ctx.key) children.push({ type: "icon", name: "check", fontSize: 14, color: "$accent" });
+    return { type: "row", grow: true, gap: 10, padding: [7, 10], children };
+  });
+}

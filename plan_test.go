@@ -186,7 +186,7 @@ func TestADonePlanStaysInTheHeader(t *testing.T) {
 	}
 }
 
-// The built-in Plan's main.js and its native copy draw the same pill,
+// The built-in Plan's main.ts and its native copy draw the same pill,
 // node for node, whatever the plan.
 func TestTheBuiltInPlanIsItsNativeCopy(t *testing.T) {
 	root := t.TempDir()
@@ -238,7 +238,7 @@ func TestTheBuiltInPlanIsItsNativeCopy(t *testing.T) {
 		if got, want := s.PlaceView("plan", key), planBadge(p); !reflect.DeepEqual(got, want) {
 			g, _ := json.Marshal(got)
 			w, _ := json.Marshal(want)
-			t.Errorf("for %+v main.js drew %s, its native copy %s", p, g, w)
+			t.Errorf("for %+v main.ts drew %s, its native copy %s", p, g, w)
 		}
 	}
 }

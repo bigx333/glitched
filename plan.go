@@ -60,7 +60,7 @@ func (a *app) planPill(c *ui.Context, t thread, narrow, shown bool) ui.Element {
 // planMarks mark a step's status in the plan's tooltip.
 var planMarks = map[string]string{"done": "✓", "active": "→", "pending": "○"}
 
-// planBadge is the built-in Plan's drawing of the plan p, as its main.js
+// planBadge is the built-in Plan's drawing of the plan p, as its main.ts
 // draws it: a ring of the steps done, how many of how many, and the step
 // the agent is at, or the next; narrow, the count alone. Its tooltip lists
 // every step. A plan of no steps it doesn't draw.

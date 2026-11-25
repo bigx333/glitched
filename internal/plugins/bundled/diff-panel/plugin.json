@@ -3,7 +3,7 @@
   "name": "Diff panel",
   "description": "The diff panel's header and its list of changed files, over Glitched's native diff of the file shown. Built into Glitched; make a copy in Settings › Plugins to change it.",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "main.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": ["ui.place", "ui.replace", "threads:read", "clipboard"],
