@@ -23,7 +23,8 @@ func TestRowsFollowTheTranscript(t *testing.T) {
 	for seed := range uint64(4) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			r := rand.New(rand.NewPCG(seed, 7))
-			a := &app{rows: map[api.ID]*rowsCache{}}
+			a := &app{rows: map[api.ID]*rowsCache{}, listed: map[api.ID]*timelineMemo{}, zenOpen: map[string]bool{}}
+			a.settings.zen = true
 			tr := &client.Transcript{}
 			th := thread{Thread: &client.Thread{Transcript: tr}}
 			log := api.NewID()
@@ -178,6 +179,12 @@ func TestRowsFollowTheTranscript(t *testing.T) {
 				}
 				if !slices.Equal(got.asks, asks) {
 					t.Fatalf("step %d: the waiting requests are %v, not %v", i, got.asks, asks)
+				}
+				// The Zen view, its folds kept while their rows stay the
+				// same, is the one built afresh.
+				if kept, fresh := a.viewFor(th.id(), got), zenView(want, nil); !slices.Equal(shape(got.es, kept), shape(want, fresh)) ||
+					!slices.EqualFunc(folds(kept), folds(fresh), func(x, y *zenFold) bool { return reflect.DeepEqual(*x, *y) }) {
+					t.Fatalf("step %d: the Zen view is %q, built afresh %q", i, shape(got.es, kept), shape(want, fresh))
 				}
 			}
 			if len(tr.Entries) < 3*rowsLive {

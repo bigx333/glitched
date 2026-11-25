@@ -116,7 +116,8 @@ func (a *app) viewOf(es []entry) timelineView {
 // A timelineMemo is what a thread's timeline keeps from frame to frame:
 // the view it listed last, and the Zen view of its rows with what that
 // was built from, the rows' change and the lines open, to build it again
-// only once they change.
+// only once they change, and its turns, whose folds it keeps while their
+// rows stay the same.
 type timelineMemo struct {
 	listed timelineView
 	zen    timelineView
@@ -124,6 +125,8 @@ type timelineMemo struct {
 	first  *entry
 	n      int
 	open   uint64
+	turns  []zenTurn
+	epoch  uint64
 }
 
 func (a *app) memoOf(id api.ID) *timelineMemo {
@@ -143,9 +146,14 @@ func (a *app) viewFor(id api.ID, rs rows) timelineView {
 		return timelineView{es: es}
 	}
 	m := a.memoOf(id)
-	if m.zen.items == nil || m.change != rs.change || m.first != &es[0] || m.n != len(es) || m.open != a.zenOpened {
-		m.zen, m.change, m.first, m.n, m.open = zenView(es, a.zenOpen), rs.change, &es[0], len(es), a.zenOpened
+	if m.zen.items != nil && m.change == rs.change && m.first == &es[0] && m.n == len(es) && m.open == a.zenOpened {
+		return m.zen
 	}
+	if m.epoch != rs.epoch {
+		m.turns = nil
+	}
+	m.zen, m.turns = zenViewKeeping(es, a.zenOpen, m.turns, rs.stable)
+	m.change, m.first, m.n, m.open, m.epoch = rs.change, &es[0], len(es), a.zenOpened, rs.epoch
 	return m.zen
 }
 
@@ -247,74 +255,136 @@ func foldable(k entryKind) bool { return k == entryWork || k == entryPlan || k =
 
 // zenView folds, in each turn, the work, plans and replies of each of its
 // runs into a line, but for the run's final reply, the reply it's writing,
-// and the reply that explains a request waiting. A run with no work or plan folds nothing. The
-// folds open says are open list their rows under their lines.
+// and the reply that explains a request waiting. A run with no work or
+// plan folds nothing. The folds open says are open list their rows under
+// their lines.
 func zenView(es []entry, open map[string]bool) timelineView {
+	v, _ := zenViewKeeping(es, open, nil, 0)
+	return v
+}
+
+// A zenTurn is a turn's folds, which its rows, from start to end, decide.
+type zenTurn struct {
+	start, end int
+	folds      []*zenFold
+}
+
+// zenViewKeeping is zenView's, with the folds of the turns kept that end
+// by row stable, whose rows are the same, and the turns it folded.
+func zenViewKeeping(es []entry, open map[string]bool, kept []zenTurn, stable int) (timelineView, []zenTurn) {
 	v := timelineView{es: es, items: make([]listItem, 0, len(es)), at: make([]int, len(es))}
+	n := 0
 	for start, end := 0, 0; start < len(es); start = end {
 		end = start + 1
 		for end < len(es) && es[end].kind != entryUser {
 			end++
 		}
-		v.addTurn(start, end, open)
+		t := zenTurn{start: start, end: end}
+		if n < len(kept) && kept[n].start == start && kept[n].end == end && end <= stable {
+			t.folds = kept[n].folds
+		} else {
+			t.folds = turnFolds(es, start, end)
+		}
+		if n < len(kept) {
+			kept[n] = t
+		} else {
+			kept = append(kept, t)
+		}
+		n++
+		v.addTurn(t, open)
 	}
-	return v
+	return v, kept[:n]
 }
 
-// addTurn lists the rows from start to end, a turn's, or those before the
-// first message.
-func (v *timelineView) addTurn(start, end int, open map[string]bool) {
-	es := v.es
-	runs := map[api.ID][]int{}
+// addTurn lists a turn's rows, or those before the first message, each
+// fold's line over its first.
+func (v *timelineView) addTurn(t zenTurn, open map[string]bool) {
+	// Till listed, at holds the fold of each row, 1 on.
+	for k, f := range t.folds {
+		for _, i := range f.rows {
+			v.at[i] = k + 1
+		}
+	}
+	for i := t.start; i < t.end; i++ {
+		if k := v.at[i]; k > 0 {
+			f := t.folds[k-1]
+			switch {
+			case i == f.rows[0]:
+				v.at[i] = len(v.items)
+				v.items = append(v.items, listItem{row: -1, fold: f})
+				if !open[f.key] {
+					continue
+				}
+			case !open[f.key]:
+				v.at[i] = v.at[f.rows[0]]
+				continue
+			}
+		}
+		v.at[i] = len(v.items)
+		v.items = append(v.items, listItem{row: i})
+	}
+}
+
+// turnFolds are the folds of the runs of the turn's rows, from start to
+// end.
+func turnFolds(es []entry, start, end int) []*zenFold {
+	runs := make([]api.ID, 0, 4)
 	for i := start; i < end; i++ {
-		if foldable(es[i].kind) {
-			runs[es[i].run] = append(runs[es[i].run], i)
+		if r := es[i].run; foldable(es[i].kind) && !slices.Contains(runs, r) {
+			runs = append(runs, r)
 		}
 	}
 	// A request waiting keeps the reply that explains it, its run's last
 	// before it, and its run's line says what it waits on.
-	kept := map[int]bool{}
-	paused := map[api.ID]string{}
+	asks, kept := make([]*client.RequestEntry, 0, 4), make([]int, 0, 4)
 	for k := start; k < end; k++ {
 		r := es[k].request
 		if r == nil || r.State != api.RequestPending {
 			continue
 		}
-		paused[r.Run] = pausedFor[r.Kind != api.KindApproval]
+		asks = append(asks, r)
 		for i := k - 1; i >= start; i-- {
 			if e := es[i]; e.kind == entryAssistant && e.run == r.Run {
-				kept[i] = true
+				kept = append(kept, i)
 				break
 			} else if e.request != nil && e.request.Run == r.Run {
 				break
 			}
 		}
 	}
-	of := make([]*zenFold, end-start)
-	for r, rows := range runs {
-		final := func(i int) bool { return es[i].kind == entryAssistant && !es[i].turn.IsZero() }
-		last := rows[len(rows)-1]
-		keepLast := es[last].kind == entryAssistant
-		for _, i := range rows {
-			if final(i) {
-				keepLast = false
+	folds := make([]*zenFold, 0, len(runs))
+	for _, r := range runs {
+		// The run's last reply shows if it's being written or asks, unless
+		// the run has its final reply, which shows.
+		last, final := -1, false
+		n := 0
+		for i := start; i < end; i++ {
+			if e := es[i]; e.run == r && foldable(e.kind) {
+				last, n = i, n+1
+				final = final || e.kind == entryAssistant && !e.turn.IsZero()
 			}
 		}
-		f := &zenFold{key: "z/" + r.String() + "/" + es[start].key, paused: paused[r]}
+		keepLast := es[last].kind == entryAssistant && !final
+		f := &zenFold{key: "z/" + r.String() + "/" + es[start].key, rows: make([]int, 0, n)}
 		work := false
-		for _, i := range rows {
-			if final(i) || keepLast && i == last || kept[i] {
+		for i := start; i < end; i++ {
+			e := es[i]
+			if e.run != r || !foldable(e.kind) || e.kind == entryAssistant && !e.turn.IsZero() || keepLast && i == last || slices.Contains(kept, i) {
 				continue
 			}
 			f.rows = append(f.rows, i)
-			work = work || es[i].kind != entryAssistant
+			work = work || e.kind != entryAssistant
 		}
 		if !work {
 			continue
 		}
-		var spans [][2]time.Time
+		for _, q := range asks {
+			if q.Run == r {
+				f.paused = pausedFor[q.Kind != api.KindApproval]
+			}
+		}
+		spans := make([][2]time.Time, 0, 8)
 		for _, i := range f.rows {
-			of[i-start] = f
 			if e := es[i]; e.kind == entryWork {
 				f.steps += len(e.work)
 				f.failed += failedSteps(e.work)
@@ -325,21 +395,9 @@ func (v *timelineView) addTurn(start, end int, open map[string]bool) {
 			}
 		}
 		f.worked = covered(spans)
+		folds = append(folds, f)
 	}
-	lines := map[*zenFold]int{}
-	for i := start; i < end; i++ {
-		f := of[i-start]
-		if f != nil && i == f.rows[0] {
-			lines[f] = len(v.items)
-			v.items = append(v.items, listItem{row: -1, fold: f})
-		}
-		if f != nil && !open[f.key] {
-			v.at[i] = lines[f]
-			continue
-		}
-		v.at[i] = len(v.items)
-		v.items = append(v.items, listItem{row: i})
-	}
+	return folds
 }
 
 // covered is how long the spans cover, counting a time two of them share

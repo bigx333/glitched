@@ -326,6 +326,9 @@ type rows struct {
 	// their places as the thread grows, while epoch stays the same.
 	fixed int
 	epoch uint64
+	// stable is how many of the first rows change only as epoch does,
+	// but for the children's reports a row holds.
+	stable int
 	// change is which of any thread's rows these are: it changes with them.
 	change uint64
 }
@@ -459,6 +462,7 @@ func (c *rowsCache) derive(tr *client.Transcript) {
 		s.entries, s.first, s.last = to, src[0], src[to-1]
 	}
 
+	c.stable = s.es
 	live := newDeriving(c.es[:s.es], s.n, s.listed)
 	for _, e := range src[s.entries:] {
 		live.add(e)
