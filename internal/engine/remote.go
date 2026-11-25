@@ -20,7 +20,7 @@ import (
 // over there, as a local child's user does.
 func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, bool, error) {
 	if fresh {
-		r.Run, r.Silent, r.Slot, r.Pending, r.Taken, r.Ended = api.ID{}, false, api.RunIdle, nil, false, nil
+		r.Run, r.Silent, r.Slot, r.Pending, r.Questions, r.Taken, r.Ended = api.ID{}, false, api.RunIdle, nil, nil, false, nil
 		r.Model, r.Access, r.Turn = api.ModelRef{}, 0, nil
 	}
 	var out []RemoteReport
@@ -57,7 +57,7 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 		case api.ThreadConfigured:
 			r.Model, r.Access = b.Model, b.Access
 		case api.TurnAdmitted:
-			r.Run, r.Silent, r.Slot, r.Pending = b.Run, b.Silent, api.RunStarting, nil
+			r.Run, r.Silent, r.Slot, r.Pending, r.Questions = b.Run, b.Silent, api.RunStarting, nil, nil
 			r.Turn = &api.TurnResult{Run: b.Run, Model: r.Model, Access: r.Access}
 		case api.TurnStarted:
 			if b.Run == r.Run && r.Slot == api.RunStarting {
@@ -73,6 +73,9 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 			}
 			r.Slot = api.RunWaiting
 			r.Pending = append(slices.Clip(r.Pending), b.Request)
+			if b.Kind == api.KindQuestion {
+				r.Questions = append(slices.Clip(r.Questions), b.Request)
+			}
 			if !r.Silent {
 				p := RemoteReport{Key: b.Request, Run: b.Run, Kind: api.ReportBlocked, Ask: b.Body}
 				if b.Kind == api.KindQuestion {
@@ -112,7 +115,7 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 					add(RemoteReport{Key: b.Run, Run: b.Run, Kind: api.ReportFailed, Error: b.Error})
 				}
 			}
-			r.Slot, r.Pending = api.RunIdle, nil
+			r.Slot, r.Pending, r.Questions = api.RunIdle, nil, nil
 		case api.ResumeCancelled:
 			if r.Ended != nil && r.Ended.Run == b.Run {
 				end := *r.Ended
@@ -137,7 +140,9 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 
 // settle is r with request no longer pending: it runs again once none is.
 func (r Remote) settle(request api.ID) Remote {
-	r.Pending = slices.DeleteFunc(slices.Clone(r.Pending), func(p api.ID) bool { return p == request })
+	other := func(p api.ID) bool { return p == request }
+	r.Pending = slices.DeleteFunc(slices.Clone(r.Pending), other)
+	r.Questions = slices.DeleteFunc(slices.Clone(r.Questions), other)
 	if r.Slot == api.RunWaiting && len(r.Pending) == 0 {
 		r.Slot = api.RunRunning
 	}
