@@ -173,7 +173,7 @@ func (h *Host) Revert(id string) error {
 	}
 	copyID := in.manifest.ID
 	return h.edit(func(p *prefs) {
-		p.Disabled = slices.DeleteFunc(p.Disabled, func(s string) bool { return s == base || s == copyID })
+		p.Disabled = slices.DeleteFunc(p.Disabled, func(s string) bool { return s == base || s == copyID || s == renamedBuiltins[base] })
 	})
 }
 
