@@ -154,6 +154,7 @@ CREATE TABLE events (
 	payload BLOB NOT NULL
 ) STRICT;
 CREATE INDEX events_by_thread ON events (thread, seq);
+CREATE INDEX events_by_thread_type ON events (thread, type, seq);
 
 CREATE TABLE commands (
 	id       BLOB PRIMARY KEY,
@@ -161,6 +162,7 @@ CREATE TABLE commands (
 	seq      INTEGER NOT NULL,
 	revision INTEGER
 ) STRICT;
+CREATE INDEX commands_by_seq ON commands (seq);
 
 CREATE TABLE threads (
 	id          BLOB PRIMARY KEY,
@@ -192,6 +194,8 @@ CREATE TABLE threads (
 	origin      TEXT,
 	CHECK ((disposition = 1) = (until IS NOT NULL))
 ) STRICT;
+CREATE INDEX threads_live_updated ON threads (deleted, updated_at DESC, id);
+CREATE INDEX threads_by_parent ON threads (parent, deleted, id) WHERE parent IS NOT NULL;
 
 CREATE TABLE runs (
 	thread     BLOB NOT NULL REFERENCES threads (id),
@@ -256,7 +260,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 17
+const schemaVersion = 18
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -385,6 +389,13 @@ ALTER TABLE threads ADD COLUMN origin TEXT;
 `,
 	// Retire old outbox work without replaying changes to the worktree.
 	16: `UPDATE effects SET state = 'done' WHERE kind IN ('checkpoint.capture', 'checkpoint.drop', 'thread.revert') AND state <> 'done';`,
+	// Add covering indexes for snapshot batch reads, event-type queries, and command pruning.
+	17: `
+CREATE INDEX IF NOT EXISTS events_by_thread_type ON events (thread, type, seq);
+CREATE INDEX IF NOT EXISTS threads_live_updated ON threads (deleted, updated_at DESC, id);
+CREATE INDEX IF NOT EXISTS threads_by_parent ON threads (parent, deleted, id) WHERE parent IS NOT NULL;
+CREATE INDEX IF NOT EXISTS commands_by_seq ON commands (seq);
+`,
 }
 
 func (s *Store) migrate() error {

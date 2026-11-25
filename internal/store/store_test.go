@@ -690,10 +690,20 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 	if version < 16 {
 		sqlText = threadsV15 + sqlText
 	}
+	if version < 18 {
+		sqlText += indexesV17
+	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
 	}
 }
+
+const indexesV17 = `
+	DROP INDEX IF EXISTS events_by_thread_type;
+	DROP INDEX IF EXISTS threads_live_updated;
+	DROP INDEX IF EXISTS threads_by_parent;
+	DROP INDEX IF EXISTS commands_by_seq;
+`
 
 // The runs table up to version 6, before a run kept its model and access.
 const runsV6 = `
@@ -1622,5 +1632,155 @@ func TestACancelledWriteStops(t *testing.T) {
 	_, err = s.Submit(closing, settle, time.Now())
 	if took := time.Since(began); !errors.Is(err, context.Canceled) || took > time.Second {
 		t.Fatalf("a write cancelled waiting for the lock returned %v after %s, want context.Canceled at once", err, took)
+	}
+}
+
+func TestAVersion17DatabaseUpgradesWithIndexes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	if _, err := s.Submit(context.Background(), create(api.NewID()), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	downgrade(t, path, "", 17)
+
+	s = open(t, path)
+	s.Close()
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 18 {
+		t.Fatalf("user_version = %d (%v), want 18", version, err)
+	}
+	for _, idx := range []string{"events_by_thread_type", "threads_live_updated", "threads_by_parent", "commands_by_seq"} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?`, idx).Scan(&count); err != nil || count != 1 {
+			t.Errorf("index %s missing after upgrade (count=%d, err=%v)", idx, count, err)
+		}
+	}
+}
+
+func TestReadBulkMatchesSingleThreadLoad(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, filepath.Join(t.TempDir(), "host.db"))
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	// Thread 1: live run with queued message and pending request.
+	t1 := api.NewID()
+	if _, err := s.Submit(ctx, create(t1), now); err != nil {
+		t.Fatal(err)
+	}
+	r1 := api.NewID()
+	if _, err := s.Submit(ctx, api.Command{ID: r1, Target: t1, Body: api.MessageDispatch{Text: "first", Mode: api.StartNow}}, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: t1, Body: api.MessageDispatch{Text: "queued", Mode: api.AfterActive}}, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, t1, engine.Started{Run: r1}, now.Add(2*time.Second), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, t1, engine.Surfaced{Run: r1, Request: api.NewID(), Dedup: "d1", Kind: api.KindApproval, Body: []byte(`{"tool":"edit"}`)}, now.Add(3*time.Second), 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// Thread 2: child of t1, finished run.
+	t2 := api.NewID()
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: t2, Body: api.ThreadCreate{
+		Workspace: "w", Title: "child", Model: api.ModelRef{Provider: "fake"}, Parent: t1, Run: r1, Text: "sub",
+	}}, now.Add(4*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, t2, engine.Started{Run: t2}, now.Add(5*time.Second), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, t2, engine.Ended{Run: t2, Outcome: api.OutcomeCompleted}, now.Add(6*time.Second), 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// Thread 3: deleted thread (must be excluded from bulk Read).
+	t3 := api.NewID()
+	if _, err := s.Submit(ctx, create(t3), now.Add(7*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: t3, Body: api.ThreadDelete{}}, now.Add(8*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	bulk, err := s.Read(ctx, api.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bulk.Threads) != 2 {
+		t.Fatalf("bulk returned %d threads, want 2", len(bulk.Threads))
+	}
+	for i, th := range bulk.Threads {
+		single, err := s.Read(ctx, api.Query{Thread: th.ID})
+		if err != nil || len(single.Threads) != 1 {
+			t.Fatalf("single read %s: %v", th.ID, err)
+		}
+		if !reflect.DeepEqual(th, single.Threads[0]) {
+			t.Errorf("thread %d mismatch:\nbulk:   %+v\nsingle: %+v", i, th, single.Threads[0])
+		}
+	}
+}
+
+func TestMaintainPrunesDoneEffectsOldCommandsAndCheckpointsWAL(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+
+	for i := range 6 {
+		th := api.NewID()
+		if _, err := s.Submit(ctx, create(th), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		msg := api.NewID()
+		if _, err := s.Submit(ctx, api.Command{ID: msg, Target: th, Body: api.MessageDispatch{Text: fmt.Sprintf("m%d", i), Mode: api.StartNow}}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		e, ok, err := s.Lease(ctx, nil)
+		if err != nil || !ok {
+			t.Fatalf("lease %d: %v %v", i, ok, err)
+		}
+		if i < 4 {
+			if err := s.Complete(ctx, e.ID); err != nil {
+				t.Fatal(err)
+			}
+		} else if i == 4 {
+			if err := s.Release(ctx, e.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// i == 5 stays leased.
+	}
+
+	res, err := s.Maintain(ctx, store.MaintainOptions{KeepCommands: 5, EffectBatch: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.PrunedEffects != 2 || res.PrunedCommands != 7 {
+		t.Fatalf("first Maintain = %+v, want PrunedEffects=2 PrunedCommands=7", res)
+	}
+
+	res2, err := s.Maintain(ctx, store.MaintainOptions{KeepCommands: 5, EffectBatch: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.PrunedEffects != 2 || res2.PrunedCommands != 0 {
+		t.Fatalf("second Maintain = %+v, want PrunedEffects=2 PrunedCommands=0", res2)
+	}
+
+	// Pending and leased effects remain untouched.
+	leased, err := s.Leased(ctx)
+	if err != nil || len(leased) != 1 {
+		t.Fatalf("leased after Maintain: %+v (%v), want 1", leased, err)
+	}
+	if _, ok, err := s.Lease(ctx, nil); err != nil || !ok {
+		t.Fatalf("pending effect after Maintain: ok=%v err=%v", ok, err)
 	}
 }
