@@ -35,8 +35,8 @@ func TestBrowserMCPReachesTheAppOnTheDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	go browsermcp.Accept(ln, func(_ context.Context, tool string, args json.RawMessage) (string, error) {
-		return "the app's " + tool + " " + string(args), nil
+	go browsermcp.Accept(ln, func(_ context.Context, tool string, args json.RawMessage) (browsermcp.Reply, error) {
+		return browsermcp.Text("the app's " + tool + " " + string(args)), nil
 	})
 
 	inR, inW, _ := os.Pipe()
