@@ -76,3 +76,67 @@ func TestASettingSavedAsTheFirstEngineStartsReachesIt(t *testing.T) {
 		t.Fatalf("the engine started %d times, want once", starts)
 	}
 }
+
+// serviceEngine starts the engine a background service's glitched serve
+// -wait-lock would: once no other engine holds dir, within a few seconds.
+func serviceEngine(t *testing.T, dir string) *daemon.Daemon {
+	t.Helper()
+	// The engine lasts as long as ctx.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	late := time.AfterFunc(5*time.Second, cancel)
+	defer late.Stop()
+	d, err := daemon.StartWhenFree(ctx, func() (daemon.Config, error) {
+		return daemon.Config{Dir: dir, Hub: true, Providers: daemon.FakeProviders(fake.New(nil))}, nil
+	})
+	if err != nil {
+		t.Fatalf("the service's engine never got the directory: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+	return d
+}
+
+// With a background service for the directory, the app waits for the
+// service's engine as it restarts rather than embed one in the gap: the
+// service keeps the directory, so closing the app ends no run.
+func TestALocalEnvWaitsForTheServicesEngine(t *testing.T) {
+	dir := stateDir(t)
+	first := serviceEngine(t, dir)
+	g := &gui{wake: make(chan struct{}, 1)}
+	m := New(Config{Dir: dir, Post: g.post, Served: func(context.Context) bool { return true }})
+	if err := m.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close() })
+	online := func() bool { return m.envs[0].Status == Status(Online{}) }
+	g.until(t, "the app attached to the service's engine", func() bool { return online() && !m.machine.Embedded })
+
+	first.Close()           // the service restarts, as after a crash
+	time.Sleep(time.Second) // the service's restart delay
+	embedded, seen := false, false
+	g.post(func() { seen = true })
+	g.until(t, "what the app did meanwhile", func() bool {
+		embedded = embedded || m.embedded != nil
+		return seen
+	})
+	if embedded {
+		t.Fatal("the app embedded an engine while the service restarted")
+	}
+	serviceEngine(t, dir)
+	g.until(t, "the app attached to the restarted service", func() bool { return online() && !m.machine.Embedded })
+}
+
+// When the service's engine does not come, the app embeds one after all,
+// rather than leave the directory unserved.
+func TestALocalEnvEmbedsWhenTheServiceNeverAnswers(t *testing.T) {
+	was := serviceWait
+	serviceWait = 300 * time.Millisecond
+	t.Cleanup(func() { serviceWait = was })
+	g := &gui{wake: make(chan struct{}, 1)}
+	m := New(Config{Dir: stateDir(t), Post: g.post, Served: func(context.Context) bool { return true }})
+	if err := m.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close() })
+	g.until(t, "the engine embedded", func() bool { return m.machine.Embedded && m.envs[0].Status == Status(Online{}) })
+}

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -143,9 +142,31 @@ func (a *app) refreshService() {
 	}()
 }
 
+// servedByService is whether the background service runs dir's engine,
+// or is about to, as it restarts: the app then waits for that engine
+// rather than embed one, which would keep the directory from the service.
+func servedByService(dir string) func(context.Context) bool {
+	return func(ctx context.Context) bool {
+		st := service.Inspect(ctx, service.Options{Dir: dir})
+		return st.Installed && !st.Foreign && (st.Running || st.Starting)
+	}
+}
+
+// handOverWhenIdle hands an engine embedded here to the service installed
+// for it once no agent runs here, as a restart would end their turns.
+func (a *app) handOverWhenIdle() {
+	if !a.svcHandOver || a.localRuns() > 0 {
+		return
+	}
+	a.svcHandOver = false
+	if a.backend.Machine().Embedded {
+		a.backend.Restart()
+	}
+}
+
 // setServiceInstalled installs or uninstalls the background service. The
 // service waits for the engine lock, so once it is installed an engine
-// embedded here hands the directory over to it.
+// embedded here hands the directory over to it when no agent runs here.
 func (a *app) setServiceInstalled(install bool) {
 	if a.svcDoing != svcIdle {
 		return
@@ -159,12 +180,7 @@ func (a *app) setServiceInstalled(install bool) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		// The service runs this app's own binary, which knows serve's
-		// -wait-lock, not whichever glitched is first on PATH.
 		opts := service.Options{Dir: dir}
-		if exe, err := os.Executable(); err == nil {
-			opts.Binary = exe
-		}
 		var st service.Status
 		var err error
 		if install {
@@ -179,9 +195,9 @@ func (a *app) setServiceInstalled(install bool) {
 			if err != nil {
 				a.svcErr = err.Error()
 			}
-			if install && err == nil && a.backend.Machine().Embedded {
-				a.backend.HandOver()
-			}
+			// An agent may have started while it installed.
+			a.svcHandOver = install && err == nil
+			a.handOverWhenIdle()
 			a.backend.Inspect()
 		})
 	}()
@@ -206,6 +222,10 @@ func (a *app) serviceRow(c *ui.Context) {
 		desc = st.Detail
 	case st.Foreign:
 		desc = fmt.Sprintf("Installed for another state directory, %s. Manage it from there.", st.Dir)
+	case st.Installed && a.svcHandOver:
+		desc = "Installed. The service takes the engine over once the agents running here finish."
+	case st.Installed && (st.Running || st.Starting) && a.backend.Machine().Embedded:
+		desc = "Installed, but the engine runs inside this app, so quitting it ends its agents' turns. Restart the engine to hand it to the service."
 	case st.Installed:
 		desc = serviceHealth(st)
 	}

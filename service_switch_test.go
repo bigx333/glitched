@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
@@ -13,6 +14,46 @@ import (
 	"glitched/internal/service"
 	"glitched/internal/transport"
 )
+
+// serviceEngine starts, after delay, what the service manager runs: the
+// service's glitched serve -wait-lock, which waits for dir's lock. served
+// is its engine once it serves, else nil.
+func serviceEngine(t *testing.T, dir string, delay time.Duration) (served func() *daemon.Daemon) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan *daemon.Daemon, 1)
+	go func() {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+		}
+		d, _ := daemon.StartWhenFree(ctx, func() (daemon.Config, error) {
+			return daemon.Config{Dir: dir, Hub: true, Providers: daemon.FakeProviders(fake.New(nil))}, nil
+		})
+		ch <- d
+	}()
+	var d *daemon.Daemon
+	got := false
+	t.Cleanup(func() {
+		cancel()
+		if !got {
+			d = <-ch
+		}
+		if d != nil {
+			d.Close()
+		}
+	})
+	return func() *daemon.Daemon {
+		if !got {
+			select {
+			case d = <-ch:
+				got = true
+			default:
+			}
+		}
+		return d
+	}
+}
 
 // serviceStub puts a fake launchctl and systemctl first on PATH, under a
 // home of the test's, so the Background service switch never reaches the
@@ -109,6 +150,7 @@ func TestTheBackgroundServiceSwitchWaitsForTheFirstRead(t *testing.T) {
 	_, calls := serviceStub(t)
 	dir := tempDir(t)
 	installService(t, dir)
+	engine(t, daemon.Config{Dir: dir}, fake.New(nil))
 	release := hold(t)
 	calls()
 
@@ -167,30 +209,8 @@ func TestTheBackgroundServiceTakesOverTheAppsEngine(t *testing.T) {
 	h.click("This machine")
 	h.until("the engine embedded here", func() bool { return h.a.backend.Machine().Embedded && h.tt.HasText("Online") })
 
-	// What the service manager starts as the switch turns on: the service's
-	// glitched serve -wait-lock.
-	ctx, cancel := context.WithCancel(context.Background())
-	served := make(chan *daemon.Daemon, 1)
-	go func() {
-		d, err := daemon.StartWhenFree(ctx, func() (daemon.Config, error) {
-			return daemon.Config{Dir: dir, Hub: true, Providers: daemon.FakeProviders(fake.New(nil))}, nil
-		})
-		if err != nil {
-			served <- nil
-			return
-		}
-		served <- d
-	}()
-	var svc *daemon.Daemon
-	t.Cleanup(func() {
-		cancel()
-		if svc == nil {
-			svc = <-served
-		}
-		if svc != nil {
-			svc.Close()
-		}
-	})
+	// What the service manager starts as the switch turns on.
+	served := serviceEngine(t, dir, 0)
 
 	h.reveal("Enable background service")
 	h.click("Enable background service")
@@ -200,13 +220,8 @@ func TestTheBackgroundServiceTakesOverTheAppsEngine(t *testing.T) {
 	if log := calls(); !strings.Contains(log, "enable glitched.service") && !strings.Contains(log, "bootstrap") {
 		t.Errorf("the switch called %q, want the service enabled", log)
 	}
-	select {
-	case svc = <-served:
-	default:
+	if served() == nil {
 		t.Fatal("the app attached to an engine other than the service's")
-	}
-	if svc == nil {
-		t.Fatal("the service's engine failed to start")
 	}
 
 	h.a.backend.Close()
@@ -252,4 +267,87 @@ func TestTheBackgroundServiceSwitchWaitsForRunningAgents(t *testing.T) {
 	if _, err := os.Stat(unit); err != nil {
 		t.Errorf("the switch removed the service under a running agent: %v", err)
 	}
+}
+
+// With the service installed and starting, as after a restart, the app
+// waits for the service's engine rather than embed one, which would keep
+// the directory from the service: quitting the app then ends no turn.
+func TestTheAppWaitsForTheBackgroundServicesEngine(t *testing.T) {
+	_, _ = serviceStub(t)
+	dir := tempDir(t)
+	installService(t, dir)
+	served := serviceEngine(t, dir, time.Second)
+
+	h := start(t, dir)
+	if h.a.backend.Machine().Embedded {
+		t.Fatal("the app embedded an engine while the service started")
+	}
+	if served() == nil {
+		t.Fatal("the app attached to an engine other than the service's")
+	}
+}
+
+// An agent started while the switch installs the service keeps its engine:
+// the app hands the engine over once the agent's turn ends, and says so
+// meanwhile.
+func TestTheBackgroundServiceWaitsForAnAgentStartedWhileItInstalls(t *testing.T) {
+	_, _ = serviceStub(t)
+	dir := tempDir(t)
+	h := startWith(t, dir, func(c *daemon.Config) { c.Providers = daemon.FakeProviders(fake.New(fake.Turn(true))) })
+	ticking(t, h)
+	h.click("Settings")
+	h.click("This machine")
+	h.until("the engine embedded here", func() bool { return h.a.backend.Machine().Embedded && h.tt.HasText("Online") })
+	h.reveal("Enable background service")
+	h.until("the first read", func() bool { return !h.a.svcRead.IsZero() && !h.a.svcLoading })
+
+	release := hold(t) // the install's last read waits
+	h.click("Enable background service")
+	h.until("the switch at work", func() bool { return h.a.svcDoing == svcInstalling })
+	th := api.NewID()
+	ep := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
+	defer ep.Close()
+	for _, b := range []api.Intent{
+		api.ThreadCreate{Workspace: "/work/t3code", Title: "Busy", Model: fakeModel},
+		api.MessageDispatch{Text: "go", Mode: api.StartNow},
+	} {
+		if _, err := ep.Submit(context.Background(), api.Command{ID: api.NewID(), Target: th, Body: b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.until("the agent at work", func() bool { return h.a.localRuns() > 0 })
+	served := serviceEngine(t, dir, 0)
+	release()
+	h.until("the install", func() bool { return h.a.svcDoing == svcIdle })
+	if !h.a.backend.Machine().Embedded || h.a.localRuns() == 0 {
+		t.Fatalf("the install took the engine from under the running agent: embedded %v, runs %d", h.a.backend.Machine().Embedded, h.a.localRuns())
+	}
+	h.until("the row to say the hand-over waits", func() bool {
+		return h.tt.HasText("Installed. The service takes the engine over once the agents running here finish.")
+	})
+
+	if _, err := ep.Submit(context.Background(), api.Command{ID: api.NewID(), Target: th, Body: api.TurnInterrupt{}}); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the app attached to the service's engine", func() bool {
+		return !h.a.backend.Machine().Embedded && h.tt.HasText("Online") && served() != nil
+	})
+}
+
+// A service installed while the app runs its own engine, as from the CLI,
+// waits for the app: the row says the app has the engine, not that the
+// service runs it.
+func TestTheBackgroundServiceRowSaysWhenTheAppHasTheEngine(t *testing.T) {
+	_, _ = serviceStub(t)
+	dir := tempDir(t)
+	h := start(t, dir)
+	ticking(t, h)
+	h.until("the engine embedded here", func() bool { return h.a.backend.Machine().Embedded })
+	installService(t, dir)
+	h.click("Settings")
+	h.click("This machine")
+	h.reveal("Enable background service")
+	h.until("the row to say the app has the engine", func() bool {
+		return h.tt.HasText("Installed, but the engine runs inside this app, so quitting it ends its agents' turns. Restart the engine to hand it to the service.")
+	})
 }

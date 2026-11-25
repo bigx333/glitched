@@ -668,6 +668,9 @@ type app struct {
 	svcDoing   svcSwitch
 	svcSets    int // switches of the service, so a read begun before one is dropped
 	svcErr     string
+	// svcHandOver: the switch installed the service, so the engine
+	// embedded here goes to it once no agent runs here.
+	svcHandOver bool
 
 	glassOffset ui.Point
 	checkUntil  time.Time
@@ -851,7 +854,7 @@ func newApp(dir string, engine func(*daemon.Config), detect func(context.Context
 			fn()
 			a.changed()
 		})
-	}, Asked: a.notifyAsked, Engine: engine, Detect: detect})
+	}, Asked: a.notifyAsked, Engine: engine, Detect: detect, Served: servedByService(dir)})
 	return a
 }
 
@@ -968,6 +971,7 @@ func (a *app) view(c *ui.Context) {
 	a.pruneDiffs()
 	a.pruneThreadState()
 	a.paceContinues()
+	a.handOverWhenIdle()
 	// A steer to a server removed since never lands.
 	maps.DeleteFunc(a.steers, func(_ api.ID, s steer) bool { return !slices.Contains(a.backend.Envs(), s.env) })
 	// Jokes over are gone, whether or not their rows show: a row in a

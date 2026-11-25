@@ -158,20 +158,9 @@ func (m *Manager) RemoveToken(label string) error {
 // old engine has released the directory. Called again before the new
 // engine starts, it restarts that one too, as it may have read
 // engine.json before a change. It does nothing to an engine another
-// process runs.
-func (m *Manager) Restart() { m.restart(0) }
-
-// handOverTimeout is how long HandOver waits for another process's engine
-// before it embeds one again.
-const handOverTimeout = 15 * time.Second
-
-// HandOver stops the engine embedded here, as Restart does, for the
-// background service's engine, which waits for its lock, to take the
-// directory, and attaches to that engine. When none answers within
-// handOverTimeout, it embeds one again.
-func (m *Manager) HandOver() { m.restart(handOverTimeout) }
-
-func (m *Manager) restart(attachFor time.Duration) {
+// process runs. With a background service for the directory (Served), the
+// service's engine takes the directory over instead.
+func (m *Manager) Restart() {
 	switch {
 	case m.closed:
 		return
@@ -187,9 +176,6 @@ func (m *Manager) restart(attachFor time.Duration) {
 	e.unlink()
 	m.down(e, Connecting{})
 	m.local = m.newLocal()
-	if attachFor > 0 {
-		m.local.attachUntil = time.Now().Add(attachFor)
-	}
 	m.wg.Go(func() {
 		<-old.done
 		if old.err != nil {
@@ -200,7 +186,7 @@ func (m *Manager) restart(attachFor time.Duration) {
 }
 
 func (m *Manager) newLocal() *local {
-	l := &local{dir: m.cfg.Dir, engine: m.cfg.Engine, done: make(chan struct{})}
+	l := &local{dir: m.cfg.Dir, engine: m.cfg.Engine, served: m.cfg.Served, done: make(chan struct{})}
 	l.hosted = func(d *daemon.Daemon) {
 		m.post(m.ctx, func() {
 			if m.local != l {
