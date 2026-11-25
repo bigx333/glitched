@@ -571,6 +571,20 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	if len(cfg.Listen) > 0 || cfg.Tailnet {
 		background.Go(func() { g.watch(ctx) })
 	}
+	background.Go(func() {
+		t := time.NewTicker(10 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if _, err := st.Maintain(ctx, store.MaintainOptions{}); err != nil && !errors.Is(err, context.Canceled) {
+					slog.Warn("store maintenance", "err", err)
+				}
+			}
+		}
+	})
 	go func() {
 		serving.Wait()
 		stop()
