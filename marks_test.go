@@ -319,24 +319,93 @@ func hashOf(name string) projectMark {
 	return projectMark{name, projectIcons[n%8], projectColors[n/7%7]}
 }
 
+func TestUnknownMarksTakeUpOnlyTheIconsTheyAreDrawnWith(t *testing.T) {
+	// aaa and c hash to phone. The seven this version can't redraw are
+	// drawn on their hash icons: a, i and q global, d and l code, k and s
+	// phone. Nine are shown, but only five icons are taken up.
+	stored := []projectMark{{"aaa", "phone", "#0ea5e9"}, {"c", "phone", "#14b8a6"}}
+	shown := []string{"aaa", "c"}
+	for _, n := range []string{"a", "i", "q", "d", "l", "k", "s"} {
+		stored = append(stored, projectMark{n, "rocket", "#eab308"})
+		shown = append(shown, n)
+	}
+	out, changed := settleMarks(stored, shown)
+	if !changed || !slices.Equal(out[2:], stored[2:]) || out[0] != stored[0] {
+		t.Fatalf("got %v, %v", out, changed)
+	}
+	if c := out[1]; slices.Contains([]string{"phone", "global", "code"}, c.Icon) {
+		t.Errorf("c is %v; want an icon of its own", c)
+	}
+	steady(t, out, shown)
+}
+
+// drawnHere is the mark m is drawn with, worked out here and not by
+// marksByName: its own icon and color where this version knows them.
+func drawnHere(m projectMark) (d projectMark, frozen bool) {
+	d = hashOf(m.Name)
+	if slices.Contains(projectIcons, m.Icon) {
+		d.Icon = m.Icon
+	} else {
+		frozen = true
+	}
+	if slices.Contains(projectColors, m.Color) {
+		d.Color = m.Color
+	} else {
+		frozen = true
+	}
+	return d, frozen
+}
+
+func TestFiftyOneProjectsShareNoPair(t *testing.T) {
+	// Fifty names that don't hash to terminal, then one that does.
+	var shown []string
+	for i := 0; len(shown) < 50; i++ {
+		if n := fmt.Sprintf("a%03d", i); hashOf(n).Icon != "terminal" {
+			shown = append(shown, n)
+		}
+	}
+	z := "z005"
+	if hashOf(z).Icon != "terminal" {
+		t.Fatalf("%s hashes to %s", z, hashOf(z).Icon)
+	}
+	shown = append(shown, z)
+	out, _ := settleMarks(nil, shown)
+	distinctPairs(t, out, shown)
+	if m := markOf(t, out, z); m != hashOf(z) {
+		t.Errorf("%s is %v; want %v", z, m, hashOf(z))
+	}
+	steady(t, out, shown)
+}
+
 func TestMarksSettleForAnySetOfProjects(t *testing.T) {
 	r := rand.New(rand.NewPCG(281, 2026))
-	pool := names(90)
+	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_. "
+	var pool []string
+	for len(pool) < 400 {
+		b := make([]byte, 1+r.IntN(14))
+		for i := range b {
+			b[i] = chars[r.IntN(len(chars))]
+		}
+		if n := string(b); !slices.Contains(pool, n) {
+			pool = append(pool, n)
+		}
+	}
 	randomNames := func(n int) []string {
 		p := slices.Clone(pool)
 		r.Shuffle(len(p), func(i, j int) { p[i], p[j] = p[j], p[i] })
 		return p[:n]
 	}
+	sizes := []int{11, 61, 221}
 	for iter := range 2000 {
-		shown := randomNames(r.IntN(71))
+		shown := randomNames(r.IntN(sizes[iter%3]))
 		var stored []projectMark
 		if r.IntN(3) > 0 {
-			stored, _ = settleMarks(nil, randomNames(r.IntN(30)))
-			for range r.IntN(3) {
+			stored, _ = settleMarks(nil, randomNames(r.IntN(len(shown)+2)))
+			for range r.IntN(4) {
 				stored = append(stored, projectMark{pool[r.IntN(len(pool))], projectIcons[r.IntN(8)], projectColors[r.IntN(7)]})
 			}
 			for i := range stored {
-				switch r.IntN(12) {
+				switch r.IntN(15) {
 				case 0:
 					stored[i].Icon = "rocket"
 				case 1:
@@ -351,51 +420,83 @@ func TestMarksSettleForAnySetOfProjects(t *testing.T) {
 		}
 		hasFrozen := false
 		for _, m := range stored {
-			if slices.Contains(shown, m.Name) && frozen(m) {
+			if _, f := drawnHere(m); f && slices.Contains(shown, m.Name) {
 				hasFrozen = true
 			}
 		}
-		by := marksByName(out)
+		drawn := map[string]projectMark{}
+		for _, m := range out {
+			if _, ok := drawn[m.Name]; !ok {
+				drawn[m.Name], _ = drawnHere(m)
+			}
+		}
 
-		if len(shown) <= 8 && !hasFrozen {
-			icons := map[string]bool{}
-			for _, n := range shown {
-				icons[by[n].Icon] = true
+		// P1 and P2: no two share an icon while icons go round, nor a pair
+		// while pairs do. Those with marks this version doesn't know take up
+		// what they're drawn with, and the rest share none among them.
+		var thawed []projectMark
+		frozenIcons, frozenPairs := map[string]bool{}, map[[2]string]bool{}
+		for _, n := range shown {
+			i := slices.IndexFunc(out, func(m projectMark) bool { return m.Name == n })
+			if i < 0 {
+				t.Fatalf("%d: no mark for %q", iter, n)
 			}
-			if len(icons) != len(shown) {
-				t.Fatalf("%d: %v drawn on %d icons", iter, shown, len(icons))
+			d, f := drawnHere(out[i])
+			if !f {
+				thawed = append(thawed, d)
+				continue
 			}
+			frozenIcons[d.Icon] = true
+			frozenPairs[[2]string{d.Icon, d.Color}] = true
 		}
+		icons, pairs := map[string]bool{}, map[[2]string]bool{}
+		for _, d := range thawed {
+			icons[d.Icon] = true
+			pairs[[2]string{d.Icon, d.Color}] = true
+		}
+		if len(thawed)+len(frozenIcons) <= 8 && len(icons) != len(thawed) {
+			t.Fatalf("%d: %d names drawn on %d icons", iter, len(thawed), len(icons))
+		}
+		if len(thawed)+len(frozenPairs) <= 56 && len(pairs) != len(thawed) {
+			t.Fatalf("%d: %d names drawn with %d pairs", iter, len(thawed), len(pairs))
+		}
+		if !hasFrozen && len(shown) <= 8 && len(icons) != len(shown) {
+			t.Fatalf("%d: %d names drawn on %d icons", iter, len(shown), len(icons))
+		}
+		// P3: settling its own output changes nothing.
 		if again, changed := settleMarks(out, shown); changed || !slices.Equal(again, out) {
-			t.Fatalf("%d: settling %v again changed it to %v", iter, out, again)
+			t.Fatalf("%d: settling %d names again changed them", iter, len(shown))
 		}
-		p := slices.Clone(shown)
-		r.Shuffle(len(p), func(i, j int) { p[i], p[j] = p[j], p[i] })
-		if other, _ := settleMarks(stored, p); !slices.Equal(other, out) {
-			t.Fatalf("%d: the order of %v changed the marks", iter, shown)
+
+		// P4: new names move none of those seen before.
+		more := slices.Clone(shown)
+		for _, n := range randomNames(r.IntN(12)) {
+			if !slices.ContainsFunc(out, func(m projectMark) bool { return m.Name == n }) {
+				more = append(more, n)
+			}
 		}
-		if len(stored) == 0 {
+		if grown, _ := settleMarks(out, more); !slices.Equal(grown[:len(out)], out) {
+			t.Fatalf("%d: adding %d names to %d moved some", iter, len(more)-len(shown), len(shown))
+		}
+
+		// P5: on upgrade, a name alone on its hash icon keeps its hash mark.
+		if len(stored) == 0 && len(shown) <= 56 {
 			hashed := map[string]int{}
 			for _, n := range shown {
 				hashed[hashOf(n).Icon]++
 			}
 			for _, n := range shown {
-				if want := hashOf(n); hashed[want.Icon] == 1 && by[n] != want {
-					t.Fatalf("%d: %s alone on its hash icon is %v; want %v", iter, n, by[n], want)
+				if want := hashOf(n); hashed[want.Icon] == 1 && drawn[n] != want {
+					t.Fatalf("%d: %q alone on its hash icon is %v; want %v", iter, n, drawn[n], want)
 				}
 			}
 		}
 
-		// New names move none of those seen before.
-		more := slices.Clone(shown)
-		for _, n := range randomNames(r.IntN(10)) {
-			if !slices.ContainsFunc(out, func(m projectMark) bool { return m.Name == n }) {
-				more = append(more, n)
-			}
-		}
-		grown, _ := settleMarks(out, more)
-		if !slices.Equal(grown[:len(out)], out) {
-			t.Fatalf("%d: adding names to %v moved %v", iter, out, grown[:len(out)])
+		// P6: the same, whatever the order of shown.
+		p := slices.Clone(shown)
+		r.Shuffle(len(p), func(i, j int) { p[i], p[j] = p[j], p[i] })
+		if other, _ := settleMarks(stored, p); !slices.Equal(other, out) {
+			t.Fatalf("%d: the order of %d names changed the marks", iter, len(shown))
 		}
 	}
 }

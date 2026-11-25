@@ -3,6 +3,7 @@ package main
 import (
 	"hash/fnv"
 	"slices"
+	"strings"
 )
 
 // projectMark is a project's mark as marks.json keeps it, in the order the
@@ -53,11 +54,11 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 	}
 
 	type pick struct {
-		at          int // the entry in out; -1 for a new name
-		name        string
-		icon, color int // the stored ones of a re-picker; -1 for a new name
-		hashIcon    int
-		hashColor   int
+		at       int // the entry in out; -1 for a new name
+		name     string
+		color    int // the one to start from: stored, or the hash one
+		hashIcon int
+		claim    bool
 	}
 	iconUses := make([]int, len(projectIcons))
 	colorUses := make([]int, len(projectColors))
@@ -68,23 +69,48 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 		pairs[[2]int{icon, color}] = true
 	}
 
-	// The names seen before keep their icons, the first seen of two that
-	// share one keeping it, and the rest pick again. One this version can't
-	// rewrite holds what it's drawn with, shared or not.
-	var picks []pick
+	// The names seen before keep their marks, the first seen of two that
+	// clash keeping it, and the rest pick again. They clash on an icon while
+	// icons go round, on the pair while pairs do, and past that never. One
+	// this version can't rewrite holds what it's drawn with, shared or not,
+	// and takes up only that.
+	room := len(want)
+	frozenIcons, frozenPairs := map[int]bool{}, map[[2]int]bool{}
 	seen := map[string]bool{}
+	for _, m := range out {
+		if want[m.Name] && !seen[m.Name] {
+			seen[m.Name] = true
+			if frozen(m) {
+				icon, color := drawn(m)
+				frozenIcons[icon] = true
+				frozenPairs[[2]int{icon, color}] = true
+				room--
+			}
+		}
+	}
+	clash := func(icon, color int) bool {
+		switch {
+		case room+len(frozenIcons) <= len(projectIcons):
+			return iconUses[icon] > 0
+		case room+len(frozenPairs) <= len(projectIcons)*len(projectColors):
+			return pairs[[2]int{icon, color}]
+		}
+		return false
+	}
+	var picks []pick
+	clear(seen)
 	for i, m := range out {
 		if !want[m.Name] || seen[m.Name] {
 			continue
 		}
 		seen[m.Name] = true
 		icon, color := drawn(m)
-		if iconUses[icon] == 0 || frozen(m) {
+		if !clash(icon, color) || frozen(m) {
 			hold(icon, color)
 			continue
 		}
-		hi, hc := hashMark(m.Name)
-		picks = append(picks, pick{i, m.Name, icon, color, hi, hc})
+		hi, _ := hashMark(m.Name)
+		picks = append(picks, pick{at: i, name: m.Name, color: color, hashIcon: hi})
 	}
 	var fresh []string
 	for n := range want {
@@ -95,30 +121,21 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 	slices.Sort(fresh)
 	for _, n := range fresh {
 		hi, hc := hashMark(n)
-		picks = append(picks, pick{-1, n, -1, -1, hi, hc})
+		picks = append(picks, pick{at: -1, name: n, color: hc, hashIcon: hi})
 	}
 
-	hashes := make([]int, len(picks))
+	// The first of those to hash to an icon no one holds takes it, before
+	// any that must move does, so that a name alone on its hash icon gets it.
+	claimed := map[int]bool{}
 	for k, p := range picks {
-		hashes[k] = p.hashIcon
-	}
-	hasPair := func(icon int) bool {
-		for c := range projectColors {
-			if !pairs[[2]int{icon, c}] {
-				return true
-			}
+		if iconUses[p.hashIcon] == 0 && !claimed[p.hashIcon] {
+			claimed[p.hashIcon] = true
+			picks[k].claim = true
 		}
-		return false
 	}
-	for k, p := range picks {
-		icon := pickIcon(p.hashIcon, p.icon, hashes[k+1:], iconUses, hasPair)
-		start := p.hashColor
-		if p.at >= 0 {
-			start = p.color
-		}
-		color := pickColor(icon, start, colorUses, pairs)
+	settle := func(p pick, icon int) {
+		color := pickColor(icon, p.color, colorUses, pairs)
 		hold(icon, color)
-
 		m := projectMark{p.name, projectIcons[icon], projectColors[color]}
 		switch {
 		case p.at < 0:
@@ -129,37 +146,35 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 			changed = true
 		}
 	}
+	for _, p := range picks {
+		if p.claim {
+			settle(p, p.hashIcon)
+		}
+	}
+	for _, p := range picks {
+		if !p.claim {
+			settle(p, pickIcon(p.hashIcon, iconUses))
+		}
+	}
+	// New names were appended claims first; put them in name order.
+	slices.SortStableFunc(out[len(stored):], func(a, b projectMark) int {
+		return strings.Compare(a.Name, b.Name)
+	})
 	return out, changed
 }
 
-// pickIcon is the icon for a name that hashes to hash and isn't keeping
-// its own: its hash icon while no one holds it; else the first free one
-// from there that no later name hashes to, while that is free. Failing
-// that, a re-picker keeps stored while it has a color free with it, and
-// the rest take the least used of the icons no later name wants, so that
-// a name alone on its hash icon always gets it.
-func pickIcon(hash, stored int, later, uses []int, hasPair func(int) bool) int {
-	if uses[hash] == 0 {
-		return hash
-	}
-	wanted := map[int]bool{}
-	for _, h := range later {
-		if uses[h] == 0 {
-			wanted[h] = true
-		}
-	}
+// pickIcon is the icon for a name that must move off hash: the first free
+// one from there; else the least used, the first from hash of those used
+// as little. While pairs go round, that one has a color free with it.
+func pickIcon(hash int, uses []int) int {
 	n := len(uses)
+	least := hash
 	for d := range n {
-		if i := (hash + d) % n; uses[i] == 0 && !wanted[i] {
+		i := (hash + d) % n
+		if uses[i] == 0 {
 			return i
 		}
-	}
-	if stored >= 0 && hasPair(stored) {
-		return stored
-	}
-	least := hash // held, so not wanted
-	for d := range n {
-		if i := (hash + d) % n; !wanted[i] && uses[i] < uses[least] {
+		if uses[i] < uses[least] {
 			least = i
 		}
 	}
