@@ -722,6 +722,9 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			}
 			e := newInput(c.Key(key(n, i)+"#input"), &ctl.text)
 			e.Placeholder(n.Placeholder).Disabled(n.Disabled).Label(n.Label)
+			if n.Focus {
+				e.Focus()
+			}
 			if n.Style == "bare" {
 				e.AutoFocus().Grow(1).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).Padding(0).FontSize(15)
 			}

@@ -24,7 +24,7 @@ export function place({ state, items }) {
       padding: [4, 7],
       gap: 5,
       children: [
-        ...(context.running ? [{ type: "spinner", id: "spin", width: 13, height: 13 }] : [{ type: "icon", id: "icon", name: icon, fontSize: 14, color: tone }]),
+        ...(context.running ? [{ type: "icon", id: "icon", name: "refresh", fontSize: 14, color: tone }] : [{ type: "icon", id: "icon", name: icon, fontSize: 14, color: tone }]),
         { type: "text", id: "label", text: context.running ? "Updating" : "Updates", fontSize: 12.5, weight: 550, singleLine: true },
         ...(updates.length > 1 ? [{ type: "badge", id: "count", text: String(updates.length), style: "count" }] : []),
       ],

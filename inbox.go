@@ -274,12 +274,10 @@ func (a *app) threadsNav(c *ui.Context) {
 				return
 			}
 			ctx := func(plugins.ThreadRecord) any { return a.cliUpdatesState() }
-			if !a.pluginComponent(c, "sidebar.footer.updates", nil, componentCopy{
+			a.pluginComponent(c, "sidebar.footer.updates", nil, componentCopy{
 				key: "footer", box: func() ui.Element { return ui.Row(c).Shrink(0) }, context: ctx,
 				native: func(*widget.Node) { a.cliUpdatesButton(c) },
-			}) {
-				a.cliUpdatesButton(c)
-			}
+			})
 		})
 	})
 }

@@ -455,12 +455,10 @@ func (a *app) quoteBarAt(c *ui.Context, t thread, at ui.Element, spot quoteSpot)
 			}
 			box := func() ui.Element { return ui.Row(c).Shrink(0) }
 			ctx := func(r plugins.ThreadRecord) any { return selectionActions{Thread: r} }
-			if !a.pluginComponent(c, "selection.actions", &t, componentCopy{
+			a.pluginComponent(c, "selection.actions", &t, componentCopy{
 				key: composerKey(t) + "/selection", box: box, context: ctx,
 				native: func(*widget.Node) { a.selectionActionButtons(c) },
-			}) {
-				a.selectionActionButtons(c)
-			}
+			})
 		})
 		if bar.OverlayShortcut(0, ui.KeyEscape) || bar.PressedOutside() {
 			a.closeQuote()

@@ -450,6 +450,8 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		}
 		a.notify(mygo.NotificationOptions{ID: nid, Title: args.Title, Body: args.Body, Subtitle: name, Group: "plugins"})
 		return nil, nil
+	case "browser.navigate", "browser.back", "browser.forward", "browser.reload", "browser.stop", "browser.newTab", "browser.closeTab", "browser.activateTab":
+		return a.browserEffect(e)
 	case "cliupdates.update":
 		return a.cliUpdateEffect(e.Args)
 	case "cliupdates.updateAll":

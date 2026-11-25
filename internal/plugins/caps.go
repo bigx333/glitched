@@ -89,6 +89,14 @@ var Effects = map[string]string{
 	"cliupdates.update":      "providers:update",
 	"cliupdates.updateAll":   "providers:update",
 	"cliupdates.check":       "providers:update",
+	"browser.navigate":       "ui.place",
+	"browser.back":           "ui.place",
+	"browser.forward":        "ui.place",
+	"browser.reload":         "ui.place",
+	"browser.stop":           "ui.place",
+	"browser.newTab":         "ui.place",
+	"browser.closeTab":       "ui.place",
+	"browser.activateTab":    "ui.place",
 }
 
 // Effect is something a plugin asks the app to do, which only the app

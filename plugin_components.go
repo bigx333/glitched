@@ -361,6 +361,8 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 		cp.native(n)
 	case "terminal.body":
 		cp.native(n)
+	case "browser.webview":
+		cp.native(n)
 	case "composer.send.button":
 		a.sendButton(c, *t, false)
 	case "composer.access.picker":

@@ -4,10 +4,10 @@ export function place({ items }) {
   return items.map(({ context }) => {
     if (context.part === "body") return { type: "native", id: "body", name: "terminal.body" };
     return { type: "row", height: 30, padding: [4, 8, 4, 12], gap: 6, align: "center", children: [
-      { type: "icon", id: "icon", name: "terminal", fontSize: 12, color: "$muted" },
-      { type: "text", id: "title", text: context.title || "zsh", fontSize: 11.5, color: "$muted", singleLine: true },
+      { type: "icon", id: "icon", name: "terminal", fontSize: 12, color: "$text.muted" },
+      { type: "text", id: "title", text: context.title || "zsh", fontSize: 11.5, color: "$text.muted", singleLine: true },
       { type: "row", grow: true },
-      { type: "button", id: "close", style: "ghost", icon: "x", compact: true, tooltip: "Close terminal", onClick: "close" },
+      { type: "button", id: "close", style: "ghost", icon: "close", compact: true, tooltip: "Close terminal", onClick: "close" },
     ] };
   });
 }

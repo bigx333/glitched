@@ -81,6 +81,16 @@ globalThis.glitched = Object.freeze({
   }),
   palette: Object.freeze({ close: (palette) => app("palette.close", { palette: palette ?? "" }) }),
   sidebar: Object.freeze({ more: (key) => app("sidebar.more", { key }) }),
+  browser: Object.freeze({
+    navigate: (tab, url) => app("browser.navigate", { tab, url }),
+    back: (tab) => app("browser.back", { tab }),
+    forward: (tab) => app("browser.forward", { tab }),
+    reload: (tab) => app("browser.reload", { tab }),
+    stop: (tab) => app("browser.stop", { tab }),
+    newTab: (url) => app("browser.newTab", { url: url ?? "" }),
+    closeTab: (tab) => app("browser.closeTab", { tab }),
+    activateTab: (tab) => app("browser.activateTab", { tab }),
+  }),
   cliUpdates: Object.freeze({
     update: (machine, provider, whenIdle) => app("cliupdates.update", { machine, provider, whenIdle: whenIdle ?? false }),
     updateAll: () => app("cliupdates.updateAll"),

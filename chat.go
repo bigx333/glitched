@@ -2205,18 +2205,14 @@ func (a *app) terminal(c *ui.Context, t thread, workspace string) {
 				return terminalPanel{Thread: r, Part: part, Title: title, Error: err != nil}
 			}
 		}
-		if !a.pluginComponent(c, "thread.panel.terminal", &t, componentCopy{
+		a.pluginComponent(c, "thread.panel.terminal", &t, componentCopy{
 			key: key + "/header", box: func() ui.Element { return ui.Row(c).Shrink(1) }, context: ctx("header"),
 			native: func(*widget.Node) { a.terminalHeader(c, title) },
-		}) {
-			a.terminalHeader(c, title)
-		}
-		if !a.pluginComponent(c, "thread.panel.terminal", &t, componentCopy{
+		})
+		a.pluginComponent(c, "thread.panel.terminal", &t, componentCopy{
 			key: key + "/body", box: func() ui.Element { return ui.Row(c).Grow(1).Shrink(1).Basis(0) }, context: ctx("body"),
 			native: func(*widget.Node) { a.terminalBody(c, s, err) },
-		}) {
-			a.terminalBody(c, s, err)
-		}
+		})
 	})
 }
 
