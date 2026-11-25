@@ -320,8 +320,11 @@ func sceneHarness(t *testing.T, name string) *harness {
 		for _, s := range []string{"Markdown table column alignment", "SIP re-INVITE handling", "Ship the sidebar sort", "Write the tests", "Run them", "Snoozed until tomorrow", "Settled long ago"} {
 			h.a.backend.MarkRead(h.thread(s).Thread)
 		}
-		if os.Getenv("OPEN") != "" {
-			h.a.sectionClosed[catSnoozed], h.a.sectionClosed[catSettled] = false, false
+		// OPEN opens Snoozed and Settled; OPEN=snoozed or settled, that one.
+		if o := os.Getenv("OPEN"); o != "" {
+			one := o == "snoozed" || o == "settled"
+			h.a.sectionClosed[catSnoozed] = one && o != "snoozed"
+			h.a.sectionClosed[catSettled] = one && o != "settled"
 		}
 		h.until("the sections and the thread shown", func() bool {
 			return h.tt.HasText("Snoozed") && h.tt.HasText("Align them.")
