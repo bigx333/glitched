@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"html"
+	"net/netip"
+	"net/url"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -53,24 +55,27 @@ func normalizeURL(typed string) string {
 
 // isLocal reports whether an address is on this machine or the local
 // network.
-func isLocal(url string) bool {
-	host := url
-	if i := strings.Index(host, "://"); i >= 0 {
-		host = host[i+3:]
+func isLocal(raw string) bool {
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
 	}
-	if i := strings.IndexAny(host, "/?#"); i >= 0 {
-		host = host[:i]
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
 	}
-	if i := strings.LastIndex(host, ":"); i >= 0 && !strings.Contains(host[i:], "]") {
-		host = host[:i]
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "" {
+		return false
 	}
-	switch {
-	case host == "localhost", strings.HasSuffix(host, ".localhost"), strings.HasSuffix(host, ".local"),
-		host == "0.0.0.0", host == "[::1]", strings.HasPrefix(host, "127."),
-		strings.HasPrefix(host, "10."), strings.HasPrefix(host, "192.168."):
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
 		return true
 	}
-	return false
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	addr = addr.Unmap()
+	return addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() || addr.IsUnspecified()
 }
 
 // previewWidth is the preview's width: as the unified diff's, a little
