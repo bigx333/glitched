@@ -1923,7 +1923,15 @@ func (a *app) sendControl(c *ui.Context, t thread, keys bool) {
 	if t.View.Resumable {
 		a.resumeButton(c, t)
 	}
-	if t.View.Stoppable() {
+	// The native circular Send is itself Stop with nothing to send, as it
+	// is in Glitched's fallback and the built-in's native drawing. Only a
+	// replacement of someone else's needs Glitched's own Stop then; with a
+	// draft, Stop always stands beside what Send does.
+	nativeStop := false
+	if drawn := a.frameOf("composer.send").drawn["composer.send"]; drawn != nil && len(drawn.copies) == 1 {
+		nativeStop = drawn.copies[0].plugin == "" || drawn.copies[0].builtin
+	}
+	if t.View.Stoppable() && (a.message(t) != "" || !nativeStop) {
 		if a.message(t) != "" && t.View.Working() {
 			a.queueButton(c, t)
 		}
