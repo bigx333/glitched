@@ -115,6 +115,7 @@ type Native struct {
 var Natives = map[string]Native{
 	"diff.body":              {Props: map[string]string{"path": "string"}, In: []string{"thread.panel.diff"}, Thread: true, Fires: []string{"onChange"}},
 	"terminal.body":          {In: []string{"thread.panel.terminal"}, Thread: true},
+	"cli.update":             {Props: map[string]string{"machine": "string", "provider": "string", "title": "string"}, In: []string{"sidebar.footer.updates"}},
 	"composer.send.button":   {In: []string{"composer.send"}, Thread: true},
 	"composer.access.picker": {In: []string{"composer.access"}, Thread: true},
 	"theme.card":             {Props: map[string]string{"theme": "string"}, In: []string{"settings.page.appearance"}, Fires: []string{"onChange"}},
@@ -163,7 +164,7 @@ var Natives = map[string]Native{
 	// tile; the effort's name in its color as the button shows it, what
 	// runs where the provider runs another; fast mode's lightning while
 	// it's on; and the effort slider with fast mode's switch.
-	"model.tile":    {Props: map[string]string{"family": "string", "size": "number"}, In: []string{"composer.model"}, InRow: true},
+	"model.tile":    {Props: map[string]string{"family": "string", "size": "number"}, In: []string{"composer.model", "sidebar.footer.updates"}, InRow: true},
 	"model.level":   {In: []string{"composer.model"}, Thread: true},
 	"model.zap":     {In: []string{"composer.model"}},
 	"model.effort":  {In: []string{"composer.model"}},

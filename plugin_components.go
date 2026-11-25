@@ -365,6 +365,12 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 		a.sendButton(c, *t, false)
 	case "composer.access.picker":
 		a.accessPicker(c, *t)
+	case "cli.update":
+		var machine, provider, title string
+		json.Unmarshal(n.Props["machine"], &machine)
+		json.Unmarshal(n.Props["provider"], &provider)
+		json.Unmarshal(n.Props["title"], &title)
+		a.cliUpdateNative(c, machine, provider, title)
 	case "transcript.retry":
 		cp.retry()
 	case "message.copy", "message.edit", "message.retry", "message.fork", "message.item", "message.time", "thread.crumb", "thread.heading",

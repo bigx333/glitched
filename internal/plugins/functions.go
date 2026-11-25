@@ -81,6 +81,11 @@ globalThis.glitched = Object.freeze({
   }),
   palette: Object.freeze({ close: (palette) => app("palette.close", { palette: palette ?? "" }) }),
   sidebar: Object.freeze({ more: (key) => app("sidebar.more", { key }) }),
+  cliUpdates: Object.freeze({
+    update: (machine, provider, whenIdle) => app("cliupdates.update", { machine, provider, whenIdle: whenIdle ?? false }),
+    updateAll: () => app("cliupdates.updateAll"),
+    check: () => app("cliupdates.check"),
+  }),
   projects: Object.freeze({
     remove: (workspace, machine) => app("projects.remove", { workspace, machine: machine ?? "" }),
     list: () => app("projects.list"),

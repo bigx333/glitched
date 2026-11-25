@@ -450,6 +450,13 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		}
 		a.notify(mygo.NotificationOptions{ID: nid, Title: args.Title, Body: args.Body, Subtitle: name, Group: "plugins"})
 		return nil, nil
+	case "cliupdates.update":
+		return a.cliUpdateEffect(e.Args)
+	case "cliupdates.updateAll":
+		return a.cliUpdateAllEffect()
+	case "cliupdates.check":
+		a.checkCLIs()
+		return nil, nil
 	case "panels.toggle":
 		return a.panelEffect(e.Args)
 	case "panels.state":

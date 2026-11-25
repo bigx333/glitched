@@ -50,6 +50,7 @@ var Components = []Component{
 	{Name: "thread.panel.diff", Provides: "diffPanel", Needs: "threads:read", About: "The diff panel: its header, and its list of changed files over the native diff.body."},
 	{Name: "thread.panel.terminal", Provides: "terminalPanel", Native: true, Requires: "terminal.body", About: "The terminal drawer: its header over the native terminal.body."},
 	{Name: "selection.actions", Provides: "selectionActions", Needs: "threads:write", Native: true, About: "The actions of the floating selection bar, after its Ask field: Quote and Explain."},
+	{Name: "sidebar.footer.updates", Provides: "cliUpdates", Needs: "providers:update", Native: true, About: "The sidebar footer's button and popover of provider CLI updates."},
 	{Name: "thread.panel.subagent", Provides: "subagentPanel", Needs: "messages:read", About: "The panel a native subagent's step opens: its header, and what the subagent said and the steps it took, in order, and how it ended."},
 	{Name: "composer", Provides: "composer", Native: true, Requires: "composer.input", About: "The composer's layout, around the native composer.input: the card the user writes in, with its pickers, Send, and what comes and goes with it."},
 	{Name: "timeline.message", Provides: "timelineMessage", Native: true, Requires: "transcript.body", About: "A row of the chat timeline, around the native transcript.body: a message, a run's work log, or an error. Approval, question and report cards stay Glitched's."},

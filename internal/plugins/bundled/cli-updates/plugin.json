@@ -1,0 +1,11 @@
+{
+  "id": "cli-updates",
+  "name": "CLI updates",
+  "description": "The sidebar's agent CLI updates button and popover. Built into Glitched; make a copy in Settings › Plugins to change it.",
+  "version": "1.0.0",
+  "main": "main.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "ui.replace", "providers:update"],
+  "glitched": { "places": [{ "id": "updates", "at": "sidebar.footer.updates", "replaces": true }] }
+}

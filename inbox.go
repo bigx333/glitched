@@ -10,6 +10,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/plugins"
+	"glitched/internal/plugins/widget"
 )
 
 // The sidebar is an inbox of threads: those that need you, those the agent
@@ -266,7 +267,19 @@ func (a *app) threadsNav(c *ui.Context) {
 			}).Clicked() {
 				a.router.Push("/settings/general")
 			}
-			a.cliUpdatesButton(c)
+			a.askCLIs()
+			if len(a.pendingCLIs()) == 0 {
+				a.clis.open = false
+				a.pluginComponent(c, "sidebar.footer.updates", nil)
+				return
+			}
+			ctx := func(plugins.ThreadRecord) any { return a.cliUpdatesState() }
+			if !a.pluginComponent(c, "sidebar.footer.updates", nil, componentCopy{
+				key: "footer", box: func() ui.Element { return ui.Row(c).Shrink(0) }, context: ctx,
+				native: func(*widget.Node) { a.cliUpdatesButton(c) },
+			}) {
+				a.cliUpdatesButton(c)
+			}
 		})
 	})
 }
