@@ -8,7 +8,7 @@ import (
 	"io/fs"
 )
 
-//go:embed all:header-actions all:diff-panel all:settings-pages all:greetings all:row-actions all:project-strip all:composer all:timeline all:palette all:sidebar all:agents all:message-toolbar all:workspace all:model-picker all:child-threads all:plan all:queue all:pull-requests all:skills all:schedules all:subagent-panel all:themes all:thread-tools all:composer-send all:composer-access all:terminal-panel all:selection-actions all:cli-updates all:preview-panel
+//go:embed all:header-actions all:diff-panel all:settings-pages all:greetings all:row-actions all:project-strip all:composer all:timeline all:report-card all:palette all:sidebar all:agents all:message-toolbar all:workspace all:model-picker all:child-threads all:plan all:queue all:pull-requests all:skills all:schedules all:subagent-panel all:themes all:thread-tools all:composer-send all:composer-access all:terminal-panel all:selection-actions all:cli-updates all:preview-panel
 var files embed.FS
 
 // FS is the built-in plugins, a folder each at its root.

@@ -368,6 +368,8 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 		a.composerIn(c)
 	case "transcript.body":
 		cp.native(n)
+	case "report.body":
+		cp.native(n)
 	case "terminal.body":
 		cp.native(n)
 	case "browser.webview":

@@ -491,16 +491,40 @@ func stillBlocked(t, child thread, r client.ReportEntry) bool {
 	return false
 }
 
+// timelineReport is the context of timeline.report: which card a copy is,
+// how many reports it holds, and how they went to the parent's agent. The
+// reports themselves are the native report.body's.
+type timelineReport struct {
+	Key     string `json:"key"`
+	Reports int    `json:"reports"`
+	Wake    string `json:"wake,omitempty"`
+}
+
 // reportCard is the children's reports in the parent's timeline: each
 // one's state, a line or two of what came of it, and a way into it. A
 // line under it says how the reports went to the parent's agent.
 func (a *app) reportCard(c *ui.Context, t thread, key string, e entry) {
-	ui.Column(c).Key(key).Gap(6).Transition(riseIn).Children(func() {
-		a.reports(c, t, e)
-		if line := wakeLine(t, e.reports); line != "" {
-			ui.Text(c, line).FontSize(11.5).TextColor(palette.faint).Padding(0, 0, 0, 14)
-		}
+	m := timelineReport{Key: key, Reports: len(e.reports), Wake: wakeLine(t, e.reports)}
+	a.pluginComponent(c, "timeline.report", &t, componentCopy{
+		key: key,
+		box: func() ui.Element {
+			return ui.Column(c).Key(key).Transition(riseIn)
+		},
+		context: func(plugins.ThreadRecord) any { return m },
+		native:  func(body *widget.Node) { a.reports(c, t, e) },
+		builtin: func() *widget.Node { return reportCardRow(m) },
 	})
+}
+
+// reportCardRow is the built-in Report card plugin's drawing of the card
+// m, as its main.js draws it. Glitched draws the same while no plugin has
+// drawn the card, so that the native body keeps its state.
+func reportCardRow(m timelineReport) *widget.Node {
+	children := []*widget.Node{{Type: "native", ID: "body", Name: "report.body"}}
+	if m.Wake != "" {
+		children = append(children, &widget.Node{Type: "text", ID: "wake", Text: m.Wake, FontSize: 11.5, Color: "$text.faint", Padding: widget.Spacing{0, 0, 0, 14}})
+	}
+	return &widget.Node{Type: "column", Gap: 6, Children: children}
 }
 
 // wakeLine is how a card's reports went to the parent's agent: waiting

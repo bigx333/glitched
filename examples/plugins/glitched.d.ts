@@ -582,6 +582,7 @@ type Component =
   | "composer.workspace"
   | "composer.model"
   | "timeline.message"
+  | "timeline.report"
   | "message.toolbar"
   | "thread.header.breadcrumb"
   | "thread.header.usage"
@@ -653,6 +654,7 @@ type ComponentContext =
   | ComposerAccessContext
   | ComposerModelContext
   | TimelineMessageContext
+  | TimelineReportContext
   | MessageToolbarContext
   | HeaderBreadcrumbContext
   | HeaderUsageContext
@@ -686,6 +688,20 @@ interface TimelineMessageContext {
   work?: { item: string; kind: string; title: string; status: string; path?: string; exit?: number; output?: string; started?: string; ended?: string; subagent?: boolean; steps?: number }[];
   /** A plan row's steps. */
   plan?: { text: string; status: string }[];
+}
+
+/**
+ * The context of timeline.report: which child report card a copy is. Its
+ * layout must place the native report.body once; report.body draws the
+ * reports themselves.
+ */
+interface TimelineReportContext {
+  /** The row's key, the same while it changes. */
+  key: string;
+  /** How many reports the card holds. */
+  reports: number;
+  /** How the reports went to the parent's agent, when one did. */
+  wake?: string;
 }
 
 /**

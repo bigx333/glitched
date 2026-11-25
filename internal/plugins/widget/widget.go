@@ -125,6 +125,7 @@ var Natives = map[string]Native{
 	// transcript.retry is a failed command's Retry and Dismiss, by its
 	// row's error or under its message's note.
 	"transcript.retry": {In: []string{"timeline.message"}, Thread: true},
+	"report.body":      {In: []string{"timeline.report"}, Thread: true},
 	// A message's actions, as Glitched draws them under it: Copy, Edit &
 	// resend (a message of yours), Retry (a turn that failed or was
 	// stopped), Fork from here (a turn's last reply, once it ended), and
