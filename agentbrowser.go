@@ -269,15 +269,27 @@ func (ab *agentBrowser) threadTab(thread string) *browserTab {
 	return last
 }
 
-// leasedTab is the tab of id, or for none the thread's own tab, else the
-// one shown; leased to thread, or why it can't be. Another thread
-// showing a tab so moves none of thread's calls. On the view's thread.
+// callerTab is the tab a call of thread naming none uses: shown, unless
+// another thread leases it, then thread's own tab, or nil for none.
+// Another thread showing its tab so moves none of thread's calls. On the
+// view's thread.
+func (ab *agentBrowser) callerTab(shown *browserTab, thread string) *browserTab {
+	if owner := ab.leaseOwner(shown.id); owner == "" || owner == thread {
+		return shown
+	}
+	return ab.threadTab(thread)
+}
+
+// leasedTab is the tab of id, or for none callerTab's, else the one
+// shown; leased to thread, or why it can't be. On the view's thread.
 func (ab *agentBrowser) leasedTab(id *int, thread string) (*browserTab, error) {
-	t := ab.threadTab(thread)
-	if id != nil || t == nil {
-		var err error
-		if t, err = ab.tab(id); err != nil {
-			return nil, err
+	t, err := ab.tab(id)
+	if err != nil {
+		return nil, err
+	}
+	if id == nil {
+		if own := ab.callerTab(t, thread); own != nil {
+			t = own
 		}
 	}
 	if err := ab.claimLease(t.id, thread); err != nil {
@@ -527,16 +539,12 @@ func (ab *agentBrowser) navigate(ctx context.Context, args toolArgs) (string, er
 				return err
 			}
 		case u != "":
-			// The thread's own tab, else the one shown (the dev
-			// server's, where there is none) unless another thread
-			// leases it, else a new one.
-			if t = ab.threadTab(thread); t == nil {
-				t = b.current()
-				if ab.leaseOwner(t.id) != "" {
-					ab.a.newTab(u)
-					t = b.tabs[b.active]
-					openedFresh = true
-				}
+			// callerTab's of the one shown (the dev server's, where
+			// there is none), else a new one.
+			if t = ab.callerTab(b.current(), thread); t == nil {
+				ab.a.newTab(u)
+				t = b.tabs[b.active]
+				openedFresh = true
 			}
 		default:
 			if t, err = ab.leasedTab(nil, thread); err != nil {

@@ -35,7 +35,7 @@ type Annotations struct {
 	OpenWorld   bool `json:"openWorldHint"`
 }
 
-const tabArg = `"tab": {"type": "integer", "description": "The tab's id, as browser_tabs lists it; when left out, the tab this thread leases and used last, else the tab shown."}`
+const tabArg = `"tab": {"type": "integer", "description": "The tab's id, as browser_tabs lists it; when left out, the tab the user is shown, unless another thread leases it, then the tab this thread leases and used last."}`
 
 // Tools are the browser's tools.
 var Tools = []Tool{
@@ -44,6 +44,7 @@ var Tools = []Tool{
 		Description: "List, open, show, close, or release the tabs of the browser in the Glitched app, the pane beside the user's chat. " +
 			"Each tab has an id the other tools take. Opening one at a url loads it, leases it to this thread so other threads won't overwrite it, and returns its snapshot. " +
 			"Every tool using a tab leases it the same way, and refuses a tab another thread leases. " +
+			"A tool given no tab acts on the tab the user is shown; when another thread leases that one, on the tab this thread used last. " +
 			"Action \"release\" drops this thread's lease on a tab (or all its tabs when tab is omitted).",
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {
 			"action": {"type": "string", "enum": ["list", "new", "select", "close", "release"]},

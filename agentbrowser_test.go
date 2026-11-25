@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -869,6 +870,36 @@ func TestAScreenshotLeavesOtherThreadsTabs(t *testing.T) {
 	out, err := callToolReply(t, ab, "threadAAAAAAA", "browser_snapshot", `{}`)
 	if err != nil || !strings.HasPrefix(out.Text, "Tab 1:") {
 		t.Errorf("A's snapshot without a tab = %v\n%s", err, out.Text)
+	}
+}
+
+// A call naming no tab follows the tab the user shows when no other
+// thread leases it, though the thread leases another.
+func TestACallWithoutATabFollowsTheTabTheUserShows(t *testing.T) {
+	a, ab, _ := agents(t)
+	if _, err := callToolReply(t, ab, "threadAAAAAAA", "browser_tabs", `{"action":"new","url":"example.com"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callTool(t, ab, "browser_tabs", `{"action":"new","url":"go.dev"}`); err != nil {
+		t.Fatal(err)
+	}
+	a.browser.active = slices.IndexFunc(a.browser.tabs, func(t *browserTab) bool { return t.id == 2 })
+	out, err := callToolReply(t, ab, "threadAAAAAAA", "browser_snapshot", `{}`)
+	if err != nil || !strings.HasPrefix(out.Text, "Tab 2:") {
+		t.Errorf("A's snapshot without a tab, tab 2 shown = %v\n%s", err, out.Text)
+	}
+	if _, err := callToolReply(t, ab, "threadAAAAAAA", "browser_navigate", `{"url":"example.org"}`); err != nil {
+		t.Fatal(err)
+	}
+	urls := map[int]string{}
+	for _, t := range a.browser.tabs {
+		urls[t.id] = t.url
+	}
+	if urls[1] != "https://example.com" || urls[2] != "https://example.org" {
+		t.Errorf("A's navigate without a tab, tab 2 shown: tabs at %v, want tab 2 moved and tab 1 left", urls)
+	}
+	if shown := a.browser.tabs[a.browser.active].id; shown != 2 {
+		t.Errorf("tab shown after A's navigate = %d, want 2", shown)
 	}
 }
 
