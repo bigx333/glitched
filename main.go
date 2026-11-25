@@ -7,15 +7,19 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"maps"
 	"math"
 	"math/rand/v2"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -33,6 +37,7 @@ import (
 	"glitched/internal/mcp"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/pack"
+	"glitched/internal/service"
 	"glitched/internal/transport"
 	"glitched/wind"
 )
@@ -657,6 +662,12 @@ type app struct {
 	cmdkOpens int
 	cmdkList  ui.ListState
 
+	svcStatus  service.Status
+	svcRead    time.Time
+	svcLoading bool
+	svcBusy    bool
+	svcErr     string
+
 	glassOffset ui.Point
 	checkUntil  time.Time
 
@@ -1183,6 +1194,17 @@ func main() {
 		}
 		return
 	}
+	// Background service mode (glitched/Glitched serve -dir DIR).
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		if err := serveHeadless(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "glitched:", err)
+			if errors.Is(err, daemon.ErrLocked) {
+				os.Exit(3)
+			}
+			os.Exit(1)
+		}
+		return
+	}
 	var a *app
 	// What's posted before the window exists, as a plugin's timer can,
 	// waits for it.
@@ -1322,6 +1344,26 @@ func (a *app) contentInner(w float32) float32 {
 // leaves, clear at Clear.
 func (a *app) glassTint() ui.Color {
 	return palette.bg.Alpha(float32(1 - a.settings.vibrancy))
+}
+
+func serveHeadless(args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	dir := fs.String("dir", stateDir(), "state directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := daemon.Defaults(*dir)
+	if err != nil {
+		return err
+	}
+	cfg.WithAgents()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	d, err := daemon.Start(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	return d.Wait()
 }
 
 // windowQueue holds what's posted to the window until it exists.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"glitched/internal/daemon"
 	eng "glitched/internal/engine"
 	"glitched/internal/providerlog"
+	"glitched/internal/service"
 )
 
 // pairing is a token the This machine page minted, shown until dismissed:
@@ -107,7 +109,86 @@ func (a *app) engineCard(c *ui.Context, m client.Machine) {
 		settingRow(c, "State directory", "", func() {
 			ui.Text(c, cfg.Dir).FontSize(12).Font("monospace").TextColor(palette.muted).Selectable()
 		})
+		a.serviceRow(c)
 	})
+}
+
+func (a *app) refreshService() {
+	if a.svcLoading {
+		return
+	}
+	a.svcLoading = true
+	dir := a.dir
+	go func() {
+		st := service.Inspect(context.Background(), service.Options{Dir: dir})
+		a.post(func() {
+			a.svcLoading = false
+			a.svcStatus = st
+			a.svcRead = time.Now()
+		})
+	}()
+}
+
+func (a *app) setServiceInstalled(c *ui.Context, install bool) {
+	if a.svcBusy {
+		return
+	}
+	a.svcBusy, a.svcErr = true, ""
+	dir := a.dir
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		opts := service.Options{Dir: dir}
+		var st service.Status
+		var err error
+		if install {
+			st, err = service.Install(ctx, opts)
+		} else {
+			st, err = service.Uninstall(ctx, opts)
+		}
+		a.post(func() {
+			a.svcBusy = false
+			a.svcStatus = st
+			a.svcRead = time.Now()
+			if err != nil {
+				a.svcErr = err.Error()
+			}
+			a.backend.Inspect()
+		})
+	}()
+}
+
+func (a *app) serviceRow(c *ui.Context) {
+	if time.Since(a.svcRead) >= inspectEvery {
+		a.refreshService()
+	}
+	st := a.svcStatus
+	on := st.Installed
+	desc := "Keep the engine running as a user background service so agents survive closing Glitched."
+	switch {
+	case !a.svcRead.IsZero() && !st.Supported:
+		desc = st.Detail
+	case a.svcBusy && on:
+		desc = "Removing background service…"
+	case a.svcBusy:
+		desc = "Installing background service…"
+	case st.Installed && st.Running && st.PID > 0:
+		desc = fmt.Sprintf("Installed and running (PID %d).", st.PID)
+	case st.Installed && st.Running:
+		desc = "Installed and running."
+	case st.Installed:
+		desc = "Installed (stopped). " + st.UnitPath
+	}
+	settingRow(c, "Background service", desc, func() {
+		sw := ui.Switch(c.Key("bg-service"), &on).Label("Background service").
+			Disabled(a.svcBusy || (!a.svcRead.IsZero() && !st.Supported))
+		if sw.Changed() {
+			a.setServiceInstalled(c, on)
+		}
+	})
+	if a.svcErr != "" {
+		ui.Text(c, a.svcErr).Key("bg-service-err").FontSize(12).TextColor(palette.red).Padding(0, 16, 12)
+	}
 }
 
 // limitRows are the Agents card's rows, in a.limits' order.
