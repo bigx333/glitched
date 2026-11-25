@@ -29,6 +29,7 @@ type settingsFile struct {
 	NewThread     string  `json:"newThread"`
 	Notifications bool    `json:"notifications"`
 	CheckCLIs     bool    `json:"checkCLIUpdates"`
+	Zen           bool    `json:"zen"`
 }
 
 var (
@@ -52,6 +53,7 @@ func fileOf(s settings) settingsFile {
 		NewThread:     newThreadModes[s.newThreadMode],
 		Notifications: s.notifications,
 		CheckCLIs:     s.checkCLIs,
+		Zen:           s.zen,
 	}
 }
 
@@ -88,6 +90,7 @@ func settingsFrom(s settings, f settingsFile, themeNames []string) settings {
 	}
 	s.notifications = f.Notifications
 	s.checkCLIs = f.CheckCLIs
+	s.zen = f.Zen
 	return s
 }
 

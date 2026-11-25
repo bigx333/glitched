@@ -563,7 +563,7 @@ func (a *app) reveal(t thread, es []entry, request api.ID) {
 	}
 	for i, e := range es {
 		if e.request != nil && e.request.Request == request {
-			a.listFor(t.id()).ScrollTo(i, ui.Start)
+			a.listFor(t.id()).ScrollTo(a.viewOf(es).pos(i), ui.Start)
 		}
 	}
 }

@@ -178,8 +178,9 @@ type entry struct {
 	// again.
 	retry bool
 	// A run's work: whether some of it is still going, and for how long it
-	// went.
+	// went, as said and as a duration, zero while it goes.
 	working bool
+	worked  time.Duration
 	// paused is what a run's last work says while the run waits on a
 	// request.
 	paused  string
@@ -325,11 +326,14 @@ type rows struct {
 	// their places as the thread grows, while epoch stays the same.
 	fixed int
 	epoch uint64
+	// change is which of any thread's rows these are: it changes with them.
+	change uint64
 }
 
 // rowsEpochs counts the rows derived from the start, by any thread's
-// rowsCache, each an epoch of its own. Only the window's loop derives.
-var rowsEpochs uint64
+// rowsCache, each an epoch of its own, and rowsChanges every change to
+// them. Only the window's loop derives.
+var rowsEpochs, rowsChanges uint64
 
 // rowsLive is how many of a transcript's last entries are derived again
 // on each change: a reply streams, and a run's work and requests change,
@@ -401,6 +405,8 @@ func (a *app) rowsOf(t thread) rows {
 	if !c.joined || !sameRows(tail, c.tail) {
 		c.tail, c.joined = tail, true
 		c.es = append(c.head, tail...)
+		rowsChanges++
+		c.change = rowsChanges
 		c.turns = c.turns[:c.headTs]
 		for i, e := range tail {
 			if e.kind == entryUser {
@@ -599,7 +605,8 @@ func unfinished(end *client.TurnEnd) bool {
 func workEntry(key string, w *client.WorkEntry) entry {
 	e := entry{key: key, kind: entryWork, work: w.Items, working: w.Ended.IsZero(), took: "Working…", run: w.Run}
 	if !e.working {
-		e.took = "Worked for " + w.Ended.Sub(w.Started).Round(time.Second).String()
+		e.worked = w.Ended.Sub(w.Started)
+		e.took = "Worked for " + e.worked.Round(time.Second).String()
 	}
 	return e
 }

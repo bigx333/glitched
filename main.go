@@ -174,6 +174,7 @@ type settings struct {
 	newThreadMode int // Local, Worktree
 	notifications bool
 	checkCLIs     bool // ask each machine's engine whether its CLIs have newer versions
+	zen           bool // the timeline folds each turn's work into a line
 
 	checking bool
 }
@@ -373,6 +374,8 @@ type app struct {
 	accessFor    api.ID // the thread whose access changed at accessAt, zero for the draft
 	pickersFor   api.ID // the thread whose composer the pickers are in, zero for the draft (pickersIn)
 	collapsed    map[string]bool
+	zenOpen      map[string]bool // the Zen lines unfolded, by key
+	zenOpened    uint64          // counts the changes to zenOpen
 	// The inbox: the project it's filtered to, and its closed sections.
 	projectFilter map[projectKey]bool // the projects the sidebar shows; none is all
 	sectionClosed map[category]bool
@@ -479,6 +482,8 @@ type app struct {
 	leavingFullScreen func()
 	// lists are the threads' timelines, by thread.
 	lists map[api.ID]*ui.ListState
+	// listed are, by thread, what its timeline listed last (timelineMemo).
+	listed map[api.ID]*timelineMemo
 	// markers are, by thread, what its turn markers keep from frame to
 	// frame.
 	markers     map[api.ID]*markerState
@@ -768,6 +773,7 @@ func newApp(dir string, engine func(*daemon.Config), detect func(context.Context
 		showSidebar:    true,
 		sidebarWidth:   272,
 		collapsed:      map[string]bool{},
+		zenOpen:        map[string]bool{},
 		sectionClosed:  map[category]bool{catWorking: true, catSnoozed: true, catSettled: true},
 		sidebarRows:    map[string]map[api.ID]bool{},
 		sidebarPages:   map[string]int{},
@@ -781,6 +787,7 @@ func newApp(dir string, engine func(*daemon.Config), detect func(context.Context
 		steers:         map[api.ID]steer{},
 		post:           post,
 		lists:          map[api.ID]*ui.ListState{},
+		listed:         map[api.ID]*timelineMemo{},
 		markers:        map[api.ID]*markerState{},
 		rows:           map[api.ID]*rowsCache{},
 		files:          map[string][]string{},
