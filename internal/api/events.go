@@ -107,9 +107,11 @@ type RemoteSeen struct {
 	Run    ID       `json:"run,omitzero"`
 	Silent bool     `json:"silent,omitempty"`
 	State  RunState `json:"state"`
-	// Pending are the requests of Run it waits on.
-	Pending []ID `json:"pending,omitempty"`
-	Keys    []ID `json:"keys,omitempty"`
+	// Pending are the requests of Run it waits on, and Questions those
+	// of them that are questions, which an agent here may answer.
+	Pending   []ID `json:"pending,omitempty"`
+	Questions []ID `json:"questions,omitempty"`
+	Keys      []ID `json:"keys,omitempty"`
 	// Taken is that the machine's person sent the child's last message
 	// or asked its last stop there, so it is theirs.
 	Taken bool `json:"taken,omitempty"`

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -89,6 +90,22 @@ func (h *Host) linkSubmit(ctx context.Context, link api.Link, c api.Command) (ap
 		c.Caller = &api.Caller{Thread: t.Origin.Thread}
 	case api.TurnInterrupt:
 		c.Caller = &api.Caller{Thread: t.Origin.Thread}
+	case api.RequestRespond:
+		// An answer is the agent's there too, so only a question of the
+		// thread's takes it, as one of a thread under its own: an approval
+		// or credentials stay this engine's person's. It answers the
+		// question as it is open now: the link names no generation.
+		i := slices.IndexFunc(t.Requests, func(r engine.Request) bool { return r.ID == b.Request })
+		if i < 0 {
+			return api.Receipt{}, &api.RejectedError{Reason: "the thread there asks no question of that id"}
+		}
+		b.Generation = t.Requests[i].Generation
+		c.Body, c.Caller = b, &api.Caller{Thread: t.Origin.Thread}
+		r, err := h.store.Submit(ctx, c, h.clock())
+		if errors.Is(err, api.ErrAlreadyAnswered) {
+			return r, &api.RejectedError{Reason: "the question was already answered there"}
+		}
+		return r, err
 	case api.InboxSet:
 		if b.Disposition.State == api.Settled {
 			c.Caller = &api.Caller{Thread: t.Origin.Thread}

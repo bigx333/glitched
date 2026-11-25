@@ -6,12 +6,9 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"os"
 	"sync"
 	"time"
 
@@ -22,10 +19,9 @@ import (
 )
 
 type Store struct {
-	db    *sql.DB
-	fence fenceFile
-	log   api.ID
-	host  api.ID
+	db   *sql.DB
+	log  api.ID
+	host api.ID
 
 	// mu admits one writer at a time, which makes commit order the order
 	// hooks see events in.
@@ -41,12 +37,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	fence, err := os.OpenFile(path+".fence", os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	s := &Store{db: db, fence: fence}
+	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
 		s.Close()
 		return nil, err
@@ -54,7 +45,7 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) Close() error { return errors.Join(s.db.Close(), s.fence.Close()) }
+func (s *Store) Close() error { return s.db.Close() }
 
 // LogID names this log. A restored database gets a new one, which fences
 // cursors taken against the old log.
@@ -62,10 +53,9 @@ func (s *Store) LogID() api.ID { return s.log }
 
 func (s *Store) HostID() api.ID { return s.host }
 
-// Rewind does what Open does for a restore its fence shows, for a database
-// another party proved is behind what it handed out: a new log id, every
-// live run uncertain and the messages queued behind it cancelled. Call it
-// before a Host runs on the store.
+// Rewind is for a database another party proved is behind what it handed
+// out: a new log id, every live run uncertain and the messages queued
+// behind it cancelled. Call it before a Host runs on the store.
 func (s *Store) Rewind(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -75,10 +65,7 @@ func (s *Store) Rewind(ctx context.Context) error {
 	}
 	defer tx.Rollback()
 	prev := s.log
-	head, err := s.rewind(ctx, tx)
-	if err == nil {
-		err = s.writeFence(head)
-	}
+	_, err = s.rewind(ctx, tx)
 	if err == nil {
 		err = tx.Commit()
 	}
@@ -434,18 +421,6 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("store: meta %s: %w", key, err)
 		}
 	}
-	head, err := headSeq(ctx, tx)
-	if err != nil {
-		return err
-	}
-	if s.restored(head) {
-		if head, err = s.rewind(ctx, tx); err != nil {
-			return err
-		}
-	}
-	if err := s.writeFence(head); err != nil {
-		return err
-	}
 	return tx.Commit()
 }
 
@@ -557,45 +532,6 @@ func (s *Store) rewind(ctx context.Context, tx *sql.Tx) (uint64, error) {
 		}
 	}
 	return headSeq(ctx, tx)
-}
-
-// The fence file beside the database holds the log id and the highest seq
-// handed out under it. A restored copy brings its own meta table back, so
-// only a file outside the database can tell that the copy is behind what
-// clients have seen.
-const fenceSize = len(api.ID{}) + 8
-
-type fenceFile interface {
-	io.ReaderAt
-	io.WriterAt
-	Sync() error
-	Close() error
-}
-
-// restored reports whether the database is not the one the fence last saw,
-// or is behind it. A missing or torn fence on a database with events counts
-// as a restore: a new log id costs clients one snapshot, a reused one hands
-// them the wrong events.
-func (s *Store) restored(head uint64) bool {
-	var b [fenceSize]byte
-	if n, _ := s.fence.ReadAt(b[:], 0); n != fenceSize {
-		return head > 0
-	}
-	return api.ID(b[:len(s.log)]) != s.log || head < binary.BigEndian.Uint64(b[len(s.log):])
-}
-
-// writeFence records head as handed out under the log, durably, before the
-// transaction that writes it commits: no reader sees a seq the fence doesn't
-// cover. A transaction that then fails leaves the fence ahead, which the
-// next open takes for a restore.
-func (s *Store) writeFence(head uint64) error {
-	var b [fenceSize]byte
-	copy(b[:], s.log[:])
-	binary.BigEndian.PutUint64(b[len(s.log):], head)
-	if _, err := s.fence.WriteAt(b[:], 0); err != nil {
-		return fmt.Errorf("store: fence: %w", err)
-	}
-	return s.fence.Sync()
 }
 
 type querier interface {

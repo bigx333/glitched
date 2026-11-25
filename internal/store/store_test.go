@@ -199,42 +199,6 @@ func copyDB(t *testing.T, from, to string) {
 	}
 }
 
-func TestRestoredDatabaseGetsANewLog(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	path, backup := filepath.Join(dir, "host.db"), filepath.Join(dir, "backup.db")
-	s := open(t, path)
-	thread := api.NewID()
-	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	s.Close()
-	copyDB(t, path, backup)
-
-	s = open(t, path)
-	settle := api.Command{ID: api.NewID(), Target: thread, Body: api.InboxSet{Disposition: api.Disposition{State: api.Settled}}}
-	seen, err := s.Submit(ctx, settle, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.Close()
-
-	copyDB(t, backup, path)
-	s = open(t, path)
-	if s.LogID() == seen.Committed.Log {
-		t.Fatalf("restored database kept log %s, so cursor %+v still looks current", s.LogID(), seen.Committed)
-	}
-	restored := s.LogID()
-	events, err := s.ReadLog(ctx, 0, 0)
-	if err != nil || len(events) != 1 || events[0].Cursor.Log != restored {
-		t.Fatalf("restored log: %+v %v, want the one event under %s", events, err, restored)
-	}
-	s.Close()
-	if s = open(t, path); s.LogID() != restored {
-		t.Fatal("log id changed on a plain reopen")
-	}
-}
-
 func TestARefusedObservationStillCompletesItsEffect(t *testing.T) {
 	ctx := context.Background()
 	s := open(t, filepath.Join(t.TempDir(), "host.db"))
@@ -390,6 +354,9 @@ func TestARestoreCancelsWhatAStopHeld(t *testing.T) {
 			s.Close()
 			copyDB(t, backup, path)
 			s = open(t, path)
+			if err := s.Rewind(ctx); err != nil {
+				t.Fatal(err)
+			}
 
 			th, err := s.Thread(ctx, thread)
 			if err != nil {
@@ -968,19 +935,16 @@ func TestAChildThreadAfterTheUpgradeFromVersion3(t *testing.T) {
 	}
 }
 
-// fixture is the path of a copy of testdata's database name, its fence
-// beside it.
+// fixture is the path of a copy of testdata's database name.
 func fixture(t *testing.T, name string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "host.db")
-	for _, suffix := range []string{"", ".fence"} {
-		b, err := os.ReadFile(filepath.Join("testdata", name+suffix))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path+suffix, b, 0o600); err != nil {
-			t.Fatal(err)
-		}
+	b, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
 	}
 	return path
 }
@@ -1623,5 +1587,40 @@ func TestAVersion15DatabaseUpgradesWithNoRemoteChild(t *testing.T) {
 	open(t, fresh).Close()
 	if got, want := tableOf(t, path, "threads"), tableOf(t, fresh, "threads"); !reflect.DeepEqual(got, want) {
 		t.Errorf("the threads table\n%+v\nwant a new database's\n%+v", got, want)
+	}
+}
+
+// A cancelled write stops, and doesn't wait out the write lock another
+// connection holds, as a host that closes would.
+func TestACancelledWriteStops(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	other, err := sql.Open("sqlite", path+"?_txlock=immediate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	locked, err := other.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locked.Rollback()
+
+	closing, cancel := context.WithCancel(ctx)
+	time.AfterFunc(50*time.Millisecond, cancel)
+	began := time.Now()
+	settle := api.Command{ID: api.NewID(), Target: thread, Body: api.InboxSet{Disposition: api.Disposition{State: api.Settled}}}
+	_, err = s.Submit(closing, settle, time.Now())
+	if took := time.Since(began); !errors.Is(err, context.Canceled) || took > time.Second {
+		t.Fatalf("a write cancelled waiting for the lock returned %v after %s, want context.Canceled at once", err, took)
 	}
 }

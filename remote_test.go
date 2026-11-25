@@ -14,6 +14,8 @@ import (
 	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
+
+	"github.com/egoist/mygo/ui"
 )
 
 // thisMachine opens Settings › This machine once the engine's status reads.
@@ -385,8 +387,35 @@ func TestALinksThreadSaysWhereItCameFrom(t *testing.T) {
 	k := h.thread("Port the sort")
 	k.View.Origin = &api.Origin{Engine: api.NewID(), Thread: api.NewID(), Title: "Ship the sidebar sort", Link: link}
 	h.a.choose(k)
-	h.until("where the thread came from", func() bool { h.tt.Frame(); return h.tt.HasText("from Ship the sidebar sort on laptop") })
+	h.until("where the thread came from", func() bool {
+		h.tt.Frame()
+		return h.tt.HasText("from Ship the sidebar sort") && h.tt.HasText(" on laptop")
+	})
 	shoot(t, h, "b-origin")
+}
+
+// A link's thread whose first message waits on its worktree offers Stop,
+// which holds the message there, and once held offers Resume instead.
+func TestALinksThreadOffersStopBeforeItsFirstRun(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	seed(t, d, "/work/t3code", "Port the sort", "port it")
+	link := linkFor(t, dir, "laptop")
+	h := start(t, dir)
+	k := h.thread("Port the sort")
+	k.View.Origin = &api.Origin{Engine: api.NewID(), Thread: api.NewID(), Title: "Ship the sidebar sort", Link: link}
+	k.View.Run, k.View.Turn, k.View.Queued, k.View.Workspace = api.RunIdle, nil, 1, ""
+	h.a.choose(k)
+	h.until("Stop on the waiting first message", func() bool {
+		h.tt.Frame()
+		return h.tt.HasText(" on laptop") && h.tt.HasText("Stop")
+	})
+	k.View.Resumable = true
+	h.a.choose(k)
+	h.until("Resume, not Stop, once the message is held", func() bool {
+		h.tt.Frame()
+		return h.tt.HasText("Resume") && !h.tt.HasText("Stop")
+	})
 }
 
 // fits fails t when a text the window shows runs past its right edge.
@@ -429,11 +458,11 @@ func TestRemoteSurfacesFitANarrowWindow(t *testing.T) {
 	h.a.choose(parent)
 	h.until("where the thread came from", func() bool {
 		h.tt.Frame()
-		return h.tt.HasText("from A parent thread with a long title that runs on and on on laptop")
+		return h.tt.HasText("from A parent thread with a long title that runs on and on") && h.tt.HasText(" on laptop")
 	})
 	h.tt.Advance(time.Second)
 	h.tt.Frame()
-	fits(t, h, 760, "from A parent thread with a long title that runs on and on on laptop")
+	fits(t, h, 760, "from A parent thread with a long title that runs on and on", " on laptop")
 	shoot(t, h, "b-narrow-origin")
 }
 
@@ -478,4 +507,64 @@ func TestARemoteChildPairedButNotYetMadeSaysItOpensOnceMade(t *testing.T) {
 	if !h.tt.HasText("Creating on desk") || !h.tt.HasText("Its thread opens here once desk has made it.") || h.tt.HasText("Pair desk in Settings") {
 		t.Errorf("the placeholder shows %q, want it opens once desk made it", h.tt.Texts())
 	}
+}
+
+// whole fails unless each text naming s, at size, shows as wide as its
+// font measures it: none of it cut short.
+func whole(t *testing.T, h *harness, size float32, s string) {
+	t.Helper()
+	n := 0
+	for _, x := range h.tt.Texts() {
+		if !strings.Contains(x, s) {
+			continue
+		}
+		n++
+		var natural float32
+		ui.NewTester(func(c *ui.Context) { natural, _ = c.MeasureText(0, ui.Span{Text: x, Size: size}) }, 100, 100).Frame()
+		if r, _ := h.tt.Find(x); r.W < natural-0.5 {
+			t.Errorf("%q shows %v wide, %v as its font measures it: cut short", x, r.W, natural)
+		}
+	}
+	if n == 0 {
+		t.Errorf("no text names %q in %q", s, h.tt.Texts())
+	}
+}
+
+// At the narrowest window, with the sidebar open, a link's thread's
+// header keeps its machine's label whole, and cuts its parent's title.
+func TestAnOriginKeepsItsMachineAtTheNarrowestWindow(t *testing.T) {
+	h, dir, parent, _ := remoteChild(t)
+	h.a.showSidebar = true
+	parent.View.Origin = &api.Origin{Engine: api.NewID(), Thread: api.NewID(), Title: "Parent fixture with a title long enough to run past the header", Link: linkFor(t, dir, "Lab-A")}
+	h.a.choose(parent)
+	h.until("where the thread came from", func() bool {
+		h.tt.Frame()
+		return h.tt.HasText("Lab-A")
+	})
+	h.tt.SetSize(760, 860)
+	h.tt.Advance(time.Second)
+	h.tt.Frame()
+	whole(t, h, 12.5, "Lab-A")
+	shoot(t, h, "b-narrow-origin-label")
+}
+
+// At the narrowest window, the form for a machine this one delegates to
+// shows its example address whole.
+func TestTheDelegateFormShowsItsExampleAddressAtTheNarrowestWindow(t *testing.T) {
+	h := start(t, tempDir(t))
+	thisMachine(t, h)
+	h.tt.SetSize(760, 3000)
+	h.tt.Advance(time.Second)
+	h.tt.Frame()
+	var need float32
+	ui.NewTester(func(c *ui.Context) {
+		th := c.Theme()
+		w, _ := c.MeasureText(0, ui.Span{Text: "desk.tailnet.ts.net:7433", Font: "monospace", Size: float32(h.a.settings.fontSize)})
+		need = w + 2*th.Space(2.5) + 2
+	}, 100, 100).Frame()
+	r, ok := h.tt.Find("The machine's address")
+	if !ok || r.W < need {
+		t.Errorf("the address field is %v wide at 760, want at least %v for its example whole", r.W, need)
+	}
+	shoot(t, h, "a-narrow-delegates")
 }

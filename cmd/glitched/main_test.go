@@ -146,7 +146,7 @@ func restoreBehindTheHub(t *testing.T, hubDir, dir string) api.ID {
 			time.Sleep(20 * time.Millisecond)
 		}
 	}
-	files := []string{"engine.db", "engine.db-wal", "engine.db-shm", "engine.db.fence"}
+	files := []string{"engine.db", "engine.db-wal", "engine.db-shm"}
 	copyFiles := func(from, to string) {
 		t.Helper()
 		for _, f := range files {

@@ -439,19 +439,20 @@ type RemoteBound struct{ Thread api.ID }
 // in Slot, whether its person there took it over, and the reports the
 // events read hold, each by its key, of the machine labelled On.
 type RemoteSeen struct {
-	Cursor  api.Cursor
-	Run     api.ID
-	Silent  bool
-	Slot    api.RunState
-	Pending []api.ID
-	Taken   bool
-	Ended   *api.TurnResult
-	Model   api.ModelRef
-	Access  api.Access
-	Turn    *api.TurnResult
-	Held    bool
-	Reports []RemoteReport
-	On      string
+	Cursor    api.Cursor
+	Run       api.ID
+	Silent    bool
+	Slot      api.RunState
+	Pending   []api.ID
+	Questions []api.ID
+	Taken     bool
+	Ended     *api.TurnResult
+	Model     api.ModelRef
+	Access    api.Access
+	Turn      *api.TurnResult
+	Held      bool
+	Reports   []RemoteReport
+	On        string
 }
 
 // RemoteReport is one report of a remote child's: of its run Run, by Key,

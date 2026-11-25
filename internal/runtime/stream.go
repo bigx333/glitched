@@ -57,7 +57,11 @@ func (h *Host) catchUp(ctx context.Context, q api.Query) ([]api.StreamItem, uint
 			for i := range events {
 				items[i] = api.StreamItem{Kind: api.StreamEvent, Event: &events[i]}
 			}
-			if q.Views && view.ID == q.Thread {
+			switch {
+			case !q.Views || view.ID != q.Thread:
+			case len(items) > 0:
+				items[len(items)-1].Thread = &view
+			default:
 				items = append(items, api.StreamItem{Kind: api.StreamThread, Thread: &view})
 			}
 			return items, head, nil
@@ -73,7 +77,7 @@ func (h *Host) catchUp(ctx context.Context, q api.Query) ([]api.StreamItem, uint
 type stream struct {
 	h      *Host
 	thread api.ID // zero is the shell
-	views  bool   // a thread's view follows its events, as Query.Views says
+	views  bool   // a thread's view comes with its events, as Query.Views says
 	wake   chan struct{}
 
 	mu    sync.Mutex
@@ -147,7 +151,7 @@ func (s *stream) batchOf(c store.Commit) batch {
 	if s.views && len(b.items) > 0 {
 		for i := range c.Threads {
 			if c.Threads[i].ID == s.thread {
-				b.items = append(b.items, api.StreamItem{Kind: api.StreamThread, Thread: &c.Threads[i]})
+				b.items[len(b.items)-1].Thread = &c.Threads[i]
 			}
 		}
 	}
@@ -178,17 +182,17 @@ func (s *stream) queue(items []api.StreamItem) {
 const viewOverhead = 256
 
 func size(it api.StreamItem) int {
-	switch {
-	case it.Event != nil:
-		return len(it.Event.Payload)
-	case it.Thread != nil:
-		n := viewOverhead + len(it.Thread.Title) + len(it.Thread.Workspace)
+	n := 0
+	if it.Event != nil {
+		n += len(it.Event.Payload)
+	}
+	if it.Thread != nil {
+		n += viewOverhead + len(it.Thread.Title) + len(it.Thread.Workspace)
 		for _, r := range it.Thread.Requests {
 			n += len(r.Body)
 		}
-		return n
 	}
-	return 0
+	return n
 }
 
 func (s *stream) bound() {

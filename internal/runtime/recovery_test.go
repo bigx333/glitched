@@ -3,8 +3,6 @@ package runtime_test
 import (
 	"context"
 	"errors"
-	"io/fs"
-	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -13,10 +11,8 @@ import (
 	"time"
 
 	"glitched/internal/api"
-	"glitched/internal/engine"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
-	"glitched/internal/store"
 )
 
 // crashDuring brings a thread to an approval, holds the first provider call
@@ -178,91 +174,7 @@ func invalidations(t *testing.T, evs []api.Event) []api.RequestInvalidation {
 	return out
 }
 
-// copyDB copies a closed database file by file, the way a user restores a
-// backup of it.
-func copyDB(t *testing.T, from, to string) {
-	t.Helper()
-	for _, sfx := range []string{"", "-wal", "-shm"} {
-		b, err := os.ReadFile(from + sfx)
-		if errors.Is(err, fs.ErrNotExist) {
-			os.Remove(to + sfx)
-			continue
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(to+sfx, b, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 func uncertain(th api.Thread) bool { return th.Run == api.RunUncertain }
-
-func TestARestoredDatabaseNeverStartsATurnAgain(t *testing.T) {
-	path := dbPath(t)
-	st, err := store.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	thread := newThread(t, st2endpoint{st})
-	submit(t, st2endpoint{st}, thread, dispatch("go", api.StartNow))
-	st.Close()
-	copyDB(t, path, path+".bak") // the backup holds the start, not yet run
-
-	ad := fake.New(fake.Turn(false))
-	n := start(t, path, ad)
-	until(t, n.h, thread, "turn end", idle)
-	n.kill()
-
-	copyDB(t, path+".bak", path)
-	n = start(t, path, ad)
-	until(t, n.h, thread, "the run from the backup is uncertain", uncertain)
-	time.Sleep(50 * time.Millisecond)
-	if ad.Starts() != 1 {
-		t.Fatalf("the turn started %d times, want once: the backup's start already ran", ad.Starts())
-	}
-	assertReplay(t, n.st)
-}
-
-func TestARestoredDatabaseSendsNothingItHeldInFlight(t *testing.T) {
-	path, g := dbPath(t), newGated(fake.Turn(true))
-	var steer api.ID
-	thread := crashDuring(t, path, g, provider.Steer{}, func(n node, thread api.ID) {
-		req := until(t, n.h, thread, "approval", waiting).Requests[0]
-		steer = api.NewID()
-		if _, err := n.h.Submit(ctx, api.Command{ID: steer, Target: thread, Body: dispatch("hurry", api.SteerActive)}); err != nil {
-			t.Fatal(err)
-		}
-		respond(t, n.h, thread, req)
-	})
-	copyDB(t, path, path+".bak") // a steer leased, an answer and the run in flight
-
-	st, err := store.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	submit(t, st2endpoint{st}, thread, api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
-	st.Close()
-	copyDB(t, path+".bak", path)
-
-	n := start(t, path, g)
-	until(t, n.h, thread, "the run from the backup is uncertain", uncertain)
-	stored, err := n.st.Thread(ctx, thread)
-	if err != nil {
-		t.Fatal(err)
-	}
-	until(t, n.h, thread, "the answer fails", func(api.Thread) bool {
-		stored, err = n.st.Thread(ctx, thread)
-		return err == nil && stored.Requests[0].State == api.RequestInvalidated
-	})
-	m, _ := stored.Message(steer)
-	if g.count(provider.Steer{}) != 0 || g.count(provider.Respond{}) != 0 || m.State != engine.QueueUncertain || g.Starts() != 1 {
-		t.Fatalf("after the restore: %d steers and %d answers reached the agent, steer %v, %d starts; want none, none, uncertain and 1",
-			g.count(provider.Steer{}), g.count(provider.Respond{}), m.State, g.Starts())
-	}
-	assertReplay(t, n.st)
-}
 
 // endsFirst opens the fake's agents to end their turn before the call that
 // answered them returns, as an agent that acts on an answer at once does.

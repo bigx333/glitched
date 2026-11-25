@@ -594,9 +594,12 @@ func (t Thread) Working() bool { return t.Run != RunIdle && t.Run != RunUncertai
 // Silent is whether the live run is a silent one.
 func (t Thread) Silent() bool { return t.Turn != nil && t.Turn.Silent }
 
-// Stoppable is whether the thread has a run the user can stop: a live
-// one that isn't silent.
-func (t Thread) Stoppable() bool { return t.Live() && !t.Silent() }
+// Stoppable is whether the user can stop the thread: it has a live run
+// that isn't silent, or it is a link's thread whose messages wait with
+// no run, on its worktree or its ceiling, where a stop holds them.
+func (t Thread) Stoppable() bool {
+	return t.Live() && !t.Silent() || t.Origin != nil && !t.Live() && t.Queued > 0 && !t.Resumable
+}
 
 // Live is whether the thread has a run, an uncertain one too. Only an
 // interrupt, a settle or a delete ends an uncertain run.
@@ -650,9 +653,13 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // and where a link's thread came from, which a version 20 GUI would show
 // as a child it can't open and a thread of the user's, and sends a link's
 // thread stream its views, without which a version 20 engine's follower
-// can't say what a stop there holds; version 22 removes thread.revert and
-// records fork handoffs separately from old conversation rewinds.
-const Protocol = 22
+// can't say what a stop there holds; version 22 takes a parent's answer to
+// its remote child's question over the link, which a version 21 engine
+// refuses, and sends a link's thread's view on its commit's last event,
+// which a version 21 follower drops, so it never says what a stop there
+// holds; version 23 removes thread.revert and records fork handoffs
+// separately from old conversation rewinds.
+const Protocol = 23
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host
@@ -700,9 +707,11 @@ func (t Tailnet) Running() bool { return t.State == "Running" }
 type Query struct {
 	Thread ID     `json:"thread,omitzero"`
 	After  Cursor `json:"after,omitzero"`
-	// Views is that a thread's subscription also sends the thread's view,
-	// as a StreamThread item, after a catch-up that replays its events
-	// and after each commit that moves it. A Read ignores it.
+	// Views is that a thread's subscription also sends the thread's view
+	// at each commit that moves it, on the item of the commit's last event
+	// of the thread, so the two arrive whole, and on a catch-up's last
+	// replayed event, or as a StreamThread item when it replays none. A
+	// Read ignores it.
 	Views bool `json:"views,omitempty"`
 }
 
