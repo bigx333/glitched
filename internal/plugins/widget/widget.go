@@ -113,10 +113,13 @@ type Native struct {
 // Natives are the native widgets a plugin may place, by name. Only these
 // draw: a name that isn't one, a locked one included, refuses the view.
 var Natives = map[string]Native{
-	"diff.body":       {Props: map[string]string{"path": "string"}, In: []string{"thread.panel.diff"}, Thread: true, Fires: []string{"onChange"}},
-	"theme.card":      {Props: map[string]string{"theme": "string"}, In: []string{"settings.page.appearance"}, Fires: []string{"onChange"}},
-	"composer.input":  {In: []string{"composer"}, Thread: true},
-	"transcript.body": {Props: map[string]string{"bare": "bool"}, In: []string{"timeline.message"}, Thread: true},
+	"diff.body":              {Props: map[string]string{"path": "string"}, In: []string{"thread.panel.diff"}, Thread: true, Fires: []string{"onChange"}},
+	"terminal.body":          {In: []string{"thread.panel.terminal"}, Thread: true},
+	"composer.send.button":   {In: []string{"composer.send"}, Thread: true},
+	"composer.access.picker": {In: []string{"composer.access"}, Thread: true},
+	"theme.card":             {Props: map[string]string{"theme": "string"}, In: []string{"settings.page.appearance"}, Fires: []string{"onChange"}},
+	"composer.input":         {In: []string{"composer"}, Thread: true},
+	"transcript.body":        {Props: map[string]string{"bare": "bool"}, In: []string{"timeline.message"}, Thread: true},
 	// transcript.retry is a failed command's Retry and Dismiss, by its
 	// row's error or under its message's note.
 	"transcript.retry": {In: []string{"timeline.message"}, Thread: true},
@@ -190,6 +193,7 @@ var Locked = map[string]string{
 	"settings.plugins":    "it is where you turn plugins off, so no plugin draws it",
 	"settings.servers":    "pairing an engine trusts a machine, so only Glitched draws it",
 	"settings.providers":  "it chooses the program Glitched runs as an agent, so only Glitched draws it",
+	"settings.machine":    "pairing tokens and engine restarts trust this machine, so only Glitched draws it",
 	"confirm.destructive": "a confirm before something is deleted must be Glitched's own",
 }
 

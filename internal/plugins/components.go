@@ -69,6 +69,7 @@ var Components = []Component{
 	{Name: "settings.plugins", Locked: widget.Locked["settings.plugins"]},
 	{Name: "settings.servers", Locked: widget.Locked["settings.servers"]},
 	{Name: "settings.providers", Locked: widget.Locked["settings.providers"]},
+	{Name: "settings.machine", Locked: widget.Locked["settings.machine"]},
 	{Name: "confirm.destructive", Locked: widget.Locked["confirm.destructive"]},
 }
 

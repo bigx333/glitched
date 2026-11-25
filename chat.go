@@ -94,7 +94,7 @@ func (a *app) chatPage(c *ui.Context) {
 					dir = homeDir()
 				}
 				drawer := ui.Column(c).Key("terminal").Height(220).Transition(panel(0, 16))
-				drawer.Children(func() { a.terminal(c, dir) })
+				drawer.Children(func() { a.terminal(c, t, dir) })
 				a.terminalFocused = drawer.FocusWithin()
 			}
 		})
@@ -2183,7 +2183,14 @@ func (a *app) modelRef() api.ModelRef {
 
 var accessOf = map[string]api.Access{accessAsk: api.AccessAsk, accessAuto: api.AccessAutoEdits, accessFull: api.AccessFull}
 
-func (a *app) terminal(c *ui.Context, workspace string) {
+type terminalPanel struct {
+	Thread plugins.ThreadRecord `json:"thread"`
+	Part   string               `json:"part"`
+	Title  string               `json:"title"`
+	Error  bool                 `json:"error,omitempty"`
+}
+
+func (a *app) terminal(c *ui.Context, t thread, workspace string) {
 	s, err := a.shellFor(workspace)
 	title := "zsh"
 	if s != nil {
@@ -2192,15 +2199,35 @@ func (a *app) terminal(c *ui.Context, workspace string) {
 	// The drawer is the terminal's colors, which are the theme's.
 	th := a.theme.terminal()
 	ui.Column(c).Height(220).Background(th.Background).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
-		ui.Row(c).Padding(4, 8, 4, 12).Gap(6).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
-			ui.Icon(c, icTerminal).FontSize(12).TextColor(palette.muted)
-			ui.Text(c, title).FontSize(11.5).TextColor(palette.muted).SingleLine().Shrink(1)
-			ui.Spacer(c)
-			if a.iconButton(c, "close-terminal", icX, "Close terminal", false).Padding(3).Clicked() {
-				a.showTerminal = false
+		key := composerKey(t)
+		ctx := func(part string) func(plugins.ThreadRecord) any {
+			return func(r plugins.ThreadRecord) any {
+				return terminalPanel{Thread: r, Part: part, Title: title, Error: err != nil}
 			}
-		})
-		a.terminalBody(c, s, err)
+		}
+		if !a.pluginComponent(c, "thread.panel.terminal", &t, componentCopy{
+			key: key + "/header", box: func() ui.Element { return ui.Row(c).Shrink(1) }, context: ctx("header"),
+			native: func(*widget.Node) { a.terminalHeader(c, title) },
+		}) {
+			a.terminalHeader(c, title)
+		}
+		if !a.pluginComponent(c, "thread.panel.terminal", &t, componentCopy{
+			key: key + "/body", box: func() ui.Element { return ui.Row(c).Grow(1).Shrink(1).Basis(0) }, context: ctx("body"),
+			native: func(*widget.Node) { a.terminalBody(c, s, err) },
+		}) {
+			a.terminalBody(c, s, err)
+		}
+	})
+}
+
+func (a *app) terminalHeader(c *ui.Context, title string) {
+	ui.Row(c).Padding(4, 8, 4, 12).Gap(6).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
+		ui.Icon(c, icTerminal).FontSize(12).TextColor(palette.muted)
+		ui.Text(c, title).FontSize(11.5).TextColor(palette.muted).SingleLine().Shrink(1)
+		ui.Spacer(c)
+		if a.iconButton(c, "close-terminal", icX, "Close terminal", false).Padding(3).Clicked() {
+			a.showTerminal = false
+		}
 	})
 }
 

@@ -359,6 +359,12 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 		a.composerIn(c)
 	case "transcript.body":
 		cp.native(n)
+	case "terminal.body":
+		cp.native(n)
+	case "composer.send.button":
+		a.sendButton(c, *t, false)
+	case "composer.access.picker":
+		a.accessPicker(c, *t)
 	case "transcript.retry":
 		cp.retry()
 	case "message.copy", "message.edit", "message.retry", "message.fork", "message.item", "message.time", "thread.crumb", "thread.heading",
@@ -479,8 +485,8 @@ func (a *app) openInEffect(args json.RawMessage) (any, error) {
 	if err := json.Unmarshal(args, &in); err != nil {
 		return nil, err
 	}
-	if _, ok := openInApps[in.App]; !ok {
-		return nil, fmt.Errorf("no app %q to open in: cursor, vscode, zed or finder", in.App)
+	if _, ok := openInApps[in.App]; !ok && in.App != "editor" {
+		return nil, fmt.Errorf("no app %q to open in: editor, cursor, vscode, zed or finder", in.App)
 	}
 	t, err := a.threadNamed(in.Thread)
 	if err != nil {
@@ -488,6 +494,13 @@ func (a *app) openInEffect(args json.RawMessage) (any, error) {
 	}
 	if !t.local() || t.View.Workspace == "" {
 		return nil, errors.New("the thread's workspace isn't on this machine")
+	}
+	if in.App == "editor" {
+		ed := editorCLI()
+		if ed == "" {
+			return nil, errors.New("no editor to open the workspace in")
+		}
+		return nil, startEditor(ed, projectDir(t.View.Workspace))
 	}
 	return nil, openInApp(in.App, expandHome(t.View.Workspace))
 }

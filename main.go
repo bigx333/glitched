@@ -58,12 +58,7 @@ var (
 )
 
 // themes are the looks the settings choose from, after System.
-var themes = []theme{
-	lightTheme,
-	darkTheme,
-	{"Mocha", true, mochaColors, "Catppuccin Mocha"},
-	{"Dawn", false, dawnColors, "Rose Pine Dawn"},
-}
+var themes = []theme{lightTheme, darkTheme}
 
 // systemTheme is the choice that follows the system's appearance.
 const systemTheme = "System"
@@ -148,38 +143,6 @@ var (
 		red:     ui.Hex("#dc2626"),
 		amber:   ui.Hex("#d97706"),
 		blue:    ui.Hex("#2563eb"),
-	}
-	// mochaColors are Catppuccin Mocha's.
-	mochaColors = colors{
-		bg:      ui.Hex("#1e1e2e"),
-		sidebar: ui.Hex("#181825"),
-		surface: ui.Hex("#262637"),
-		hover:   ui.RGBA(205, 214, 244, 0.06),
-		active:  ui.RGBA(205, 214, 244, 0.1),
-		border:  ui.RGBA(205, 214, 244, 0.1),
-		text:    ui.Hex("#cdd6f4"),
-		muted:   ui.Hex("#a6adc8"),
-		faint:   ui.Hex("#9399b2"),
-		green:   ui.Hex("#a6e3a1"),
-		red:     ui.Hex("#f38ba8"),
-		amber:   ui.Hex("#f9e2af"),
-		blue:    ui.Hex("#89b4fa"),
-	}
-	// dawnColors are Rosé Pine Dawn's.
-	dawnColors = colors{
-		bg:      ui.Hex("#faf4ed"),
-		sidebar: ui.Hex("#f2e9e1"),
-		surface: ui.Hex("#fffaf3"),
-		hover:   ui.RGBA(87, 82, 121, 0.06),
-		active:  ui.RGBA(87, 82, 121, 0.1),
-		border:  ui.RGBA(87, 82, 121, 0.12),
-		text:    ui.Hex("#575279"),
-		muted:   ui.Hex("#605c78"),
-		faint:   ui.Hex("#66627e"),
-		green:   ui.Hex("#286983"),
-		red:     ui.Hex("#b4637a"),
-		amber:   ui.Hex("#ea9d34"),
-		blue:    ui.Hex("#56949f"),
 	}
 	accents = []struct {
 		name  string
