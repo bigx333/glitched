@@ -10,8 +10,7 @@ var (
 	ErrConflict = errors.New("api: command id reused with a different body")
 	// ErrRevision: the command's revision is behind the target's.
 	ErrRevision = errors.New("api: stale revision")
-	// ErrExpired: the command arrived after its Expires, or after the
-	// engine pruned the receipt its ID may have taken.
+	// ErrExpired: the command arrived after its Expires.
 	ErrExpired = errors.New("api: command expired")
 	// ErrNotFound: the target thread is unknown on this host.
 	ErrNotFound = errors.New("api: not found")

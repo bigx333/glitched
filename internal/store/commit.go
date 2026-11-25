@@ -310,14 +310,11 @@ func steeredByUser(ctx context.Context, q querier, thread api.ID) (bool, error) 
 	return !by.Valid, err
 }
 
-// Committed is whether a command under id was committed. It is
-// api.ErrExpired for one whose receipt Maintain may have pruned.
+// Committed is whether a command under id was committed.
 func (s *Store) Committed(ctx context.Context, id api.ID) (bool, error) {
 	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM commands WHERE id = ?`, id[:]).Scan(&n); err != nil || n > 0 {
-		return n > 0, err
-	}
-	return false, forgotten(ctx, s.db, id)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM commands WHERE id = ?`, id[:]).Scan(&n)
+	return n > 0, err
 }
 
 // treeOf is every thread under top that isn't deleted, each before the
@@ -516,9 +513,6 @@ func (s *Store) commit(ctx context.Context, r *receipt, done int64, plan func(q 
 		case err == nil:
 			return api.Cursor{}, api.ErrConflict
 		case !errors.Is(err, sql.ErrNoRows):
-			return api.Cursor{}, err
-		}
-		if err := forgotten(ctx, tx, r.id); err != nil {
 			return api.Cursor{}, err
 		}
 	}

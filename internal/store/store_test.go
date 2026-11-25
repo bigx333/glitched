@@ -1654,8 +1654,8 @@ func TestAVersion17DatabaseUpgradesWithIndexes(t *testing.T) {
 	}
 	defer db.Close()
 	var version int
-	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 18 {
-		t.Fatalf("user_version = %d (%v), want 18", version, err)
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 19 {
+		t.Fatalf("user_version = %d (%v), want 19", version, err)
 	}
 	for _, idx := range []string{"events_by_thread_type", "threads_live_updated", "threads_by_parent"} {
 		var count int
@@ -1730,7 +1730,7 @@ func TestReadBulkMatchesSingleThreadLoad(t *testing.T) {
 	}
 }
 
-func TestMaintainPrunesDoneEffectsOldCommandsAndCheckpointsWAL(t *testing.T) {
+func TestMaintainPrunesDoneEffectsAndCheckpointsWAL(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "host.db")
 	s := open(t, path)
@@ -1760,19 +1760,19 @@ func TestMaintainPrunesDoneEffectsOldCommandsAndCheckpointsWAL(t *testing.T) {
 		// i == 5 stays leased.
 	}
 
-	res, err := s.Maintain(ctx, store.MaintainOptions{KeepCommands: 5, Batch: 2})
+	res, err := s.Maintain(ctx, store.MaintainOptions{Batch: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.PrunedEffects != 4 || res.PrunedCommands != 7 {
-		t.Fatalf("first Maintain = %+v, want PrunedEffects=4 PrunedCommands=7, in batches of 2", res)
+	if res.PrunedEffects != 4 {
+		t.Fatalf("first Maintain = %+v, want PrunedEffects=4, in batches of 2", res)
 	}
 
-	res2, err := s.Maintain(ctx, store.MaintainOptions{KeepCommands: 5, Batch: 10})
+	res2, err := s.Maintain(ctx, store.MaintainOptions{Batch: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res2.PrunedEffects != 0 || res2.PrunedCommands != 0 {
+	if res2.PrunedEffects != 0 {
 		t.Fatalf("second Maintain = %+v, want nothing left to prune", res2)
 	}
 
@@ -1818,7 +1818,8 @@ func hashID(i int) api.ID {
 	return api.ID(sum[:16])
 }
 
-// renamed is how far thread's log reached after a rename to title under id.
+// renamed renames thread to title under id, and fails t unless the rename
+// was applied: it wrote an event.
 func renamed(t *testing.T, s *store.Store, thread, id api.ID, title string) {
 	t.Helper()
 	ctx := context.Background()
@@ -1851,7 +1852,7 @@ func TestMaintainLetsAFreshCommandRunAmongHashOrderedReceipts(t *testing.T) {
 		t.Fatal(err)
 	}
 	renamed(t, s, thread, api.NewID(), "from the GUI")
-	renamed(t, s, thread, api.ID{}, "a hash below every other")
+	renamed(t, s, thread, api.ID{15: 1}, "a hash below every other")
 	for _, i := range []int{0, seeded / 2, seeded - 1} {
 		if done, err := s.Committed(ctx, hashID(i)); err != nil || !done {
 			t.Errorf("receipt %d after Maintain: Committed = %v, %v; want true", i, done, err)

@@ -259,7 +259,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 18
+const schemaVersion = 19
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -393,6 +393,12 @@ ALTER TABLE threads ADD COLUMN origin TEXT;
 CREATE INDEX IF NOT EXISTS events_by_thread_type ON events (thread, type, seq);
 CREATE INDEX IF NOT EXISTS threads_live_updated ON threads (deleted, updated_at DESC, id);
 CREATE INDEX IF NOT EXISTS threads_by_parent ON threads (parent, deleted, id) WHERE parent IS NOT NULL;
+`,
+	// Drop what earlier builds that pruned receipts left: an index on
+	// commands.seq and the watermark that refused commands below it.
+	18: `
+DROP INDEX IF EXISTS commands_by_seq;
+DELETE FROM meta WHERE key = 'commands_pruned';
 `,
 }
 
