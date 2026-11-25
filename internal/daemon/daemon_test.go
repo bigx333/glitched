@@ -546,8 +546,8 @@ func TestWithClaudeGivesRunsTheBrowser(t *testing.T) {
 	}
 	s := servers[1]
 	got := append([]string{s.Command}, s.Args...)
-	if want := browsermcp.Command(filepath.Join(base, "state")); s.Name != browsermcp.ServerName || s.Trusted || s.Env != nil || !slices.Equal(got, want) {
-		t.Errorf("the run's browser %+v, want untrusted %s running %q", s, browsermcp.ServerName, want)
+	if want := browsermcp.Command(filepath.Join(base, "state")); s.Name != browsermcp.ServerName || s.Trusted || len(s.Env) != 1 || s.Env["GLITCHED_THREAD"] != thread.String() || !slices.Equal(got, want) {
+		t.Errorf("the run's browser %+v, want untrusted %s running %q with GLITCHED_THREAD=%s", s, browsermcp.ServerName, want, thread)
 	}
 }
 

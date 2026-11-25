@@ -3,14 +3,15 @@
 // names, as an accessibility tree reads, and gives each element an agent
 // can act on a ref, as s12e3, which finds it again while that snapshot is
 // the page's latest. A snapshot replaces the page's earlier refs, and a
-// page navigating or reloading drops them all, so that a ref never finds
-// another element than the one it named: resolving a stale one says why,
-// and to take a new snapshot.
+// page navigating, reloading, or changing SPA route drops them all, so
+// that a ref never finds another element than the one it named: resolving
+// a stale one says why, and to take a new snapshot.
 //
-// The page's side is a script it evaluates (snapshot.js), as the web view
-// gives no accessibility tree of its own; the snapshot's format and the
-// refs' epochs follow a prior internal automation engine's design
-// (docs/browser.md).
+// The page's side is a script it evaluates (snapshot.js), installed at
+// document start via PreloadScript with a closed-over per-run secret, as
+// the web view gives no accessibility tree of its own; the snapshot's
+// format and the refs' epochs follow a prior internal automation engine's
+// design (docs/browser.md).
 package webtarget
 
 import (
@@ -18,9 +19,11 @@ import (
 	cryptorand "crypto/rand"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"regexp"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"unicode/utf8"
@@ -105,15 +108,24 @@ type Element struct {
 // earlier run of the app finds nothing in a page that outlived it.
 var epochs atomic.Uint64
 
-// key names where the page script keeps its state in a page, random to
-// each run of the app. It hides nothing from a page that looks: the
-// property isn't enumerable, but Object.getOwnPropertyNames(window) lists
-// it. As it lasts the run, a page that learns it can plant a fake under it
-// in a later document, one it navigates to or another tab's at a site it
-// controls, before that document's first snapshot. The checks of Take and
-// Describe bound what a fake returns, not what it says; isolating the
-// script from the page is the fix (docs/browser.md, Next 3).
-var key = "__glitched_" + cryptorand.Text()
+// key names where the page script keeps its dispatcher on window, random
+// to each run of the app; secret is closed over inside the dispatcher so
+// only Go (which injects PreloadScript at document start) can invoke it,
+// preventing page scripts that discover window[key] from calling or
+// resetting it. Full isolation across origins/wrappers awaits an upstream
+// MyGo WKContentWorld / CDP isolated-world hook (docs/browser.md).
+var (
+	key    = "__glitched_" + cryptorand.Text()
+	secret = cryptorand.Text()
+)
+
+// PreloadScript returns a document-start initialization script that
+// installs webtarget's dispatcher, captures pristine DOM built-ins, and
+// hooks SPA history state changes before any page script runs.
+func PreloadScript() string {
+	a, _ := json.Marshal(map[string]any{"op": "install", "key": key, "secret": secret})
+	return "(function(){\nconst args = " + string(a) + ";\n" + script + "\n})();"
+}
 
 // What a page's answer may hold, beside the snapshot's own budgets: its
 // title and URL, which the script clips to these too (snapshot.js), an
@@ -229,6 +241,103 @@ func Type(ctx context.Context, p Page, s Snapshot, ref, text string, submit bool
 	return act(ctx, p, s, ref, map[string]any{"action": "type", "text": text, "submit": submit})
 }
 
+// SelectOptions picks an option inside a <select> dropdown by Value or Label.
+type SelectOptions struct {
+	Value *string
+	Label *string
+}
+
+// Select chooses an option in ref's <select> dropdown, firing input and change.
+func Select(ctx context.Context, p Page, s Snapshot, ref string, o SelectOptions) error {
+	if o.Value == nil && o.Label == nil {
+		return errors.New("webtarget: select needs a value or label")
+	}
+	args := map[string]any{"action": "select"}
+	if o.Value != nil {
+		args["hasValue"] = true
+		args["value"] = *o.Value
+	} else {
+		args["hasLabel"] = true
+		args["label"] = *o.Label
+	}
+	return act(ctx, p, s, ref, args)
+}
+
+// ScrollOptions configures scrolling the viewport or a ref's element.
+type ScrollOptions struct {
+	Ref       string
+	Snapshot  *Snapshot
+	Direction string
+	Amount    int
+}
+
+var validScrollDirs = []string{"up", "down", "left", "right", "top", "bottom"}
+
+// Scroll scrolls the page or a specific element by ref. If Direction is
+// omitted and Ref is set, the element is scrolled into view.
+func Scroll(ctx context.Context, p Page, o ScrollOptions) error {
+	if o.Direction == "" && o.Ref == "" {
+		return errors.New("webtarget: scroll needs a direction or ref")
+	}
+	if o.Direction != "" && !slices.Contains(validScrollDirs, o.Direction) {
+		return fmt.Errorf("webtarget: scroll direction must be up, down, left, right, top or bottom, not %q", o.Direction)
+	}
+	args := map[string]any{
+		"op":        "scroll",
+		"direction": o.Direction,
+		"amount":    o.Amount,
+	}
+	if o.Ref != "" {
+		if o.Snapshot == nil {
+			return fmt.Errorf("webtarget: %s needs a snapshot", o.Ref)
+		}
+		n, err := o.Snapshot.named(o.Ref)
+		if err != nil {
+			return err
+		}
+		args["ref"], args["role"], args["name"] = o.Ref, n.Role, n.Name
+	}
+	var out struct {
+		Done bool `json:"done"`
+	}
+	if err := run(ctx, p, args, &out); err != nil {
+		return err
+	}
+	if !out.Done {
+		return errors.New("webtarget: the page's scroll answer is not the script's")
+	}
+	return nil
+}
+
+// WaitCondition describes a DOM or URL condition to check on a page.
+type WaitCondition struct {
+	Text     string
+	Selector string
+	URL      string
+	Gone     bool
+}
+
+// CheckCondition evaluates c against the page and reports whether it currently holds.
+func CheckCondition(ctx context.Context, p Page, c WaitCondition) (bool, error) {
+	if c.Text == "" && c.Selector == "" && c.URL == "" {
+		return false, errors.New("webtarget: wait_for needs text, selector or url")
+	}
+	args := map[string]any{
+		"op":       "wait_check",
+		"text":     c.Text,
+		"selector": c.Selector,
+		"url":      c.URL,
+		"gone":     c.Gone,
+	}
+	var out struct {
+		Matched bool `json:"matched"`
+	}
+	if err := run(ctx, p, args, &out); err != nil {
+		return false, err
+	}
+	return out.Matched, nil
+}
+
 // act does what args ask of ref's element, in the page's script, which
 // first checks it is still what s named it, shows and is enabled.
 func act(ctx context.Context, p Page, s Snapshot, ref string, args map[string]any) error {
@@ -243,8 +352,8 @@ func act(ctx context.Context, p Page, s Snapshot, ref string, args map[string]an
 	if err := run(ctx, p, args, &out); err != nil {
 		return err
 	}
-	// That catches a page answering with nothing, not one that fakes
-	// the script under its key (key), which isolation will close.
+	// That catches a page answering with nothing; full isolated-world
+	// execution awaits MyGo's content-world hook.
 	if !out.Done {
 		return fmt.Errorf("webtarget: the page's answer for %s is not the script's", ref)
 	}
@@ -287,6 +396,7 @@ func run(ctx context.Context, p Page, args map[string]any, out any) error {
 // as Page.Eval runs statements.
 func Script(args map[string]any) string {
 	args["key"] = key
+	args["secret"] = secret
 	a, _ := json.Marshal(args)
 	return "const args = " + string(a) + ";\n" + script
 }

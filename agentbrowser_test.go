@@ -21,16 +21,30 @@ import (
 )
 
 // agentPage is a tab's page that answers the page script as it would: a
-// snapshot of a link "Docs" and a text box "Search", and actions on them.
+// snapshot of a link "Docs", a text box "Search", and a dropdown "Size",
+// plus capture support when png is set.
 type agentPage struct {
 	*fakePage
 	mu    sync.Mutex
 	acts  []map[string]any // the actions asked, with their args
 	title string
+	url   string
+	png   []byte
 	// onAct, if set, is what the page does as it acts, or why it won't.
 	onAct func() error
 	// onEval, if set, runs as each script does, outside the page's lock.
 	onEval func()
+	// onWait, if set, evaluates wait_check scripts.
+	onWait func(args map[string]any) (bool, error)
+}
+
+func (p *agentPage) CapturePage(context.Context) ([]byte, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.png) == 0 {
+		return nil, errors.New("no image")
+	}
+	return p.png, nil
 }
 
 func (p *agentPage) EvalContext(_ context.Context, code string) (any, error) {
@@ -47,14 +61,19 @@ func (p *agentPage) EvalContext(_ context.Context, code string) (any, error) {
 	switch args["op"] {
 	case "snapshot":
 		epoch := uint64(args["epoch"].(float64))
-		docs, search := fmt.Sprintf("s%de1", epoch), fmt.Sprintf("s%de2", epoch)
-		return map[string]any{"epoch": epoch, "url": "https://go.dev/", "title": p.title, "refs": 2,
-			"text": `- link "Docs" [ref=` + docs + "]\n" + `- textbox "Search" [ref=` + search + "]",
+		docs, search, sel := fmt.Sprintf("s%de1", epoch), fmt.Sprintf("s%de2", epoch), fmt.Sprintf("s%de3", epoch)
+		pageURL := p.url
+		if pageURL == "" {
+			pageURL = "https://go.dev/"
+		}
+		return map[string]any{"epoch": epoch, "url": pageURL, "title": p.title, "refs": 3,
+			"text": `- link "Docs" [ref=` + docs + "]\n" + `- textbox "Search" [ref=` + search + "]\n" + `- combobox "Size" [ref=` + sel + "]",
 			"elements": []any{
 				map[string]any{"ref": docs, "role": "link", "name": "Docs"},
 				map[string]any{"ref": search, "role": "textbox", "name": "Search"},
+				map[string]any{"ref": sel, "role": "combobox", "name": "Size"},
 			}}, nil
-	case "act":
+	case "act", "scroll":
 		p.acts = append(p.acts, args)
 		if p.onAct != nil {
 			if err := p.onAct(); err != nil {
@@ -62,6 +81,16 @@ func (p *agentPage) EvalContext(_ context.Context, code string) (any, error) {
 			}
 		}
 		return map[string]any{"done": true}, nil
+	case "wait_check":
+		p.acts = append(p.acts, args)
+		if p.onWait != nil {
+			ok, err := p.onWait(args)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"matched": ok}, nil
+		}
+		return map[string]any{"matched": true}, nil
 	}
 	return nil, fmt.Errorf("op %v", args["op"])
 }
@@ -85,7 +114,17 @@ func agents(t *testing.T) (*app, *agentBrowser, *[]*agentPage) {
 
 func callTool(t *testing.T, ab *agentBrowser, tool, args string) (string, error) {
 	t.Helper()
-	return ab.call(context.Background(), tool, json.RawMessage(args))
+	r, err := ab.call(context.Background(), tool, json.RawMessage(args))
+	return r.Text, err
+}
+
+func callToolReply(t *testing.T, ab *agentBrowser, thread, tool, args string) (browsermcp.Reply, error) {
+	t.Helper()
+	ctx := context.Background()
+	if thread != "" {
+		ctx = browsermcp.WithThread(ctx, thread)
+	}
+	return ab.call(ctx, tool, json.RawMessage(args))
 }
 
 // An agent loading an address shows the pane on a tab at it, and reads
@@ -381,8 +420,8 @@ func TestAnAgentsActionThatWentThroughSucceeds(t *testing.T) {
 	defer cancel()
 	(*made)[0].onAct = func() error { cancel(); return nil }
 	out, err := ab.call(ctx, "browser_click", json.RawMessage(`{"ref":"`+refIn(t, first, "Docs")+`"}`))
-	if err != nil || !strings.HasPrefix(out, "The click went through, but what followed didn't finish") {
-		t.Errorf("a click whose call ended as it acted answered %q, %v", out, err)
+	if err != nil || !strings.HasPrefix(out.Text, "The click went through, but what followed didn't finish") {
+		t.Errorf("a click whose call ended as it acted answered %+v, %v", out, err)
 	}
 	if n := len((*made)[0].acts); n != 1 {
 		t.Errorf("the page acted %d times", n)
@@ -478,8 +517,8 @@ func TestTheAppServesBrowserMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	go browsermcp.Accept(ln, func(_ context.Context, tool string, _ json.RawMessage) (string, error) {
-		return "the app's " + tool, nil
+	go browsermcp.Accept(ln, func(_ context.Context, tool string, _ json.RawMessage) (browsermcp.Reply, error) {
+		return browsermcp.Text("the app's " + tool), nil
 	})
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
@@ -660,5 +699,123 @@ func TestAnAgentsCallWaitingOnATabGivesUp(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("a call waiting on a held tab went on after the agent gave up")
+	}
+}
+
+func TestAgentBrowserScreenshot(t *testing.T) {
+	a, ab, made := agents(t)
+	if _, err := callTool(t, ab, "browser_navigate", `{"url":"example.com"}`); err != nil {
+		t.Fatal(err)
+	}
+	wantPNG := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 1, 2, 3}
+	(*made)[0].png = wantPNG
+	r, err := callToolReply(t, ab, "", "browser_screenshot", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.MimeType != "image/png" || !strings.Contains(r.Text, "Screenshot of tab 1") || string(r.Image) != string(wantPNG) {
+		t.Errorf("screenshot reply = %+v", r)
+	}
+
+	// Engine without Capturer reports a clear unsupported error.
+	a.newTab("https://go.dev")
+	a.browser.tabs[a.browser.active].page = &fakePage{}
+	if _, err := callToolReply(t, ab, "", "browser_screenshot", `{}`); err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Errorf("non-capturer error = %v", err)
+	}
+}
+
+func TestAgentBrowserSelectScrollAndWaitFor(t *testing.T) {
+	_, ab, made := agents(t)
+	if _, err := callTool(t, ab, "browser_navigate", `{"url":"example.com"}`); err != nil {
+		t.Fatal(err)
+	}
+	p := (*made)[0]
+	selRef := fmt.Sprintf("s%de3", ab.snaps[1].Epoch)
+	if out, err := callTool(t, ab, "browser_select", `{"ref":"`+selRef+`","label":"Large"}`); err != nil || !strings.Contains(out, `URL:`) {
+		t.Fatalf("browser_select: %v\n%s", err, out)
+	}
+	if out, err := callTool(t, ab, "browser_scroll", `{"direction":"down","amount":300}`); err != nil || !strings.Contains(out, `Tab 1:`) {
+		t.Fatalf("browser_scroll: %v\n%s", err, out)
+	}
+
+	var polls int
+	p.onWait = func(args map[string]any) (bool, error) {
+		polls++
+		return polls >= 2, nil
+	}
+	if out, err := callTool(t, ab, "browser_wait_for", `{"text":"Ready","timeout_ms":1000}`); err != nil || !strings.Contains(out, `Tab 1:`) {
+		t.Fatalf("browser_wait_for match: %v\n%s", err, out)
+	}
+	if polls != 2 {
+		t.Errorf("polls = %d, want 2", polls)
+	}
+
+	p.onWait = func(map[string]any) (bool, error) { return false, nil }
+	if _, err := callTool(t, ab, "browser_wait_for", `{"selector":".spinner","gone":true,"timeout_ms":120}`); err == nil || !strings.Contains(err.Error(), "Timed out") {
+		t.Errorf("browser_wait_for timeout = %v", err)
+	}
+}
+
+func TestAgentBrowserTabLeasing(t *testing.T) {
+	a, ab, _ := agents(t)
+	now := time.Unix(1_700_000_000, 0)
+	ab.clock = func() time.Time { return now }
+
+	// Thread A opens tab 1 and holds its lease.
+	if _, err := callToolReply(t, ab, "threadAAAAAAA", "browser_tabs", `{"action":"new","url":"example.com"}`); err != nil {
+		t.Fatal(err)
+	}
+	// Thread B cannot navigate or close Thread A's leased tab explicitly.
+	if _, err := callToolReply(t, ab, "threadBBBBBBB", "browser_navigate", `{"tab":1,"url":"go.dev"}`); err == nil || !strings.Contains(err.Error(), "leased by another thread") {
+		t.Errorf("thread B explicit navigate = %v", err)
+	}
+	if _, err := callToolReply(t, ab, "threadBBBBBBB", "browser_tabs", `{"action":"close","tab":1}`); err == nil || !strings.Contains(err.Error(), "leased by another thread") {
+		t.Errorf("thread B close = %v", err)
+	}
+	// Thread B navigating without a tab opens its own tab 2 instead of clobbering tab 1.
+	if _, err := callToolReply(t, ab, "threadBBBBBBB", "browser_navigate", `{"url":"go.dev"}`); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.browser.tabs) != 2 || a.browser.tabs[0].url != "https://example.com" || a.browser.tabs[1].url != "https://go.dev" {
+		t.Fatalf("tabs after B navigate = %+v", a.browser.tabs)
+	}
+	// List shows lease tags.
+	listReply, err := callToolReply(t, ab, "threadAAAAAAA", "browser_tabs", `{"action":"list"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(listReply.Text, "tab 1") || !strings.Contains(listReply.Text, "[leased]") || !strings.Contains(listReply.Text, "[leased by threadBB]") {
+		t.Errorf("list output missing lease labels:\n%s", listReply.Text)
+	}
+	// Thread A releases its lease, then Thread B can select tab 1.
+	if _, err := callToolReply(t, ab, "threadAAAAAAA", "browser_tabs", `{"action":"release","tab":1}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callToolReply(t, ab, "threadBBBBBBB", "browser_tabs", `{"action":"select","tab":1}`); err != nil {
+		t.Fatalf("thread B select after release = %v", err)
+	}
+	// Advancing clock past leaseTTL expires Thread B's lease so Thread A can take tab 1.
+	now = now.Add(ab.leaseTTL + time.Second)
+	if _, err := callToolReply(t, ab, "threadAAAAAAA", "browser_tabs", `{"action":"select","tab":1}`); err != nil {
+		t.Fatalf("thread A select after expiry = %v", err)
+	}
+}
+
+func TestAgentBrowserSyncsSPAURL(t *testing.T) {
+	a, ab, made := agents(t)
+	if _, err := callTool(t, ab, "browser_navigate", `{"url":"https://app.example/start"}`); err != nil {
+		t.Fatal(err)
+	}
+	(*made)[0].url = "https://app.example/settings/profile"
+	(*made)[0].title = "Profile Settings"
+	if _, err := callTool(t, ab, "browser_snapshot", `{}`); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.browser.tabs[0].url; got != "https://app.example/settings/profile" {
+		t.Errorf("tab url = %q, want SPA route URL", got)
+	}
+	if got := a.browser.tabs[0].title; got != "Profile Settings" {
+		t.Errorf("tab title = %q, want Profile Settings", got)
 	}
 }

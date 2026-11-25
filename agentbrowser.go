@@ -35,6 +35,9 @@ type agentBrowser struct {
 	// settle is how long an action waits for a load it may have started
 	// to show, and load the longest it waits for one to end.
 	settle, load time.Duration
+	// leaseTTL is how long a thread holds a tab lease without activity.
+	leaseTTL time.Duration
+	clock    func() time.Time
 
 	mu sync.Mutex
 	// snaps are each tab's latest snapshot, by tab id: the refs the
@@ -45,10 +48,27 @@ type agentBrowser struct {
 	// They stay as their tabs close, as a call may yet hold one: tab ids
 	// aren't used again.
 	pages map[int]chan struct{}
+	// leases bind a tab id to the agent thread currently driving it.
+	leases map[int]tabLease
+}
+
+type tabLease struct {
+	thread  string
+	expires time.Time
 }
 
 func newAgentBrowser(a *app, onView func(func())) *agentBrowser {
-	return &agentBrowser{a: a, onView: onView, settle: 300 * time.Millisecond, load: 15 * time.Second, snaps: map[int]webtarget.Snapshot{}, pages: map[int]chan struct{}{}}
+	return &agentBrowser{
+		a:        a,
+		onView:   onView,
+		settle:   300 * time.Millisecond,
+		load:     15 * time.Second,
+		leaseTTL: 5 * time.Minute,
+		clock:    time.Now,
+		snaps:    map[int]webtarget.Snapshot{},
+		pages:    map[int]chan struct{}{},
+		leases:   map[int]tabLease{},
+	}
 }
 
 // toolTime bounds a tool call, past which the agent hears it timed out.
@@ -57,8 +77,6 @@ const toolTime = 60 * time.Second
 // serveAgents listens for agents' tools on the app's browser socket,
 // until the app quits.
 func (a *app) serveAgents() {
-	// Nothing authenticates a caller on the socket: the directory's mode
-	// is its gate, as for the engine's (daemon.Start).
 	if err := os.MkdirAll(a.dir, 0o700); err != nil {
 		log.Print(err)
 		return
@@ -97,51 +115,175 @@ func serveBrowserMCP(args []string, in io.Reader, out io.Writer) (bool, error) {
 
 // toolArgs are every tool's arguments.
 type toolArgs struct {
-	Action string `json:"action"`
-	URL    string `json:"url"`
-	Tab    *int   `json:"tab"`
-	Full   bool   `json:"full"`
-	Ref    string `json:"ref"`
-	Text   string `json:"text"`
-	Submit bool   `json:"submit"`
+	Action    string  `json:"action"`
+	URL       string  `json:"url"`
+	Tab       *int    `json:"tab"`
+	Full      bool    `json:"full"`
+	Ref       string  `json:"ref"`
+	Text      string  `json:"text"`
+	Submit    bool    `json:"submit"`
+	Value     *string `json:"value"`
+	Label     *string `json:"label"`
+	Direction string  `json:"direction"`
+	Amount    int     `json:"amount"`
+	Selector  string  `json:"selector"`
+	Gone      bool    `json:"gone"`
+	TimeoutMS int     `json:"timeout_ms"`
 }
 
-func (ab *agentBrowser) call(ctx context.Context, tool string, raw json.RawMessage) (string, error) {
+func (ab *agentBrowser) call(ctx context.Context, tool string, raw json.RawMessage) (browsermcp.Reply, error) {
 	var args toolArgs
 	if err := json.Unmarshal(raw, &args); err != nil {
-		return "", fmt.Errorf("%s's arguments: %v", tool, err)
+		return browsermcp.Reply{}, fmt.Errorf("%s's arguments: %v", tool, err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, toolTime)
 	defer cancel()
 	switch tool {
 	case "browser_tabs":
-		return ab.tabs(ctx, args)
+		out, err := ab.tabs(ctx, args)
+		return browsermcp.Text(out), err
 	case "browser_navigate":
-		return ab.navigate(ctx, args)
+		out, err := ab.navigate(ctx, args)
+		return browsermcp.Text(out), err
 	case "browser_snapshot":
+		thread := browsermcp.ThreadFromContext(ctx)
 		var t *browserTab
 		var p browse.Page
 		made := false
 		err := ab.view(ctx, func() error {
 			var err error
-			if t, err = ab.tab(args.Tab); err == nil {
+			if t, err = ab.preferredTab(args.Tab, thread); err == nil {
 				made = t.page == nil
 				p, err = ab.page(t)
 			}
 			return err
 		})
 		if err != nil {
-			return "", err
+			return browsermcp.Reply{}, err
 		}
 		// A tab never shown has just made its page, which is loading.
 		if made {
-			return ab.loaded(ctx, t, p, args.Full)
+			out, err := ab.loaded(ctx, t, p, args.Full)
+			return browsermcp.Text(out), err
 		}
-		return ab.snapshot(ctx, t, p, args.Full)
-	case "browser_click", "browser_type":
-		return ab.act(ctx, tool, args)
+		out, err := ab.snapshot(ctx, t, p, args.Full)
+		return browsermcp.Text(out), err
+	case "browser_screenshot":
+		return ab.screenshot(ctx, args)
+	case "browser_click", "browser_type", "browser_select":
+		out, err := ab.act(ctx, tool, args)
+		return browsermcp.Text(out), err
+	case "browser_scroll":
+		out, err := ab.scroll(ctx, args)
+		return browsermcp.Text(out), err
+	case "browser_wait_for":
+		out, err := ab.waitFor(ctx, args)
+		return browsermcp.Text(out), err
 	}
-	return "", fmt.Errorf("no tool %s", tool)
+	return browsermcp.Reply{}, fmt.Errorf("no tool %s", tool)
+}
+
+func (ab *agentBrowser) now() time.Time {
+	if ab.clock != nil {
+		return ab.clock()
+	}
+	return time.Now()
+}
+
+func (ab *agentBrowser) pruneLeasesLocked(now time.Time) {
+	for id, l := range ab.leases {
+		if !l.expires.After(now) {
+			delete(ab.leases, id)
+		}
+	}
+}
+
+func shortThread(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
+}
+
+// claimLease verifies tabID is unleased or leased to thread, and claims/renews the lease.
+func (ab *agentBrowser) claimLease(tabID int, thread string) error {
+	if thread == "" {
+		return nil
+	}
+	ab.mu.Lock()
+	defer ab.mu.Unlock()
+	now := ab.now()
+	ab.pruneLeasesLocked(now)
+	if cur, ok := ab.leases[tabID]; ok && cur.thread != "" && cur.thread != thread {
+		return fmt.Errorf("Tab %d is leased by another thread (%s); open a new tab with browser_tabs action=\"new\" instead.", tabID, shortThread(cur.thread))
+	}
+	ab.leases[tabID] = tabLease{thread: thread, expires: now.Add(ab.leaseTTL)}
+	return nil
+}
+
+func (ab *agentBrowser) releaseLeases(tabID *int, thread string) error {
+	ab.mu.Lock()
+	defer ab.mu.Unlock()
+	ab.pruneLeasesLocked(ab.now())
+	if tabID != nil {
+		if cur, ok := ab.leases[*tabID]; ok {
+			if thread != "" && cur.thread != "" && cur.thread != thread {
+				return fmt.Errorf("Tab %d is leased by another thread (%s) and cannot be released by this thread.", *tabID, shortThread(cur.thread))
+			}
+			delete(ab.leases, *tabID)
+		}
+		return nil
+	}
+	if thread == "" {
+		clear(ab.leases)
+		return nil
+	}
+	for id, cur := range ab.leases {
+		if cur.thread == thread {
+			delete(ab.leases, id)
+		}
+	}
+	return nil
+}
+
+func (ab *agentBrowser) leaseOwner(tabID int) string {
+	ab.mu.Lock()
+	defer ab.mu.Unlock()
+	ab.pruneLeasesLocked(ab.now())
+	return ab.leases[tabID].thread
+}
+
+// threadTab returns an open tab currently leased by thread. On the view's thread.
+func (ab *agentBrowser) threadTab(thread string) *browserTab {
+	if thread == "" {
+		return nil
+	}
+	for _, t := range ab.a.browser.tabs {
+		if ab.leaseOwner(t.id) == thread {
+			return t
+		}
+	}
+	return nil
+}
+
+// preferredTab picks id if given, or for thread avoids stealing another
+// thread's leased active tab when this thread already owns a tab. On the view's thread.
+func (ab *agentBrowser) preferredTab(id *int, thread string) (*browserTab, error) {
+	if id != nil {
+		return ab.tab(id)
+	}
+	t, err := ab.tab(nil)
+	if err != nil {
+		return nil, err
+	}
+	if thread != "" {
+		if owner := ab.leaseOwner(t.id); owner != "" && owner != thread {
+			if own := ab.threadTab(thread); own != nil {
+				return own, nil
+			}
+		}
+	}
+	return t, nil
 }
 
 // view runs fn on the view's thread, and returns what it did.
@@ -239,6 +381,7 @@ func agentURL(typed string) (string, error) {
 }
 
 func (ab *agentBrowser) tabs(ctx context.Context, args toolArgs) (string, error) {
+	thread := browsermcp.ThreadFromContext(ctx)
 	b := &ab.a.browser
 	var opened *browserTab
 	var p browse.Page
@@ -261,11 +404,16 @@ func (ab *agentBrowser) tabs(ctx context.Context, args toolArgs) (string, error)
 				// it was.
 				ab.a.closeTab(b.active)
 				ab.a.showPreview, ab.a.showDiff, b.active = shown, diff, min(active, max(len(b.tabs)-1, 0))
+				return err
 			}
-			return err
+			_ = ab.claimLease(opened.id, thread)
+			return nil
 		case "select":
 			t, err := ab.need(args.Tab, "select")
 			if err != nil {
+				return err
+			}
+			if err := ab.claimLease(t.id, thread); err != nil {
 				return err
 			}
 			ab.show(t)
@@ -274,12 +422,23 @@ func (ab *agentBrowser) tabs(ctx context.Context, args toolArgs) (string, error)
 			if err != nil {
 				return err
 			}
+			if err := ab.claimLease(t.id, thread); err != nil {
+				return err
+			}
 			ab.a.closeTab(slices.Index(b.tabs, t))
 			ab.mu.Lock()
 			delete(ab.snaps, t.id)
+			delete(ab.leases, t.id)
 			ab.mu.Unlock()
+		case "release":
+			if args.Tab != nil {
+				if _, err := ab.tab(args.Tab); err != nil {
+					return err
+				}
+			}
+			return ab.releaseLeases(args.Tab, thread)
 		default:
-			return fmt.Errorf("browser_tabs takes list, new, select or close, not %q.", args.Action)
+			return fmt.Errorf("browser_tabs takes list, new, select, close or release, not %q.", args.Action)
 		}
 		return nil
 	})
@@ -291,7 +450,7 @@ func (ab *agentBrowser) tabs(ctx context.Context, args toolArgs) (string, error)
 	}
 	var out string
 	err = ab.view(ctx, func() error {
-		out = ab.list()
+		out = ab.list(thread)
 		return nil
 	})
 	// Only a view that ran has written out.
@@ -311,7 +470,7 @@ func (ab *agentBrowser) need(id *int, action string) (*browserTab, error) {
 
 // list lists the tabs, each its id, title and address, and which shows.
 // On the view's thread.
-func (ab *agentBrowser) list() string {
+func (ab *agentBrowser) list(thread string) string {
 	ab.forget()
 	a := ab.a
 	b := &a.browser
@@ -328,12 +487,20 @@ func (ab *agentBrowser) list() string {
 			}
 			s.WriteString(")")
 		}
+		if owner := ab.leaseOwner(t.id); owner != "" {
+			if owner == thread {
+				s.WriteString(" [leased]")
+			} else {
+				fmt.Fprintf(&s, " [leased by %s]", shortThread(owner))
+			}
+		}
 		s.WriteString("\n")
 	}
 	return s.String()
 }
 
 func (ab *agentBrowser) navigate(ctx context.Context, args toolArgs) (string, error) {
+	thread := browsermcp.ThreadFromContext(ctx)
 	var u string
 	switch {
 	case args.URL != "" && args.Action != "":
@@ -353,26 +520,48 @@ func (ab *agentBrowser) navigate(ctx context.Context, args toolArgs) (string, er
 	err := ab.view(ctx, func() error {
 		b := &ab.a.browser
 		var err error
+		openedFresh := false
 		switch {
 		case args.Tab != nil:
 			if t, err = ab.tab(args.Tab); err != nil {
 				return err
 			}
 		case u != "":
-			t = b.current() // the dev server's, where there is none
+			if thread != "" && len(b.tabs) > 0 {
+				cur := b.tabs[b.active]
+				if owner := ab.leaseOwner(cur.id); owner != "" && owner != thread {
+					if own := ab.threadTab(thread); own != nil {
+						t = own
+					} else {
+						ab.a.newTab(u)
+						t = b.tabs[b.active]
+						openedFresh = true
+					}
+				} else {
+					t = b.current()
+				}
+			} else {
+				t = b.current() // the dev server's, where there is none
+			}
 		default:
-			if t, err = ab.tab(nil); err != nil {
+			if t, err = ab.preferredTab(nil, thread); err != nil {
 				return err
 			}
 		}
+		if err := ab.claimLease(t.id, thread); err != nil {
+			return err
+		}
 		switch {
-		case u != "":
+		case u != "" && !openedFresh:
 			ab.a.goTo(t, u)
 		case args.Action == "reload":
 			// Reload tries again a page that could not start.
 			ab.a.reload(t)
 		}
 		if p, err = ab.page(t); err != nil {
+			if openedFresh {
+				ab.a.closeTab(slices.Index(b.tabs, t))
+			}
 			return err
 		}
 		switch args.Action {
@@ -396,21 +585,66 @@ func (ab *agentBrowser) navigate(ctx context.Context, args toolArgs) (string, er
 	return ab.loaded(ctx, t, p, false)
 }
 
-func (ab *agentBrowser) act(ctx context.Context, tool string, args toolArgs) (string, error) {
-	epoch, _, err := webtarget.ParseRef(args.Ref)
+func (ab *agentBrowser) screenshot(ctx context.Context, args toolArgs) (browsermcp.Reply, error) {
+	thread := browsermcp.ThreadFromContext(ctx)
+	var t *browserTab
+	var p browse.Page
+	made := false
+	err := ab.view(ctx, func() error {
+		var err error
+		if t, err = ab.preferredTab(args.Tab, thread); err != nil {
+			return err
+		}
+		made = t.page == nil
+		if p, err = ab.page(t); err != nil {
+			return err
+		}
+		ab.show(t)
+		return nil
+	})
 	if err != nil {
-		return "", err
+		return browsermcp.Reply{}, err
 	}
-	ab.mu.Lock()
-	id, snap := 0, webtarget.Snapshot{}
-	for tab, s := range ab.snaps {
-		if s.Epoch == epoch {
-			id, snap = tab, s
+	if made {
+		if _, err := ab.waitForLoad(ctx, t, p); err != nil {
+			return browsermcp.Reply{}, err
 		}
 	}
-	ab.mu.Unlock()
-	if id == 0 {
-		return "", fmt.Errorf("%s is from no tab's latest snapshot; take a new snapshot.", args.Ref)
+	cap, ok := p.(browse.Capturer)
+	if !ok {
+		return browsermcp.Reply{}, errors.New("Screenshots are not supported by this browser engine.")
+	}
+	png, err := cap.CapturePage(ctx)
+	if err != nil {
+		return browsermcp.Reply{}, fmt.Errorf("Tab %d's screenshot failed: %w", t.id, agentError(err))
+	}
+	return browsermcp.Reply{
+		Text:     fmt.Sprintf("Screenshot of tab %d (%s).", t.id, t.url),
+		Image:    png,
+		MimeType: "image/png",
+	}, nil
+}
+
+func (ab *agentBrowser) snapForRef(ref string) (int, webtarget.Snapshot, error) {
+	epoch, _, err := webtarget.ParseRef(ref)
+	if err != nil {
+		return 0, webtarget.Snapshot{}, err
+	}
+	ab.mu.Lock()
+	defer ab.mu.Unlock()
+	for tab, s := range ab.snaps {
+		if s.Epoch == epoch {
+			return tab, s, nil
+		}
+	}
+	return 0, webtarget.Snapshot{}, fmt.Errorf("%s is from no tab's latest snapshot; take a new snapshot.", ref)
+}
+
+func (ab *agentBrowser) act(ctx context.Context, tool string, args toolArgs) (string, error) {
+	thread := browsermcp.ThreadFromContext(ctx)
+	id, snap, err := ab.snapForRef(args.Ref)
+	if err != nil {
+		return "", err
 	}
 	var t *browserTab
 	var p browse.Page
@@ -418,6 +652,9 @@ func (ab *agentBrowser) act(ctx context.Context, tool string, args toolArgs) (st
 	err = ab.view(ctx, func() error {
 		var err error
 		if t, err = ab.tab(&id); err != nil {
+			return err
+		}
+		if err := ab.claimLease(t.id, thread); err != nil {
 			return err
 		}
 		before = slices.Clone(ab.a.browser.tabs)
@@ -431,10 +668,13 @@ func (ab *agentBrowser) act(ctx context.Context, tool string, args toolArgs) (st
 	if err != nil {
 		return "", err
 	}
-	if tool == "browser_click" {
+	switch tool {
+	case "browser_click":
 		err = webtarget.Click(ctx, p, snap, args.Ref)
-	} else {
+	case "browser_type":
 		err = webtarget.Type(ctx, p, snap, args.Ref, args.Text, args.Submit)
+	case "browser_select":
+		err = webtarget.Select(ctx, p, snap, args.Ref, webtarget.SelectOptions{Value: args.Value, Label: args.Label})
 	}
 	unlock()
 	if err != nil {
@@ -444,8 +684,11 @@ func (ab *agentBrowser) act(ctx context.Context, tool string, args toolArgs) (st
 	// it failed would act again, and submit a form twice.
 	acted := func(err error) (string, error) {
 		verb := "click"
-		if tool == "browser_type" {
+		switch tool {
+		case "browser_type":
 			verb = "typing"
+		case "browser_select":
+			verb = "selection"
 		}
 		return fmt.Sprintf("The %s went through, but what followed didn't finish: %v Take a new snapshot to see the page.\n", verb, agentError(err)), nil
 	}
@@ -475,6 +718,109 @@ func (ab *agentBrowser) act(ctx context.Context, tool string, args toolArgs) (st
 	return opened.String() + out, nil
 }
 
+func (ab *agentBrowser) scroll(ctx context.Context, args toolArgs) (string, error) {
+	thread := browsermcp.ThreadFromContext(ctx)
+	var snap *webtarget.Snapshot
+	var tabHint *int = args.Tab
+	if args.Ref != "" {
+		id, s, err := ab.snapForRef(args.Ref)
+		if err != nil {
+			return "", err
+		}
+		if tabHint != nil && *tabHint != id {
+			return "", fmt.Errorf("%s belongs to tab %d, not tab %d.", args.Ref, id, *tabHint)
+		}
+		tabHint = &id
+		snap = &s
+	}
+	var t *browserTab
+	var p browse.Page
+	err := ab.view(ctx, func() error {
+		var err error
+		if t, err = ab.preferredTab(tabHint, thread); err != nil {
+			return err
+		}
+		if err := ab.claimLease(t.id, thread); err != nil {
+			return err
+		}
+		if p, err = ab.page(t); err != nil {
+			return err
+		}
+		ab.show(t)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	unlock, err := ab.lock(ctx, t.id)
+	if err != nil {
+		return "", err
+	}
+	err = webtarget.Scroll(ctx, p, webtarget.ScrollOptions{
+		Ref:       args.Ref,
+		Snapshot:  snap,
+		Direction: args.Direction,
+		Amount:    args.Amount,
+	})
+	unlock()
+	if err != nil {
+		return "", agentError(err)
+	}
+	return ab.snapshot(ctx, t, p, false)
+}
+
+func (ab *agentBrowser) waitFor(ctx context.Context, args toolArgs) (string, error) {
+	if args.Text == "" && args.Selector == "" && args.URL == "" {
+		return "", errors.New("browser_wait_for needs at least one of text, selector or url.")
+	}
+	thread := browsermcp.ThreadFromContext(ctx)
+	timeout := 10 * time.Second
+	if args.TimeoutMS > 0 {
+		timeout = min(max(time.Duration(args.TimeoutMS)*time.Millisecond, 100*time.Millisecond), 30*time.Second)
+	}
+	var t *browserTab
+	var p browse.Page
+	err := ab.view(ctx, func() error {
+		var err error
+		if t, err = ab.preferredTab(args.Tab, thread); err != nil {
+			return err
+		}
+		p, err = ab.page(t)
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	cond := webtarget.WaitCondition{
+		Text:     args.Text,
+		Selector: args.Selector,
+		URL:      args.URL,
+		Gone:     args.Gone,
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		unlock, err := ab.lock(ctx, t.id)
+		if err != nil {
+			return "", err
+		}
+		matched, err := webtarget.CheckCondition(ctx, p, cond)
+		unlock()
+		if err != nil {
+			return "", agentError(err)
+		}
+		if matched {
+			return ab.snapshot(ctx, t, p, false)
+		}
+		rem := time.Until(deadline)
+		if rem <= 0 {
+			return "", fmt.Errorf("Timed out after %s waiting on tab %d.", timeout.Round(time.Millisecond), t.id)
+		}
+		if err := wait(ctx, min(150*time.Millisecond, rem)); err != nil {
+			return "", err
+		}
+	}
+}
+
 // agentError is err as an agent reads it: the page's own words, without
 // the engine's and the package's prefixes, and a page that stopped
 // answering, as one showing a dialog does, said so.
@@ -489,11 +835,9 @@ func agentError(err error) error {
 	return errors.New(msg)
 }
 
-// loaded waits for t's page to show what an action started loading, and
-// then to load, for a while, and snapshots it.
-func (ab *agentBrowser) loaded(ctx context.Context, t *browserTab, p browse.Page, full bool) (string, error) {
+func (ab *agentBrowser) waitForLoad(ctx context.Context, t *browserTab, p browse.Page) (bool, error) {
 	if err := wait(ctx, ab.settle); err != nil {
-		return "", err
+		return false, err
 	}
 	deadline := time.Now().Add(ab.load)
 	var loading, failed bool
@@ -507,17 +851,27 @@ func (ab *agentBrowser) loaded(ctx context.Context, t *browserTab, p browse.Page
 			return nil
 		})
 		if err != nil {
-			return "", err
+			return false, err
 		}
 		if !loading || time.Now().After(deadline) {
 			break
 		}
 		if err := wait(ctx, 100*time.Millisecond); err != nil {
-			return "", err
+			return false, err
 		}
 	}
 	if failed {
-		return "", fmt.Errorf("Tab %d couldn't load %s; the tab says why.", t.id, why)
+		return false, fmt.Errorf("Tab %d couldn't load %s; the tab says why.", t.id, why)
+	}
+	return loading, nil
+}
+
+// loaded waits for t's page to show what an action started loading, and
+// then to load, for a while, and snapshots it.
+func (ab *agentBrowser) loaded(ctx context.Context, t *browserTab, p browse.Page, full bool) (string, error) {
+	loading, err := ab.waitForLoad(ctx, t, p)
+	if err != nil {
+		return "", err
 	}
 	out, err := ab.snapshot(ctx, t, p, full)
 	if loading && err == nil {
@@ -540,6 +894,19 @@ func (ab *agentBrowser) snapshot(ctx context.Context, t *browserTab, p browse.Pa
 	if err != nil {
 		return "", fmt.Errorf("Tab %d's page couldn't be read: %w", t.id, agentError(err))
 	}
+	// Sync SPA route/title changes when the snapshot reflects another route on the same origin.
+	_ = ab.view(ctx, func() error {
+		if !slices.Contains(ab.a.browser.tabs, t) {
+			return nil
+		}
+		if spaRouteChanged(t.url, s.URL) {
+			ab.a.tabNavigated(t, s.URL)
+			if s.Title != "" && s.Title != t.title {
+				t.title = s.Title
+			}
+		}
+		return nil
+	})
 	var out strings.Builder
 	fmt.Fprintf(&out, "Tab %d: %q\nURL: %s\n", t.id, s.Title, s.URL)
 	if s.Truncated {
@@ -548,6 +915,30 @@ func (ab *agentBrowser) snapshot(ctx context.Context, t *browserTab, p browse.Pa
 	out.WriteString("\n")
 	out.WriteString(s.Text)
 	return out.String(), nil
+}
+
+func spaRouteChanged(curURL, snapURL string) bool {
+	if snapURL == "" || curURL == "" || curURL == snapURL {
+		return false
+	}
+	cu, cerr := url.Parse(curURL)
+	su, serr := url.Parse(snapURL)
+	if cerr != nil || serr != nil || cu.Host == "" || su.Host == "" {
+		return false
+	}
+	if !strings.EqualFold(cu.Scheme, su.Scheme) || !strings.EqualFold(cu.Host, su.Host) {
+		return false
+	}
+	if su.Scheme != "http" && su.Scheme != "https" {
+		return false
+	}
+	normPath := func(p string) string {
+		if p == "" {
+			return "/"
+		}
+		return p
+	}
+	return normPath(cu.Path) != normPath(su.Path) || cu.RawQuery != su.RawQuery || cu.Fragment != su.Fragment
 }
 
 // keep keeps s as tab id's latest snapshot, unless a later one, taken
@@ -579,8 +970,8 @@ func (ab *agentBrowser) lock(ctx context.Context, id int) (func(), error) {
 	}
 }
 
-// forget drops the snapshots of tabs no longer open, however they
-// closed. It runs on the view's thread, where the tabs are.
+// forget drops the snapshots and leases of tabs no longer open, however they
+// closed, and prunes expired leases. It runs on the view's thread, where the tabs are.
 func (ab *agentBrowser) forget() {
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
@@ -589,5 +980,10 @@ func (ab *agentBrowser) forget() {
 			delete(ab.snaps, id)
 		}
 	}
-
+	for id := range ab.leases {
+		if !slices.ContainsFunc(ab.a.browser.tabs, func(t *browserTab) bool { return t.id == id }) {
+			delete(ab.leases, id)
+		}
+	}
+	ab.pruneLeasesLocked(ab.now())
 }

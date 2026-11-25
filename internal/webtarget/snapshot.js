@@ -1,38 +1,26 @@
 // The page side of webtarget, the same on every engine: a snapshot of what
 // a page shows, as lines of roles and names, each element an agent can act
 // on with a ref ("s<epoch>e<n>") that resolve finds again while the
-// snapshot is the page's latest. Evaluated as the body of an async
-// function, with args, {key, op, epoch, interactive, maxRefs, maxChars,
-// maxTitle, maxURL, ref}, prepended by Go.
+// snapshot is the page's latest. Evaluated at document start via PreloadScript
+// and as an async function body per call with args prepended by Go.
 //
-// Its state is private to the functions installed under args.key, a name
-// random to each run of the app, frozen. Once installed, it calls no
-// built-in and reads no prototype the page can change: every function and
-// getter it uses is the one it found as it was installed, called through
-// the Reflect.apply it found; it parses with no regular expression,
-// writes its arrays with the Object.defineProperty it found and keeps its
-// refs and tables in objects with no prototype. That keeps a page from
-// replacing it after the first snapshot, or patching a built-in after it
-// (RegExp.prototype.exec, an index setter on Array.prototype, a getter of
-// Node.prototype, …) to redirect a ref or change what it says. The name
-// is no secret from a page that looks (Object.getOwnPropertyNames(window)
-// lists it), and lasts the run, so a page that learned it can plant a
-// fake in a later document before that document's first snapshot. It runs
-// in the page's own world, which a page could have changed before the
-// first snapshot, and where it can call it itself; isolated worlds will
-// close that before agents act (docs/browser.md).
-const api = window[args.key] || install(args.key);
-if (args.op === "snapshot") return api.snapshot(args);
-if (args.op === "describe") return api.describe(args.ref);
-if (args.op === "act") return api.act(args);
-throw new Error(`webtarget: unknown op ${args.op}`);
+// Its state is private inside install() under a per-run random key and a
+// closed-over per-run secret, frozen and non-configurable. Once installed at
+// document start, it calls no built-in and reads no prototype the page can
+// change: every function, getter, and setter it uses is captured on install
+// and called through Reflect.apply; history.pushState/replaceState, popstate,
+// hashchange, and pagehide drop refs on route changes and navigations.
+const call = typeof window[args.key] === "function" ? window[args.key] : install(args.key, args.secret);
+if (args.op === "install") return true;
+return call(args.secret, args);
 
-function install(key) {
+function install(key, secret) {
   let epoch = 0;
   // refs are the latest snapshot's, by number from 0: each its element,
   // and the frames it is in, from the top, each with the document it
   // showed (snapshot); count is how many.
   let refs = null, count = 0;
+  let routeGen = 0, snapRouteGen = 0, snapURL = "", lastURL = "";
 
   // The built-ins as they are now, which the page patching later can't
   // change for the script: functions and getters, each called through
@@ -147,6 +135,30 @@ function install(key) {
     inputMaxLength: getter(window.HTMLInputElement, "maxLength"),
     textareaMaxLength: getter(window.HTMLTextAreaElement, "maxLength"),
     shadowActive: getter(window.ShadowRoot, "activeElement"),
+    // Select, scroll, wait, and SPA history built-ins.
+    selectOptions: getter(HTMLSelectElement, "options"),
+    setSelectedIndex: setter(HTMLSelectElement, "selectedIndex"),
+    optionsLength: getter(window.HTMLOptionsCollection, "length"),
+    optionsItem: fn(window.HTMLOptionsCollection, "item"),
+    optionValue: getter(HTMLOptionElement, "value"),
+    optionText: getter(HTMLOptionElement, "text"),
+    optionLabel: getter(HTMLOptionElement, "label"),
+    optionDisabled: getter(HTMLOptionElement, "disabled"),
+    setOptionSelected: setter(HTMLOptionElement, "selected"),
+    winScrollBy: window.scrollBy,
+    winScrollTo: window.scrollTo,
+    elScrollBy: fn(Element, "scrollBy"),
+    elScrollTo: fn(Element, "scrollTo"),
+    scrollTop: getter(Element, "scrollTop"),
+    setScrollTop: setter(Element, "scrollTop"),
+    scrollLeft: getter(Element, "scrollLeft"),
+    setScrollLeft: setter(Element, "scrollLeft"),
+    scrollHeight: getter(Element, "scrollHeight"),
+    docQuery: fn(Document, "querySelector"),
+    indexOf: fn(String, "indexOf"),
+    pushState: fn(window.History, "pushState"),
+    replaceState: fn(window.History, "replaceState"),
+    addListener: fn(EventTarget, "addEventListener"),
   };
   // The events actions fire, made with the constructors found as the
   // script was installed.
@@ -400,6 +412,9 @@ function install(key) {
     epoch = args.epoch;
     refs = create(null);
     count = 0;
+    lastURL = get(B.url, document) || "";
+    snapURL = lastURL;
+    snapRouteGen = routeGen;
     // elements, which it answers with, has no prototype either, so the
     // wrapper's JSON.stringify finds no toJSON on Array.prototype; it is
     // an array still, which JSON.stringify writes as one.
@@ -524,6 +539,8 @@ function install(key) {
     const p = parse(ref);
     if (!p) throw new Err(`${ref} is not a ref: refs look like s12e3`);
     if (!epoch) throw new Err(`${ref} is from before the page navigated or reloaded; take a new snapshot`);
+    if (routeGen !== snapRouteGen || (get(B.url, document) || "") !== snapURL)
+      throw new Err(`${ref} is from before the page navigated or reloaded; take a new snapshot`);
     if (+p.epoch !== epoch) throw new Err(`${ref} is from snapshot s${p.epoch}, not the latest, s${epoch}; take a new snapshot`);
     const rec = p.n >= 1 && p.n <= count ? refs[p.n - 1] : null;
     if (!rec) throw gone(ref);
@@ -848,12 +865,78 @@ function install(key) {
       });
       return { __proto__: null, done: true };
     }
+    if (args.action === "select") {
+      const tag = tagOf(el);
+      if (!html || tag !== "SELECT") throw new Err(`${ref} is a ${r || "element"}, not a dropdown`);
+      const opts = get(B.selectOptions, el);
+      const len = opts ? (B.optionsLength ? get(B.optionsLength, opts) : opts.length) : 0;
+      const optAt = (i) => (B.optionsItem ? apply(B.optionsItem, opts, [i]) : opts[i]);
+      let matched = null, matchedIdx = -1;
+      const wantLabel = args.hasLabel ? clean(args.label, 300) : "";
+      const wantLabelLower = wantLabel ? lower(wantLabel) : "";
+      for (let i = 0; i < len; i++) {
+        const o = optAt(i);
+        if (!o) continue;
+        if (args.hasValue) {
+          if (get(B.optionValue, o) === args.value) {
+            matched = o;
+            matchedIdx = i;
+            break;
+          }
+        } else if (args.hasLabel) {
+          const ot = clean(get(B.optionText, o), 300);
+          const ol = clean(get(B.optionLabel, o), 300);
+          if (ot === wantLabel || ol === wantLabel) {
+            matched = o;
+            matchedIdx = i;
+            break;
+          }
+        }
+      }
+      if (!matched && args.hasLabel) {
+        for (let i = 0; i < len; i++) {
+          const o = optAt(i);
+          if (!o) continue;
+          const ot = lower(clean(get(B.optionText, o), 300));
+          const ol = lower(clean(get(B.optionLabel, o), 300));
+          if (ot === wantLabelLower || ol === wantLabelLower) {
+            matched = o;
+            matchedIdx = i;
+            break;
+          }
+        }
+      }
+      if (!matched) {
+        const avail = [];
+        for (let i = 0; i < len && i < 20; i++) {
+          const o = optAt(i);
+          if (!o) continue;
+          const ov = get(B.optionValue, o) || "";
+          const ot = clean(get(B.optionText, o), 80);
+          put(avail, ov !== ot && ov !== "" ? `${quote(ov)} (${quote(ot)})` : quote(ot || ov));
+        }
+        const sought = args.hasValue ? `value ${quote(args.value)}` : `label ${quote(args.label)}`;
+        const list = avail.length ? `; available: ${apply(B.join, avail, [", "])}` : " (no options)";
+        throw new Err(`no option matching ${sought} in ${ref}${list}`);
+      }
+      if (get(B.optionDisabled, matched)) {
+        const sought = args.hasValue ? args.value : args.label;
+        throw new Err(`option ${quote(sought)} in ${ref} is disabled`);
+      }
+      reveal(el);
+      focus();
+      apply(B.setSelectedIndex, el, [matchedIdx]);
+      apply(B.setOptionSelected, matched, [true]);
+      fire(new EV.Input("input", { __proto__: null, bubbles: true, composed: true }));
+      fire(new EV.Event("change", { __proto__: null, bubbles: true }));
+      return { __proto__: null, done: true };
+    }
     if (args.action !== "type") throw new Err(`webtarget: unknown action ${args.action}`);
     const tag = tagOf(el);
     const field = html && (tag === "INPUT" || tag === "TEXTAREA");
     const editor = html && !field && (opt(B.editable, el) || (tag === "BODY" && opt(B.designMode, doc) === "on"));
     if (tag === "INPUT" && html && lower(get(B.inputType, el)) === "file") throw new Err(`${ref} is a file field, which the browser's tools can't fill`);
-    if (tag === "SELECT") throw new Err(`${ref} is a dropdown, which the browser's tools can't pick from yet`);
+    if (tag === "SELECT") throw new Err(`${ref} is a dropdown; use browser_select to pick an option`);
     if (TYPEABLE[r] !== true || !(field || editor)) throw new Err(`${ref} is a ${r || "element"}, not a text box`);
     const kind = tag === "INPUT" && html ? lower(get(B.inputType, el)) : "";
     if (tag === "INPUT" && BLOCKS_IMPLICIT[kind] !== true && kind !== "")
@@ -932,20 +1015,148 @@ function install(key) {
     return { __proto__: null, done: true };
   }
 
-  // A page leaving drops its refs: the back/forward cache can bring this
-  // document back, state and all, after a snapshot of another. Capturing
-  // on window, it runs before any listener the page adds after it, so
-  // none of those can stop it; a capturing one the page added before the
-  // first snapshot can (#35). isTrusted is each event's own unforgeable
-  // property, so a pagehide the page fires itself drops nothing.
-  apply(fn(EventTarget, "addEventListener"), window, ["pagehide", (e) => {
-    if (!e.isTrusted) return;
+  function scroll(args) {
+    const dir = args.direction || "";
+    const step = args.amount > 0 ? args.amount : 400;
+    let dx = 0, dy = 0;
+    if (dir === "up") dy = -step;
+    else if (dir === "down") dy = step;
+    else if (dir === "left") dx = -step;
+    else if (dir === "right") dx = step;
+    if (args.ref) {
+      const found = resolve(args.ref), el = found.el;
+      const r = role(el) || "", n = name(el, r);
+      if (r !== args.role || n !== args.name)
+        throw new Err(`${args.ref} was ${args.role} ${quote(args.name)}, now ${r} ${quote(n)}; take a new snapshot`);
+      if (!dir) {
+        reveal(el);
+        return { __proto__: null, done: true };
+      }
+      if (dir === "top" || dir === "bottom") {
+        const top = dir === "top" ? 0 : get(B.scrollHeight, el);
+        if (B.elScrollTo) {
+          try {
+            apply(B.elScrollTo, el, [{ __proto__: null, top, behavior: "instant" }]);
+          } catch {
+            apply(B.elScrollTo, el, [get(B.scrollLeft, el), top]);
+          }
+        } else if (B.setScrollTop) {
+          apply(B.setScrollTop, el, [top]);
+        }
+        return { __proto__: null, done: true };
+      }
+      if (B.elScrollBy) {
+        try {
+          apply(B.elScrollBy, el, [{ __proto__: null, left: dx, top: dy, behavior: "instant" }]);
+        } catch {
+          apply(B.elScrollBy, el, [dx, dy]);
+        }
+      } else {
+        if (dx && B.setScrollLeft && B.scrollLeft) apply(B.setScrollLeft, el, [get(B.scrollLeft, el) + dx]);
+        if (dy && B.setScrollTop && B.scrollTop) apply(B.setScrollTop, el, [get(B.scrollTop, el) + dy]);
+      }
+      return { __proto__: null, done: true };
+    }
+    const root = get(B.documentElement, document) || get(B.body, document);
+    if (dir === "top" || dir === "bottom") {
+      const top = dir === "top" ? 0 : (root ? get(B.scrollHeight, root) : 1e9);
+      try {
+        apply(B.winScrollTo, window, [{ __proto__: null, top, behavior: "instant" }]);
+      } catch {
+        apply(B.winScrollTo, window, [0, top]);
+      }
+      return { __proto__: null, done: true };
+    }
+    try {
+      apply(B.winScrollBy, window, [{ __proto__: null, left: dx, top: dy, behavior: "instant" }]);
+    } catch {
+      apply(B.winScrollBy, window, [dx, dy]);
+    }
+    return { __proto__: null, done: true };
+  }
+
+  function waitCheck(args) {
+    let ok = true;
+    if (args.url) {
+      const u = get(B.url, document) || "";
+      if (apply(B.indexOf, u, [args.url]) < 0) ok = false;
+    }
+    if (ok && args.text) {
+      const root = get(B.body, document) || get(B.documentElement, document);
+      const content = root ? ((isHTML(root) && B.innerText ? get(B.innerText, root) : text(root)) || "") : "";
+      if (apply(B.indexOf, content, [args.text]) < 0) ok = false;
+    }
+    if (ok && args.selector) {
+      let el = null;
+      try {
+        el = apply(B.docQuery, document, [args.selector]);
+      } catch (e) {
+        throw new Err(`invalid selector ${quote(args.selector)}: ${e && e.message ? e.message : "syntax error"}`);
+      }
+      if (!el || shown(el, styleOf(el), false) === GONE) ok = false;
+    }
+    const matched = args.gone ? !ok : ok;
+    return { __proto__: null, matched };
+  }
+
+  function clearRefs() {
     epoch = 0;
     refs = null;
     count = 0;
-  }, true]);
+    routeGen++;
+  }
 
-  const api = freeze({ __proto__: null, snapshot, describe, act });
-  defineProperty(window, key, { __proto__: null, value: api, writable: false, configurable: false, enumerable: false });
-  return api;
+  function checkRoute() {
+    const u = get(B.url, document) || "";
+    if (u !== lastURL) {
+      lastURL = u;
+      clearRefs();
+    }
+  }
+
+  lastURL = get(B.url, document) || "";
+
+  const wrapHistory = (proto, propName, orig) => {
+    if (!proto || typeof orig !== "function") return;
+    try {
+      defineProperty(proto, propName, {
+        __proto__: null,
+        value: function () {
+          try {
+            return apply(orig, this, arguments);
+          } finally {
+            checkRoute();
+          }
+        },
+        writable: true,
+        configurable: true,
+      });
+    } catch {}
+  };
+  if (window.History && window.History.prototype) {
+    wrapHistory(window.History.prototype, "pushState", B.pushState);
+    wrapHistory(window.History.prototype, "replaceState", B.replaceState);
+  }
+
+  if (B.addListener) {
+    apply(B.addListener, window, ["popstate", checkRoute, true]);
+    apply(B.addListener, window, ["hashchange", checkRoute, true]);
+    apply(B.addListener, window, ["pagehide", (e) => {
+      if (!e.isTrusted) return;
+      clearRefs();
+    }, true]);
+  }
+
+  const dispatch = freeze(function (s, a) {
+    if (s !== secret) throw new Err("webtarget: unauthorized");
+    if (a.op === "install") return true;
+    if (a.op === "snapshot") return snapshot(a);
+    if (a.op === "describe") return describe(a.ref);
+    if (a.op === "act") return act(a);
+    if (a.op === "scroll") return scroll(a);
+    if (a.op === "wait_check") return waitCheck(a);
+    throw new Err(`webtarget: unknown op ${a.op}`);
+  });
+  defineProperty(window, key, { __proto__: null, value: dispatch, writable: false, configurable: false, enumerable: false });
+  return dispatch;
 }
