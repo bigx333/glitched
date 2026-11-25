@@ -2,11 +2,18 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/engine"
 	"glitched/internal/provider/fake"
+	"glitched/internal/transport"
 )
 
 // A stop on B that holds what waits on a link's thread shows on A's
@@ -89,5 +96,142 @@ func TestASettledPlaceholderSaysWhatItsReopenedThreadHolds(t *testing.T) {
 	}
 	if v := engine.View(p.placeholder(k)); !v.Remote.Held || v.Resumable {
 		t.Errorf("A's placeholder says held %v and resumable %v; want held with nothing to resume here", v.Remote.Held, v.Resumable)
+	}
+}
+
+// readProbe is a link's server on B that answers its socket's Reads with
+// hook, while one is set, and every other call as B does.
+type readProbe struct {
+	*proxy
+	mu   sync.Mutex
+	hook func(context.Context, api.Query) (api.Snapshot, error)
+}
+
+// probeLink serves B's links through a readProbe, and points A at it.
+func probeLink(t *testing.T, p *remotes) *readProbe {
+	ctx, cancel := context.WithCancel(context.Background())
+	tn := transport.Tailnet{Address: freeAddr(t)}
+	ln, err := tn.Listen(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &grants{dir: p.dirB, base: ctx}
+	go g.watch(ctx)
+	pr := &readProbe{proxy: &proxy{t: t, p: p, dirB: p.dirB, addr: tn.Address}}
+	srv := &transport.Server{Transport: tn, Endpoint: pr, Replies: pr, Authorize: func(req *http.Request, proved func(transport.Key) bool) (transport.Grant, error) {
+		return g.authorize(req, proved)
+	}}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.Serve(ctx, ln)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	p.machine(tn.Address)
+	return pr
+}
+
+func (pr *readProbe) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
+	pr.mu.Lock()
+	hook := pr.hook
+	pr.mu.Unlock()
+	if hook != nil {
+		return hook(ctx, q)
+	}
+	return pr.inner().Read(ctx, q)
+}
+
+func (pr *readProbe) intercept(fn func(context.Context, api.Query) (api.Snapshot, error)) {
+	pr.mu.Lock()
+	pr.hook = fn
+	pr.mu.Unlock()
+}
+
+// B's Reads failing while its child finishes keep A from knowing what
+// holds there, never from its child's done report.
+func TestAFailedReadOfWhatHoldsKeepsTheReport(t *testing.T) {
+	p := newRemotes(t, fake.New(fake.Turn(true)), "fake", engine.Limits{})
+	pr := probeLink(t, p)
+	k := p.place("report without the hold")
+	b := p.bound(k).Thread
+	until(t, "the blocked report", func() bool {
+		rs, _ := p.reports(k)
+		return len(rs) == 1 && p.placeholder(k).Remote.Slot == api.RunWaiting
+	})
+	var failed atomic.Int32
+	pr.intercept(func(ctx context.Context, q api.Query) (api.Snapshot, error) {
+		if failed.Add(1) <= 3 {
+			return api.Snapshot{}, errors.New("a brief storage error")
+		}
+		return pr.inner().Read(ctx, q)
+	})
+	rq := engine.View(p.onB(b)).Requests[0]
+	if _, err := p.b.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: b, Body: api.RequestRespond{Request: rq.ID, Generation: rq.Generation, Answer: []byte(`{"allow":true}`)}}); err != nil {
+		t.Fatal(err)
+	}
+	until(t, "A's report of how it ended", func() bool {
+		rs, _ := p.reports(k)
+		return slices.ContainsFunc(rs, func(r api.ChildReported) bool { return r.Kind == api.ReportDone || r.Kind == api.ReportFailed })
+	})
+	rs, _ := p.reports(k)
+	if !slices.ContainsFunc(rs, func(r api.ChildReported) bool { return r.Kind == api.ReportDone }) || failed.Load() < 3 {
+		t.Errorf("after %d failed reads, A reported %v and lost %q; want its child done", min(failed.Load(), 3), rs, p.placeholder(k).Remote.Lost)
+	}
+}
+
+// What A records of its child holds at the cursor it records: a Read B
+// answers after more commits there is not taken for the events before.
+func TestAHoldIsOfTheCursorItIsRecordedAt(t *testing.T) {
+	p := newRemotes(t, fake.New(fake.Turn(true)), "fake", engine.Limits{})
+	pr := probeLink(t, p)
+	k := p.place("read fence")
+	b := p.bound(k).Thread
+	until(t, "both machines waiting on the approval", func() bool {
+		return p.placeholder(k).Remote.Slot == api.RunWaiting && len(engine.View(p.onB(b)).Requests) == 1
+	})
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock()
+	pr.intercept(func(ctx context.Context, q api.Query) (api.Snapshot, error) {
+		once.Do(func() {
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		})
+		return pr.inner().Read(ctx, q)
+	})
+	send := func(intent api.Intent) api.Receipt {
+		c, err := p.b.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: b, Body: intent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	old := send(api.ThreadConfigure{Effort: new("high")})
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("A read nothing for the change")
+	}
+	send(api.MessageDispatch{Text: "later", Mode: api.Defer})
+	rq := engine.View(p.onB(b)).Requests[0]
+	send(api.RequestRespond{Request: rq.ID, Generation: rq.Generation, Answer: []byte(`{"allow":true}`)})
+	until(t, "B idle and holding the message", func() bool { return engine.View(p.onB(b)).Resumable })
+	unblock()
+	until(t, "A's placeholder idle and held", func() bool {
+		r := p.placeholder(k).Remote
+		return r.Held && r.Slot == api.RunIdle
+	})
+	for _, e := range eventsOf(t, p.a.Endpoint(), k) {
+		body, _ := e.Decode()
+		if r, ok := body.(api.RemoteSeen); ok && r.Cursor == old.Committed && r.State == api.RunWaiting && r.Held {
+			t.Error("A recorded a hold B had only after it, with the approval B waited on at its cursor")
+		}
 	}
 }
