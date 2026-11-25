@@ -26,6 +26,7 @@ type Transcript struct {
 	began    map[api.ID]time.Time // when each run not yet ended started
 	wakes    map[api.ID]*wake
 	silent   map[api.ID]*CompactionEntry // silent idle-compaction runs, by run id
+	dropped  map[api.ID]bool
 	// edits are the indexes of Entries changed in place, in the order
 	// they changed, but for the first editsBase, dropped: Edits reads
 	// them. An entry changed again before a reader was told of its last
@@ -39,6 +40,9 @@ type Transcript struct {
 	// done or not: nil before any and once the agent cleared it.
 	Plan *PlanEntry
 }
+
+// ForkBlocked reports whether a legacy rewind removed the run from the conversation.
+func (t *Transcript) ForkBlocked(run api.ID) bool { return t.dropped[run] }
 
 // Run is the run that claimed the message, zero before one has.
 func (u *UserEntry) Run() api.ID { return u.run }
@@ -320,6 +324,25 @@ func (t *Transcript) apply(e api.Event) {
 		return
 	}
 	t.Cursor = e.Cursor
+	if e.Type == "thread.reverted" {
+		var v struct {
+			Conversation string   `json:"conversation"`
+			Dropped      []api.ID `json:"dropped"`
+			Restored     []api.ID `json:"restored"`
+		}
+		if json.Unmarshal(e.Payload, &v) == nil && (v.Conversation == "native" || v.Conversation == "portable") {
+			for _, run := range v.Dropped {
+				if t.dropped == nil {
+					t.dropped = map[api.ID]bool{}
+				}
+				t.dropped[run] = true
+			}
+			for _, run := range v.Restored {
+				delete(t.dropped, run)
+			}
+		}
+		return
+	}
 	body, err := e.Decode()
 	if err != nil {
 		return

@@ -94,7 +94,7 @@ func (a *app) messageActions(c *ui.Context, t thread, es []entry, i int, pointed
 			case "message.retry":
 				return !e.retry
 			case "message.fork":
-				return e.turn.IsZero() || t.Transcript == nil
+				return e.turn.IsZero() || t.Transcript == nil || t.Transcript.ForkBlocked(e.turn)
 			case "message.item":
 				at := itemIndex(n)
 				return at < 0 || at >= len(items)
