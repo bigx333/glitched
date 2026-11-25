@@ -147,15 +147,8 @@ func TestARemovedMachinesLinkIsGoneAndAReMintIsAnotherLink(t *testing.T) {
 	if err := RemoveToken(dir, "a"); err != nil {
 		t.Fatal(err)
 	}
-	removed := time.Now()
-	for {
-		if _, err := live.Info(ctx); err != nil {
-			break
-		}
-		if time.Since(removed) > 3*time.Second {
-			t.Fatal("the removed link's socket still answers 3s after the removal")
-		}
-		time.Sleep(50 * time.Millisecond)
+	if _, err := live.Info(ctx); err == nil {
+		t.Fatal("the removed link's live socket answered a call after the removal returned")
 	}
 	again := transport.NewEndpointClient(transport.Tailnet{Address: addr, Token: old}, api.ID{})
 	defer again.Close()
@@ -415,6 +408,10 @@ func TestTurningChildrenOffRemovesEveryMachine(t *testing.T) {
 	if _, err := Pair(p.dirB, "phone"); err != nil {
 		t.Fatal(err)
 	}
+	other, _, err := PairLink(p.dirB, "c", api.Link{Access: api.AccessAsk})
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	live := transport.NewEndpointClient(transport.Tailnet{Address: p.addrB, Token: p.token}, api.ID{})
@@ -424,10 +421,12 @@ func TestTurningChildrenOffRemovesEveryMachine(t *testing.T) {
 	}
 	refused := func(when string) {
 		t.Helper()
-		ep := transport.NewEndpointClient(transport.Tailnet{Address: p.addrB, Token: p.token}, api.ID{})
-		defer ep.Close()
-		if _, err := ep.Info(ctx); !errors.Is(err, transport.ErrRefused) {
-			t.Fatalf("a handshake with the link's token %s: %v, want ErrRefused", when, err)
+		for _, token := range []string{p.token, other} {
+			ep := transport.NewEndpointClient(transport.Tailnet{Address: p.addrB, Token: token}, api.ID{})
+			if _, err := ep.Info(ctx); !errors.Is(err, transport.ErrRefused) {
+				t.Fatalf("a handshake with a link's token %s: %v, want ErrRefused", when, err)
+			}
+			ep.Close()
 		}
 	}
 	links := func() []Token {
@@ -442,6 +441,9 @@ func TestTurningChildrenOffRemovesEveryMachine(t *testing.T) {
 	if _, err := Edit(p.dirB, func(cfg *Config) error { cfg.ChildrenFromOtherMachines = nil; return nil }); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := live.Info(ctx); err == nil {
+		t.Fatal("the link's live socket answered a call once children from other machines were off")
+	}
 	refused("once children from other machines are off")
 	if ls := links(); len(ls) != 0 {
 		t.Fatalf("tokens.json keeps %+v once children from other machines are off", ls)
@@ -449,17 +451,7 @@ func TestTurningChildrenOffRemovesEveryMachine(t *testing.T) {
 	if ts, _ := Tokens(p.dirB); !slices.ContainsFunc(ts, func(t Token) bool { return t.Label == "phone" && t.Link == nil }) {
 		t.Fatalf("tokens.json holds %+v, want phone's whole-engine token kept", ts)
 	}
-	off := time.Now()
-	for {
-		if _, err := live.Info(ctx); err != nil {
-			break
-		}
-		if time.Since(off) > 3*time.Second {
-			t.Fatal("the link's live socket still answers 3s after children from other machines went off")
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	p.lostOnce(kid, "b removed this machine, or turned off children from other machines")
+	p.lostOnce(kid, "b no longer accepts this machine's link, as when it removed this machine or turned off children from other machines")
 	if th := p.onB(there); th.Live() == nil {
 		t.Fatal("turning children from other machines off stopped the child already running on b")
 	}
@@ -469,4 +461,42 @@ func TestTurningChildrenOffRemovesEveryMachine(t *testing.T) {
 		t.Fatalf("tokens.json holds %+v once children from other machines are on again, want no link", ls)
 	}
 	refused("once children from other machines are on again")
+}
+
+// A link token left in tokens.json while children from other machines are
+// off, as by an engine that stopped between writing the setting and
+// removing the links, admits nothing, and the next Edit that leaves the
+// setting off removes it, a retry of off included.
+func TestOffAgainRemovesALeftoverLink(t *testing.T) {
+	quiet(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	dir := stateDir(t)
+	allowChildren(t, dir, api.AccessAsk)
+	token, _, err := PairLink(dir, "a", api.Link{Access: api.AccessAsk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	left, err := Tokens(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Edit(dir, func(cfg *Config) error { cfg.ChildrenFromOtherMachines = nil; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := edit(dir, func(ts *[]Token) error { *ts = left; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	d := start(t, Config{Dir: dir, Listen: []string{"127.0.0.1:0"}})
+	ep := transport.NewEndpointClient(transport.Tailnet{Address: d.Addrs()[0].String(), Token: token}, api.ID{})
+	defer ep.Close()
+	if _, err := ep.Info(ctx); !errors.Is(err, transport.ErrRefused) {
+		t.Fatalf("a left-over link's handshake while children from other machines are off: %v, want ErrRefused", err)
+	}
+	if _, err := Edit(dir, func(cfg *Config) error { cfg.ChildrenFromOtherMachines = nil; return ErrUnchanged }); !errors.Is(err, ErrUnchanged) {
+		t.Fatal(err)
+	}
+	if ts, _ := Tokens(dir); len(ts) != 0 {
+		t.Fatalf("tokens.json keeps %+v after off again", ts)
+	}
 }

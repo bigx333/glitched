@@ -169,7 +169,7 @@ func TestTurningChildrenOffRemovesEveryLinkedMachine(t *testing.T) {
 	if _, err := daemon.Edit(dir, func(c *daemon.Config) error { c.ChildrenFromOtherMachines = &auto; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	for _, label := range []string{"laptop", "desk"} {
+	for _, label := range []string{"laptop", "desk", "phone"} {
 		if _, _, err := daemon.PairLink(dir, label, api.Link{Access: api.AccessAsk}); err != nil {
 			t.Fatal(err)
 		}
@@ -180,18 +180,18 @@ func TestTurningChildrenOffRemovesEveryLinkedMachine(t *testing.T) {
 	h.tt.Advance(time.Second)
 	h.tt.Frame()
 	const offLine = "The most access a child an agent on another machine starts here may run at, through a link minted below. Off removes every machine below at once and deletes its link, so on again starts with none."
-	h.until("both machines listed", func() bool { return h.tt.HasText("laptop") && h.tt.HasText("desk") })
-	fits(t, h, 760, offLine, "Remove laptop", "Remove desk")
+	h.until("the machines listed", func() bool { return h.tt.HasText("laptop") && h.tt.HasText("desk") && h.tt.HasText("phone") })
+	fits(t, h, 760, offLine, "Remove laptop", "Remove desk", "Remove phone")
 	shoot(t, h, "b-narrow-links")
-	h.click("Remove desk")
-	h.until("desk removed", func() bool {
+	h.click("Remove phone")
+	h.until("phone removed", func() bool {
 		ts, _ := daemon.Tokens(dir)
-		return len(ts) == 1 && ts[0].Label == "laptop" && !h.tt.HasText("desk")
+		return len(ts) == 2 && !slices.ContainsFunc(ts, func(t daemon.Token) bool { return t.Label == "phone" }) && !h.tt.HasText("phone")
 	})
 	h.click("Off")
 	h.until("every machine removed", func() bool {
 		ts, _ := daemon.Tokens(dir)
-		return ceilingOf(t, dir) == nil && len(ts) == 0 && !h.tt.HasText("laptop")
+		return ceilingOf(t, dir) == nil && len(ts) == 0 && !h.tt.HasText("laptop") && !h.tt.HasText("desk")
 	})
 	h.click(accessAuto)
 	h.until("on again", func() bool { return ceilingOf(t, dir) != nil && h.tt.HasText("Mint a link") })

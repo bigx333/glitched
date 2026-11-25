@@ -81,6 +81,10 @@ type Grant struct {
 	// Link is set for a link's token. Its socket may make only the calls
 	// in linkMethods, each with Link in its ctx (api.LinkOf).
 	Link *api.Link
+	// Current, when set, says as each call arrives whether the grant still
+	// holds. A call when it doesn't closes the socket instead of running,
+	// so a removed link's next call fails without waiting for Done.
+	Current func() bool
 }
 
 // linkMethods are the calls a link's socket may make; it is refused every
@@ -248,6 +252,11 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 			mu.Unlock()
 			send(response{ID: req.ID, Error: &wireError{Code: "bad_request", Message: unknownMethod + " or id in use: " + req.Method}})
 			continue
+		}
+		if grant.Current != nil && !grant.Current() {
+			mu.Unlock()
+			ws.Close(websocket.StatusPolicyViolation, "the token was removed")
+			return
 		}
 		if grant.Link != nil && !linkMethods[req.Method] {
 			mu.Unlock()
