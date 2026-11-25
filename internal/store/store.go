@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -462,6 +463,28 @@ func upgradeOnce(ctx context.Context, conn *sql.Conn, version int) error {
 		return err
 	}
 	defer tx.Rollback()
+	var interrupted []string
+	if version == 16 {
+		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT COALESCE(NULLIF(threads.workspace, ''), hex(effects.thread))
+			FROM effects LEFT JOIN threads ON threads.id = effects.thread
+			WHERE effects.kind = 'thread.revert' AND effects.state IN ('pending', 'leased')
+			AND CASE WHEN json_valid(effects.payload) THEN json_extract(effects.payload, '$.KeepFiles') IS NOT 1 ELSE 1 END`)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var workspace string
+			if err := rows.Scan(&workspace); err != nil {
+				rows.Close()
+				return err
+			}
+			interrupted = append(interrupted, workspace)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.ExecContext(ctx, upgrades[version]+fmt.Sprintf(`PRAGMA user_version = %d;`, version+1)); err != nil {
 		return err
 	}
@@ -474,7 +497,13 @@ func upgradeOnce(ctx context.Context, conn *sql.Conn, version int) error {
 	if broken {
 		return errors.New("a foreign key no longer holds")
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	for _, workspace := range interrupted {
+		slog.Warn("store: an unfinished file restore was not retried; the worktree may be partially restored", "workspace", workspace)
+	}
+	return nil
 }
 
 // rewind gives the log a new id, for a database that is behind what its

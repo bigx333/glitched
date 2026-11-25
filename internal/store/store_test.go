@@ -1,11 +1,13 @@
 package store_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -786,11 +788,20 @@ func TestUpgradeRetiresCheckpointAndRevertEffects(t *testing.T) {
 		INSERT INTO effects (thread, kind, payload, state) VALUES
 			(zeroblob(16), 'checkpoint.capture', x'7b7d', 'pending'),
 			(zeroblob(16), 'checkpoint.drop', x'7b7d', 'leased'),
-			(zeroblob(16), 'thread.revert', x'7b7d', 'leased'),
-			(zeroblob(16), 'thread.revert', x'7b7d', 'pending');
+			(zeroblob(16), 'thread.revert', x'7b7d', 'pending'),
+			(zeroblob(16), 'thread.revert', CAST('{"KeepFiles":true}' AS BLOB), 'leased');
+		INSERT INTO effects (thread, kind, payload, state)
+			SELECT id, 'thread.revert', x'7b7d', 'leased' FROM threads;
 	`, 16)
+	var warnings bytes.Buffer
+	logger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&warnings, nil)))
+	t.Cleanup(func() { slog.SetDefault(logger) })
 	s = open(t, path)
 	defer s.Close()
+	if got := warnings.String(); strings.Count(got, "unfinished file restore") != 2 || !strings.Contains(got, "workspace=w") {
+		t.Fatalf("upgrade warnings: %q", got)
+	}
 	if leased, err := s.Leased(ctx); err != nil || len(leased) != 0 {
 		t.Fatalf("leased effects after upgrade: %v, %v", leased, err)
 	}
