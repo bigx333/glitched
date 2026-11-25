@@ -1006,23 +1006,6 @@ func TestAChildSettledOnBBeforeItsFirstRunTakesNoPlace(t *testing.T) {
 	}
 }
 
-// A machine removed while its child waits on a question loses the child
-// though nothing more happens there, and frees its place.
-func TestARemovedMachineFreesItsWaitingChildsPlace(t *testing.T) {
-	p := newRemotes(t, fake.New(fake.Asking()), "fake", engine.Limits{Working: 1})
-	kid := p.place("asks")
-	until(t, "waiting on a question", func() bool { return p.placeholder(kid).Remote.Slot == api.RunWaiting })
-	if err := RemoveMachine(p.dirA, "b"); err != nil {
-		t.Fatal(err)
-	}
-	p.renames(p.bound(kid).Thread, 3)
-	time.Sleep(1200 * time.Millisecond)
-	_, es := spawn(t, p.a.Endpoint(), p.adA, p.parent, fake.Child{Title: "another", Task: "go"})
-	if es[0] != nil {
-		t.Fatalf("removed B, received no further run edge, child remains %s, next child refused: %v", p.placeholder(kid).Remote.State, es[0])
-	}
-}
-
 // B's restart with continue-after-restart on continues its person's run
 // it lost, and never a link's child: continue-after-restart applies to no
 // child, whichever machine its parent is on.

@@ -143,9 +143,9 @@ type RevertThread struct {
 }
 
 // MakeWorktree makes a link's thread's worktree, of the checkout
-// Project, from Base, a commit, on a new branch named by Title. Git
-// writes the worktree locked, the thread named in the lock's reason, so a
-// replay finds one it made and finishes it.
+// Project, from Base, a commit, on a new branch named by Title, with one
+// plain git worktree add. A collision fails it; a replay does no crash
+// reconstruction.
 type MakeWorktree struct {
 	Project, Base, Title string
 }
@@ -193,8 +193,7 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 	case CaptureCheckpoint, RevertThread:
 		return !t.Deleted, nil
 	case MakeWorktree:
-		// On a thread settled first, the host makes no worktree, and
-		// finishes one a host before it began.
+		// On a thread settled first, the host makes no worktree.
 		return t.Origin != nil && t.Origin.Making && !t.Deleted, nil
 	case RemoteCreate:
 		// A placeholder settled or deleted leaves its create to its stop,
@@ -236,9 +235,10 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 // nothing but what a gc it left pending prunes. A revert finds the
 // recovery checkpoint it took, and puts the same files back; its rewind
 // makes the conversation again, and leaves unused any it made before. A
-// make finds the worktree its lock names it in, or one it finished. A
-// remote create, stop, send or configure sends its frozen commands again,
-// which the machine answers with the receipts it stored.
+// make is one plain git add; a replay does no crash reconstruction, and a
+// collision fails. A remote create, stop, send or configure sends its
+// frozen commands again, which the machine answers with the receipts it
+// stored.
 var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true, "worktree.remove": true, "checkpoint.capture": true, "checkpoint.drop": true, "thread.revert": true, "worktree.make": true, "remote.create": true, "remote.stop": true, "remote.send": true, "remote.configure": true}
 
 func ReplaySafe(e Effect) bool { return replaySafe[e.effectKind()] }
