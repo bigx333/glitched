@@ -294,6 +294,10 @@ func TestAChildReportsInItsParent(t *testing.T) {
 	h := tree3(t)
 	h.a.select_(h.thread("Ship the sidebar sort"))
 	h.until("the report", func() bool { return h.tt.HasText("Write the tests") && h.tt.HasText("Done") })
+	settlePlugins(t, h.a, h.tt, h.p)
+	if got := h.a.partsDrawn["timeline.report"]; got == nil || len(got.copies) != 1 || got.copies[0].plugin != "report-card" {
+		t.Fatalf("the built-in report card plugin doesn't draw the report: %+v", got)
+	}
 	h.tt.Advance(time.Second)
 	if !h.tt.HasText("All done: the sort is tested.") {
 		t.Errorf("the report doesn't say what came of it: %q", h.tt.Texts())
