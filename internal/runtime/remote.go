@@ -448,58 +448,28 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 	if (r.Turn == nil || r.Ended == nil) && !r.Run.IsZero() {
 		after = api.Cursor{}
 	}
-	st, err := m.Open(ctx, api.Subscription{Thread: r.Thread, After: after})
+	// Its views come with the commits that move it: whether it holds what
+	// waits on it after a stop is that machine's to say, from more than
+	// the events this engine reads, at the commit it says it in.
+	st, err := m.Open(ctx, api.Subscription{Thread: r.Thread, After: after, Views: true})
 	if err != nil {
 		return false, err
 	}
 	defer st.Close()
-	// since reads the child there as its machine's own view has it at
-	// once, with its events after cursor, which this engine hasn't read:
-	// whether it holds what waits on it after a stop is that machine's to
-	// decide, from more than those events, and true only of the view of
-	// the same commit as the events read. ok is that it was: a machine
-	// whose log isn't cursor's, as after a restore there, says it once the
-	// stream's snapshot of that log is read.
-	since := func(cursor api.Cursor) (events []api.Event, held, ok bool, err error) {
-		rctx, cancel := context.WithTimeout(ctx, callTimeout)
-		defer cancel()
-		snap, err := m.Read(rctx, api.Query{Thread: r.Thread, After: cursor})
-		if err != nil || snap.Cursor.Log != cursor.Log {
-			return nil, false, false, err
-		}
-		for _, e := range snap.Events {
-			if e.Cursor.Seq > cursor.Seq {
-				events = append(events, e)
-			}
-		}
-		return events, len(snap.Threads) == 1 && snap.Threads[0].Resumable, true, nil
-	}
-	// stale is that what holds there wasn't read with the last batch: what
-	// was read before stands until a read, a second on, says otherwise.
-	stale := false
 	now, cancel := context.WithCancel(ctx)
 	cancel()
 	for {
-		wait, cancel := ctx, context.CancelFunc(func() {})
-		if stale {
-			wait, cancel = context.WithTimeout(ctx, time.Second)
-		}
-		it, err := st.Next(wait)
-		cancel()
+		it, err := st.Next(ctx)
 		if cause := context.Cause(ctx); cause != nil && ctx.Err() != nil && errors.Is(cause, ErrNoMachine) {
 			return progressed, cause
 		}
-		var items []api.StreamItem
-		switch {
-		case stale && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
-		case err != nil:
+		if err != nil {
 			return progressed, err
-		default:
-			h.hear(t.ID)
-			items = append(items, it)
 		}
+		h.hear(t.ID)
+		items := []api.StreamItem{it}
 		var later error
-		for len(items) > 0 {
+		for {
 			it, err := st.Next(now)
 			if err != nil {
 				if !errors.Is(err, context.Canceled) {
@@ -518,7 +488,9 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			case it.Kind == api.StreamSnapshot && it.Snapshot != nil:
 				events, fresh, snapshot = it.Snapshot.Events, true, true
 				next.Cursor = it.Snapshot.Cursor
-			case it.Kind == api.StreamEvent && it.Event != nil && it.Event.Cursor.Log == next.Cursor.Log && it.Event.Cursor.Seq <= next.Cursor.Seq:
+				next.Held = len(it.Snapshot.Threads) == 1 && it.Snapshot.Threads[0].Resumable
+			case it.Kind == api.StreamThread && it.Thread != nil && it.Thread.ID == r.Thread:
+				next.Held = it.Thread.Resumable
 				continue
 			case it.Kind == api.StreamEvent && it.Event != nil:
 				events = []api.Event{*it.Event}
@@ -531,34 +503,6 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			if next, got, gone, err = engine.Follow(next, events, fresh); err != nil {
 				return progressed, fmt.Errorf("%w: %w", errDefect, err)
 			}
-			for _, p := range got {
-				if !slices.ContainsFunc(reports, func(q engine.RemoteReport) bool { return q.Key == p.Key }) {
-					reports = append(reports, p)
-				}
-			}
-			if gone {
-				later = api.ErrNotFound
-			}
-		}
-		// What the machine committed since the stream's last item is folded
-		// now, with the view it holds at once; the stream's copies of those
-		// events, later, are skipped. A machine that didn't answer keeps
-		// what was last read of it until it does; one that refuses the link
-		// or no longer has the child ends the follower.
-		events, held, ok, err := since(next.Cursor)
-		if (errors.Is(err, api.ErrNotAllowed) || errors.Is(err, api.ErrNotFound)) && later == nil {
-			later = err
-		}
-		if stale = !ok; ok {
-			next.Held = held
-		}
-		if ok && len(events) > 0 {
-			var got []engine.RemoteReport
-			var gone bool
-			if next, got, gone, err = engine.Follow(next, events, false); err != nil {
-				return progressed, fmt.Errorf("%w: %w", errDefect, err)
-			}
-			next.Held, next.Cursor = held, events[len(events)-1].Cursor
 			for _, p := range got {
 				if !slices.ContainsFunc(reports, func(q engine.RemoteReport) bool { return q.Key == p.Key }) {
 					reports = append(reports, p)

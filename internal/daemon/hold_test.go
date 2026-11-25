@@ -2,18 +2,11 @@ package daemon
 
 import (
 	"context"
-	"errors"
-	"net/http"
-	"slices"
-	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/engine"
 	"glitched/internal/provider/fake"
-	"glitched/internal/transport"
 )
 
 // A stop on B that holds what waits on a link's thread shows on A's
@@ -99,157 +92,31 @@ func TestASettledPlaceholderSaysWhatItsReopenedThreadHolds(t *testing.T) {
 	}
 }
 
-// readProbe is a link's server on B that answers its socket's Reads with
-// hook, while one is set, and every other call as B does.
-type readProbe struct {
-	*proxy
-	mu   sync.Mutex
-	hook func(context.Context, api.Query) (api.Snapshot, error)
-}
-
-// probeLink serves B's links through a readProbe, and points A at it.
-func probeLink(t *testing.T, p *remotes) *readProbe {
-	ctx, cancel := context.WithCancel(context.Background())
-	tn := transport.Tailnet{Address: freeAddr(t)}
-	ln, err := tn.Listen(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	g := &grants{dir: p.dirB, base: ctx}
-	go g.watch(ctx)
-	pr := &readProbe{proxy: &proxy{t: t, p: p, dirB: p.dirB, addr: tn.Address}}
-	srv := &transport.Server{Transport: tn, Endpoint: pr, Replies: pr, Authorize: func(req *http.Request, proved func(transport.Key) bool) (transport.Grant, error) {
-		return g.authorize(req, proved)
-	}}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		srv.Serve(ctx, ln)
-	}()
-	t.Cleanup(func() {
-		cancel()
-		<-done
-	})
-	p.machine(tn.Address)
-	return pr
-}
-
-func (pr *readProbe) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
-	pr.mu.Lock()
-	hook := pr.hook
-	pr.mu.Unlock()
-	if hook != nil {
-		return hook(ctx, q)
-	}
-	return pr.inner().Read(ctx, q)
-}
-
-func (pr *readProbe) intercept(fn func(context.Context, api.Query) (api.Snapshot, error)) {
-	pr.mu.Lock()
-	pr.hook = fn
-	pr.mu.Unlock()
-}
-
-// B's Reads failing over and over, while its stream and its replies
-// answer, keep A from knowing what holds there, never from its child or
-// the child's done report.
-func TestFailedReadsOfWhatHoldsKeepTheChildAndItsReport(t *testing.T) {
-	p := newRemotes(t, fake.New(fake.Turn(true)), "fake", engine.Limits{})
-	pr := probeLink(t, p)
-	k := p.place("report without the hold")
+// A resume on B of what it held takes the hold off A's placeholder at the
+// commit that admits its run, the same commit A records it working at.
+func TestAResumeThereEndsTheHoldWithTheRunItAdmits(t *testing.T) {
+	p := newRemotes(t, fake.New(fake.Turn(false)), "fake", engine.Limits{})
+	k := p.place("held then resumed")
 	b := p.bound(k).Thread
-	send := func(intent api.Intent) api.Receipt {
-		c, err := p.b.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: b, Body: intent})
-		if err != nil {
+	until(t, "the first run done", func() bool { return p.placeholder(k).Remote.Ended != nil && p.onB(b).Live() == nil })
+	send := func(intent api.Intent) {
+		if _, err := p.b.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: b, Body: intent}); err != nil {
 			t.Fatal(err)
 		}
-		return c
 	}
-	approve := func() {
-		rq := engine.View(p.onB(b)).Requests[0]
-		send(api.RequestRespond{Request: rq.ID, Generation: rq.Generation, Answer: []byte(`{"allow":true}`)})
-	}
-	until(t, "the blocked report", func() bool {
-		rs, _ := p.reports(k)
-		return len(rs) == 1 && p.placeholder(k).Remote.Slot == api.RunWaiting
-	})
-	approve()
-	until(t, "the first turn ended", func() bool { return p.placeholder(k).Remote.Ended != nil })
-	second := send(api.MessageDispatch{Text: "second task"})
-	until(t, "the second turn waiting on both machines", func() bool {
-		r := p.placeholder(k).Remote
-		return r.Run == second.Command && r.Slot == api.RunWaiting
-	})
-	var failed atomic.Int32
-	pr.intercept(func(ctx context.Context, q api.Query) (api.Snapshot, error) {
-		if failed.Add(1) <= 6 {
-			return api.Snapshot{}, errors.New("a brief storage error")
-		}
-		return pr.inner().Read(ctx, q)
-	})
-	send(api.ThreadConfigure{Effort: new("high")})
-	until(t, "six failed reads", func() bool { return failed.Load() >= 6 })
-	approve()
-	until(t, "the second turn's report", func() bool {
-		rs, _ := p.reports(k)
-		return slices.ContainsFunc(rs, func(r api.ChildReported) bool { return r.Run == second.Command && r.Kind == api.ReportDone })
-	})
-	rs, _ := p.reports(k)
-	if slices.ContainsFunc(rs, func(r api.ChildReported) bool { return r.Kind == api.ReportFailed }) || p.placeholder(k).Remote.Lost != "" {
-		t.Errorf("after failed reads, A reported %v and lost %q; want only its child done", rs, p.placeholder(k).Remote.Lost)
-	}
-}
-
-// What A records of its child holds at the cursor it records: a Read B
-// answers after more commits there is not taken for the events before.
-func TestAHoldIsOfTheCursorItIsRecordedAt(t *testing.T) {
-	p := newRemotes(t, fake.New(fake.Turn(true)), "fake", engine.Limits{})
-	pr := probeLink(t, p)
-	k := p.place("read fence")
-	b := p.bound(k).Thread
-	until(t, "both machines waiting on the approval", func() bool {
-		return p.placeholder(k).Remote.Slot == api.RunWaiting && len(engine.View(p.onB(b)).Requests) == 1
-	})
-	entered, release := make(chan struct{}), make(chan struct{})
-	var once sync.Once
-	unblock := sync.OnceFunc(func() { close(release) })
-	defer unblock()
-	pr.intercept(func(ctx context.Context, q api.Query) (api.Snapshot, error) {
-		once.Do(func() {
-			close(entered)
-			select {
-			case <-release:
-			case <-ctx.Done():
-			}
-		})
-		return pr.inner().Read(ctx, q)
-	})
-	send := func(intent api.Intent) api.Receipt {
-		c, err := p.b.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: b, Body: intent})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return c
-	}
-	old := send(api.ThreadConfigure{Effort: new("high")})
-	select {
-	case <-entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("A read nothing for the change")
-	}
+	send(api.TurnInterrupt{})
 	send(api.MessageDispatch{Text: "later", Mode: api.Defer})
-	rq := engine.View(p.onB(b)).Requests[0]
-	send(api.RequestRespond{Request: rq.ID, Generation: rq.Generation, Answer: []byte(`{"allow":true}`)})
-	until(t, "B idle and holding the message", func() bool { return engine.View(p.onB(b)).Resumable })
-	unblock()
-	until(t, "A's placeholder idle and held", func() bool {
-		r := p.placeholder(k).Remote
-		return r.Held && r.Slot == api.RunIdle
-	})
+	until(t, "A's placeholder held", func() bool { return engine.View(p.placeholder(k)).Remote.Held })
+	send(api.QueueResume{})
+	until(t, "the resumed run done on B", func() bool { return len(p.onB(b).Runs) >= 2 && p.onB(b).Live() == nil })
+	until(t, "A followed it", func() bool { return p.placeholder(k).Remote.Run == p.onB(b).Runs[len(p.onB(b).Runs)-1].ID })
 	for _, e := range eventsOf(t, p.a.Endpoint(), k) {
 		body, _ := e.Decode()
-		if r, ok := body.(api.RemoteSeen); ok && r.Cursor == old.Committed && r.State == api.RunWaiting && r.Held {
-			t.Error("A recorded a hold B had only after it, with the approval B waited on at its cursor")
+		if r, ok := body.(api.RemoteSeen); ok && r.Held && r.State != api.RunIdle {
+			t.Errorf("A recorded its child %v and held at once", r.State)
 		}
+	}
+	if engine.View(p.placeholder(k)).Remote.Held {
+		t.Error("A's placeholder still says held after the resume there")
 	}
 }
