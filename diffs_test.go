@@ -107,7 +107,7 @@ func TestNoDiffActionChangesTheWorkspace(t *testing.T) {
 	h.click("Wrap long lines")
 	h.tt.SetSize(1600, 900)
 	h.tt.Frame()
-	h.click("Split")
+	h.clickPlugin("Split")
 	h.click("Unified")
 	h.hover("Diff of " + sidebarPath)
 	h.tt.Advance(time.Second)
@@ -762,7 +762,7 @@ func TestASplitDiffGoesWithoutAPanic(t *testing.T) {
 			h.tt.Frame()
 			h.diffOf(first, sidebarPath)
 			settlePlugins(t, h.a, h.tt, h.p)
-			h.click("Split")
+			h.clickPlugin("Split")
 			h.tt.Advance(time.Second)
 			if h.a.layout() != editor.DiffSplit {
 				t.Fatal("the diff isn't split")

@@ -52,7 +52,7 @@ func TestView(t *testing.T) {
 	if h.a.backend.Unread(fix.Thread) {
 		t.Error("the thread shown is still unread")
 	}
-	h.click("Toggle diff  ⌘D")
+	h.clickPlugin("Toggle diff  ⌘D")
 	if !h.a.showDiff || !h.tt.HasText("No changes in this thread yet.") {
 		t.Errorf("diff panel not shown: %q", h.tt.Texts())
 	}
@@ -552,8 +552,8 @@ func TestInboxMergesMachinesByRecency(t *testing.T) {
 		t.Fatalf("the inbox lists\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 
-	h.click("api")
-	h.click("billing")
+	h.clickPlugin("api")
+	h.clickPlugin("billing")
 	got = nil
 	for _, it := range h.a.itemsIn(catInbox) {
 		got = append(got, it.t.View.Title)
@@ -779,7 +779,7 @@ func TestInbox(t *testing.T) {
 	}
 	// Settle it from its row's actions.
 	h.hover(fix.View.Title)
-	h.click("Settle")
+	h.clickPlugin("Settle")
 	if c := h.a.categoryOf(fix); c != catSettled {
 		t.Errorf("settled thread in section %d", c)
 	}
@@ -802,7 +802,7 @@ func TestInbox(t *testing.T) {
 	if inSidebar(fix.View.Title) {
 		t.Error("closed Settled section shows its threads")
 	}
-	h.click("Settled")
+	h.clickPlugin("Settled")
 	if !inSidebar(fix.View.Title) {
 		t.Error("opened Settled section hides the settled thread")
 	}
@@ -821,7 +821,7 @@ func TestInbox(t *testing.T) {
 		t.Errorf("the second turn shows %q", h.tt.Texts())
 	}
 	// The strip filters to a project.
-	h.click("agent-phone")
+	h.clickPlugin("agent-phone")
 	for _, cat := range []category{catInbox, catWorking, catSnoozed, catSettled} {
 		for _, it := range h.a.itemsIn(cat) {
 			if it.p.name() != "agent-phone" {
@@ -1303,7 +1303,7 @@ func TestProjectFilter(t *testing.T) {
 	if len(a.projectFilter) != 0 {
 		t.Errorf("every project chosen should be no filter, got %v", a.projectFilter)
 	}
-	h.click("agent-phone")
+	h.clickPlugin("agent-phone")
 	h.click("All")
 	if len(a.projectFilter) != 0 {
 		t.Error("All should clear the filter")
@@ -1314,7 +1314,7 @@ func TestProjectFilter(t *testing.T) {
 // would otherwise hide every thread left.
 func TestProjectFilterForgetsProjectsGone(t *testing.T) {
 	h := machines(t)
-	h.click("api")
+	h.clickPlugin("api")
 	h.tt.Advance(time.Second)
 	if err := h.a.backend.RemoveServer("devbox"); err != nil {
 		t.Fatal(err)
