@@ -673,8 +673,12 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // and where a link's thread came from, which a version 20 GUI would show
 // as a child it can't open and a thread of the user's, and sends a link's
 // thread stream its views, without which a version 20 engine's follower
-// can't say what a stop there holds.
-const Protocol = 21
+// can't say what a stop there holds; version 22 takes a parent's answer to
+// its remote child's question over the link, which a version 21 engine
+// refuses, and sends a link's thread's view on its commit's last event,
+// which a version 21 follower drops, so it never says what a stop there
+// holds.
+const Protocol = 22
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host
