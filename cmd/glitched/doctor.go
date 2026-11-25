@@ -158,7 +158,7 @@ func checkDB(ctx context.Context, dir, name string) doctorCheck {
 		walSize = wfi.Size()
 	}
 
-	db, err := sql.Open("sqlite", path+"?mode=ro&_busy_timeout=1000")
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_busy_timeout=1000")
 	if err != nil {
 		return doctorCheck{Name: name, Status: "fail", Detail: err.Error()}
 	}
