@@ -355,7 +355,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	if hubc != nil {
 		up = hub.NewUploader(st.HostID(), cfg.Epoch, st, hubc)
 		// The hub lives outside a backup of this database, so it sees a
-		// restore that brought the fence back too.
+		// restore.
 		check, cancel := context.WithTimeout(ctx, 2*time.Second)
 		err := up.Check(check)
 		cancel()
@@ -368,7 +368,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		case errors.Is(err, api.ErrProtocol):
 			slog.Warn("the hub speaks another protocol, so nothing is uploaded to it until one of the two is updated", "err", err)
 		case err != nil:
-			slog.Warn("hub unreachable, so a restore the fence came back with goes unnoticed", "err", err)
+			slog.Warn("hub unreachable, so a restore of this database goes unnoticed", "err", err)
 		}
 	}
 
