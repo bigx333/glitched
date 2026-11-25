@@ -3,7 +3,10 @@
 // first editor it finds, as the app's own menu item did.
 export async function command({ id, args }) {
   const thread = args?.thread;
-  if (!thread?.local || !thread.workspace) return;
+  if (!thread?.local || !thread.workspace) {
+    await glitched.toast("Choose it from a thread’s menu", "Copy branch name and Open in editor act on a local thread.");
+    return;
+  }
   if (id === "copy-branch") {
     const r = await glitched.run("git", ["branch", "--show-current"], { cwd: thread.workspace, timeout: 5 });
     const branch = r.stdout.trim();
