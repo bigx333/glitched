@@ -394,6 +394,30 @@ func TestALinksThreadSaysWhereItCameFrom(t *testing.T) {
 	shoot(t, h, "b-origin")
 }
 
+// A link's thread whose first message waits on its worktree offers Stop,
+// which holds the message there, and once held offers Resume instead.
+func TestALinksThreadOffersStopBeforeItsFirstRun(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	seed(t, d, "/work/t3code", "Port the sort", "port it")
+	link := linkFor(t, dir, "laptop")
+	h := start(t, dir)
+	k := h.thread("Port the sort")
+	k.View.Origin = &api.Origin{Engine: api.NewID(), Thread: api.NewID(), Title: "Ship the sidebar sort", Link: link}
+	k.View.Run, k.View.Turn, k.View.Queued, k.View.Workspace = api.RunIdle, nil, 1, ""
+	h.a.choose(k)
+	h.until("Stop on the waiting first message", func() bool {
+		h.tt.Frame()
+		return h.tt.HasText(" on laptop") && h.tt.HasText("Stop")
+	})
+	k.View.Resumable = true
+	h.a.choose(k)
+	h.until("Resume, not Stop, once the message is held", func() bool {
+		h.tt.Frame()
+		return h.tt.HasText("Resume") && !h.tt.HasText("Stop")
+	})
+}
+
 // fits fails t when a text the window shows runs past its right edge.
 func fits(t *testing.T, h *harness, width float32, texts ...string) {
 	t.Helper()
