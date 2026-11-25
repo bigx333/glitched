@@ -268,6 +268,10 @@ func (a *app) threadControls(t thread, build func()) {
 	defer func() { a.pickerLock, a.pickerFamily = "", family }()
 	build()
 	after := a.choice()
+	// The raw choice keeps a speed preference across models, but a thread
+	// is configured at what its model can run: moving off Ultrafast's model
+	// is a downgrade even though the preference's flags did not change.
+	after.Fast, after.Ultrafast = boolsOfSpeed(a.speedFor(after.Model, after.Fast, after.Ultrafast))
 	if after == before || t.env == nil {
 		return
 	}
