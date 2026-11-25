@@ -57,7 +57,7 @@ var partTitles = map[string]string{
 	"composer.queue":            "Queue",
 	"thread.header.breadcrumb":  "Breadcrumb",
 	"thread.header.usage":       "Token usage",
-	"thread.header.plan":        "Plan",
+	"thread.header.plan":        "Checklist",
 	"palette":                   "Command palette",
 	"sidebar.body":              "Sidebar threads",
 	"agents.body":               "Agents panel",
