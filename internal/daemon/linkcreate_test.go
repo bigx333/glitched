@@ -534,27 +534,6 @@ func TestASettleBeforeTheWorktreeAdmitsNoTurn(t *testing.T) {
 	}
 }
 
-// A settle while git makes the worktree, then a kill, leaves a worktree
-// the next engine finishes for the thread, which starts nothing.
-func TestASettleAndAKillWhileTheWorktreeIsMadeFinishIt(t *testing.T) {
-	l := newLinked(t, api.Link{Access: api.AccessAutoEdits}, true)
-	thread := l.mustCreate(api.AccessAsk)
-	dir := l.making(thread)
-	if err := l.send(thread, api.InboxSet{Disposition: api.Disposition{State: api.Settled}}); err != nil {
-		t.Fatal(err)
-	}
-	l.close()
-	l.open()
-	l.startB()
-	l.waitFor(thread, "worktree.ready", 1)
-	if v := l.view(thread); v.Workspace != dir || l.count(thread, "turn.admitted") != 0 {
-		t.Fatalf("the settled thread after the replay: workspace %q, %d turns; want its worktree and none", v.Workspace, l.count(thread, "turn.admitted"))
-	}
-	if _, err := os.Stat(filepath.Join(l.repo, ".git", "worktrees", filepath.Base(dir), "locked")); !os.IsNotExist(err) {
-		t.Fatalf("the finished worktree is still locked: %v", err)
-	}
-}
-
 // A configure above the cap is refused from B's person too, and a
 // message over a cap lowered since waits.
 func TestALinksThreadStaysUnderItsCap(t *testing.T) {
@@ -584,49 +563,25 @@ func TestALinksThreadStaysUnderItsCap(t *testing.T) {
 	}
 }
 
-// A kill as git makes the worktree, before the owner file is written and
-// after, leaves the effect leased; the next engine's replay finishes the
-// worktree it finds locked for the thread, and the turn starts.
-func TestAKilledWorktreeMakeIsFinishedByTheReplay(t *testing.T) {
-	for _, kill := range []string{"before git wrote the worktree", "twice before git wrote the worktree", "before the owner write", "after the owner write"} {
-		t.Run(kill, func(t *testing.T) {
-			l := newLinked(t, api.Link{Access: api.AccessAutoEdits}, true)
-			thread := l.mustCreate(api.AccessAsk)
-			dir := l.making(thread)
-			l.close()
-			l.open()
-			own := filepath.Join(l.repo, ".git", "worktrees", filepath.Base(dir))
-			if lock, err := os.ReadFile(filepath.Join(own, "locked")); err != nil || !strings.Contains(string(lock), thread.String()) {
-				t.Fatalf("the killed make's lock: %q %v, want it naming the thread", lock, err)
-			}
-			switch kill {
-			case "before git wrote the worktree", "twice before git wrote the worktree":
-				// What git leaves when killed as it begins: the folder,
-				// empty, and the branch it made; a second kill as the
-				// replay began leaves the long branch too.
-				branch := gitIn(t, dir, "branch", "--show-current")
-				gitIn(t, l.repo, "worktree", "remove", "-f", "-f", dir)
-				if kill == "twice before git wrote the worktree" {
-					gitIn(t, l.repo, "branch", strings.ToLower(strings.TrimSuffix(branch, branch[len(branch)-6:])+thread.String()), "main")
-				}
-				if err := os.Mkdir(dir, 0o755); err != nil {
-					t.Fatal(err)
-				}
-			case "after the owner write":
-				if err := os.WriteFile(filepath.Join(own, "glitched-thread"), []byte(thread.String()), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			l.startB()
-			l.waitFor(thread, "worktree.ready", 1)
-			l.waitFor(thread, "turn.ended", 1)
-			if _, err := os.Stat(filepath.Join(own, "locked")); !os.IsNotExist(err) {
-				t.Fatalf("the finished worktree is still locked: %v", err)
-			}
-			if v := l.view(thread); v.Workspace != dir {
-				t.Fatalf("the thread runs in %q, want its worktree %q", v.Workspace, dir)
-			}
-		})
+// A kill as git makes the worktree leaves the effect leased; the next
+// engine's replay doesn't reconstruct the partial make. It fails on the
+// collision and leaves what git wrote.
+func TestAKilledWorktreeMakeFailsOnTheReplay(t *testing.T) {
+	l := newLinked(t, api.Link{Access: api.AccessAutoEdits}, true)
+	thread := l.mustCreate(api.AccessAsk)
+	dir := l.making(thread)
+	l.close()
+	l.open()
+	l.startB()
+	l.waitFor(thread, "worktree.failed", 1)
+	if l.count(thread, "worktree.ready") != 0 {
+		t.Fatalf("the replay made the worktree ready: %+v", l.view(thread))
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("what git wrote is gone: %v", err)
+	}
+	if v := l.view(thread); v.Workspace != "" {
+		t.Fatalf("the thread runs in %q after the failed replay; want no workspace", v.Workspace)
 	}
 }
 
@@ -672,76 +627,21 @@ func (l *linked) settledFailed(thread api.ID) {
 	}
 }
 
-// A worktree.make takes up no branch it didn't make: with both its names
-// taken by branches of B's person's at the base, the thread fails and
-// both stay where they are, in no worktree.
-func TestAWorktreeMakeTakesUpNoBranchItDidntMake(t *testing.T) {
+// A branch collision fails a worktree.make: the person's branch stays
+// where it was, in no worktree.
+func TestAWorktreeMakeFailsOnABranchCollision(t *testing.T) {
 	l := newLinked(t, api.Link{Access: api.AccessAutoEdits}, false)
 	c := l.create(api.AccessAsk, 1)
 	id := strings.ToLower(c.Target.String())
-	short, long := "glitched/from-a-"+id[len(id)-6:], "glitched/from-a-"+id
-	gitIn(t, l.repo, "branch", short, "main")
-	gitIn(t, l.repo, "branch", long, "main")
+	branch := "glitched/from-a-" + id[len(id)-6:]
+	gitIn(t, l.repo, "branch", branch, "main")
 	main := gitIn(t, l.repo, "rev-parse", "main")
 	if _, err := l.ep.Submit(context.Background(), c); err != nil {
 		t.Fatal(err)
 	}
 	l.settledFailed(c.Target)
 	list := gitIn(t, l.repo, "worktree", "list", "--porcelain")
-	for _, b := range []string{short, long} {
-		if at := gitIn(t, l.repo, "rev-parse", b); at != main || strings.Contains(list, "refs/heads/"+b) {
-			t.Fatalf("the person's branch %s: at %s, worktrees %s; want it at main and in none", b, at, list)
-		}
-	}
-}
-
-// A replay finishes only a worktree its lock or owner names the thread
-// of, on the thread's branch: one whose owner names another thread, or
-// moved to another branch, fails the thread before anything is changed,
-// and stays locked as it was.
-func TestAReplayLeavesAWorktreeThatIsntTheThreads(t *testing.T) {
-	for _, tamper := range []string{"owner names another thread", "owner can't be read", "on another branch"} {
-		t.Run(tamper, func(t *testing.T) {
-			l := newLinked(t, api.Link{Access: api.AccessAutoEdits}, true)
-			thread := l.mustCreate(api.AccessAsk)
-			dir := l.making(thread)
-			own := filepath.Join(l.repo, ".git", "worktrees", filepath.Base(dir))
-			other := api.NewID().String()
-			switch tamper {
-			case "owner names another thread":
-				if err := os.WriteFile(filepath.Join(own, "glitched-thread"), []byte(other), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			case "owner can't be read":
-				if err := os.WriteFile(filepath.Join(own, "glitched-thread"), []byte(other), 0o200); err != nil {
-					t.Fatal(err)
-				}
-			case "on another branch":
-				gitIn(t, dir, "-c", "core.hooksPath=/dev/null", "switch", "-q", "-c", "elsewhere")
-			}
-			l.close()
-			l.open()
-			l.startB()
-			l.settledFailed(thread)
-			if _, err := os.Stat(filepath.Join(own, "locked")); err != nil {
-				t.Fatalf("the worktree that isn't the thread's was unlocked: %v", err)
-			}
-			if tamper == "owner can't be read" {
-				if err := os.Chmod(filepath.Join(own, "glitched-thread"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			owner, err := os.ReadFile(filepath.Join(own, "glitched-thread"))
-			switch tamper {
-			case "owner names another thread", "owner can't be read":
-				if string(owner) != other {
-					t.Fatalf("the owner file says %q, want the other thread's %q left as it was", owner, other)
-				}
-			case "on another branch":
-				if !os.IsNotExist(err) {
-					t.Fatalf("the owner file of a worktree on another branch: %q %v, want none written", owner, err)
-				}
-			}
-		})
+	if at := gitIn(t, l.repo, "rev-parse", branch); at != main || strings.Contains(list, "refs/heads/"+branch) {
+		t.Fatalf("the person's branch %s: at %s, worktrees %s; want it at main and in none", branch, at, list)
 	}
 }

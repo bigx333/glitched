@@ -165,7 +165,7 @@ A child on another machine starts as a placeholder here (design: the captain's r
 - The placeholder is a child with `Remote` set (`api.ThreadCreated.Remote`, `engine.Thread.Remote`, `threads.remote`, schema 16) and no run, ever: its task is for the other machine, so nothing queues it here. `threads.origin` is the other machine's side and stays null.
 - Decide takes a placeholder in its own branch for every intent, and it never admits a run here. Settling or deleting the tree takes it in the one commit; what reaches the other machine is in "Remote children (stopped, settled and sent)".
 - `kidsOf` counts a placeholder that is creating as at work.
-- `Host.Submit` refuses a remote create whose task or title holds any value of the parent's vault, literally and whatever its length, before anything is stored. It commits under the lock a worktree create holds, so a local create of the same thread that is making its worktree commits first.
+- `Host.Submit` commits a remote create under the lock a worktree create holds, so a local create of the same thread that is making its worktree commits first.
 - Protocol 17: a version 16 GUI would show a placeholder as a child here with an empty transcript.
 
 ## Remote children (on the machine they run on)
@@ -340,7 +340,7 @@ A child on another machine starts as a placeholder here (design: the captain's r
 - The placeholder is a child with `Remote` set (`api.ThreadCreated.Remote`, `engine.Thread.Remote`, `threads.remote`, schema 16) and no run, ever: its task is for the other machine, so nothing queues it here. `threads.origin` is the other machine's side and stays null.
 - Decide takes a placeholder in its own branch for every intent, and it never admits a run here. Settling or deleting the tree takes it in the one commit; what reaches the other machine is in "Remote children (stopped, settled and sent)".
 - `kidsOf` counts a placeholder that is creating as at work.
-- `Host.Submit` refuses a remote create whose task or title holds any value of the parent's vault, literally and whatever its length, before anything is stored. It commits under the lock a worktree create holds, so a local create of the same thread that is making its worktree commits first.
+- `Host.Submit` commits a remote create under the lock a worktree create holds, so a local create of the same thread that is making its worktree commits first.
 - Protocol 17: a version 16 GUI would show a placeholder as a child here with an empty transcript.
 
 ## Remote children (on the machine they run on)

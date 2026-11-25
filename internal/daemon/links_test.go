@@ -260,14 +260,25 @@ func remoteEngine(t *testing.T, dir string) (api.Endpoint, *fake.Adapter, api.ID
 	return ep, ad, parent
 }
 
-// spawn has a turn of parent's start kids and returns each create's
-// thread and how it went.
+// spawn has a turn of parent's start kids after anything active and
+// returns each create's thread and how it went.
 func spawn(t *testing.T, ep api.Endpoint, ad *fake.Adapter, parent api.ID, kids ...fake.Child) ([]api.ID, []error) {
+	t.Helper()
+	return spawnNowOrAfter(t, ep, ad, parent, api.AfterActive, kids...)
+}
+
+// spawnNow is spawn with the turn taken now, beside a waiting child.
+func spawnNow(t *testing.T, ep api.Endpoint, ad *fake.Adapter, parent api.ID, kids ...fake.Child) ([]api.ID, []error) {
+	t.Helper()
+	return spawnNowOrAfter(t, ep, ad, parent, api.StartNow, kids...)
+}
+
+func spawnNowOrAfter(t *testing.T, ep api.Endpoint, ad *fake.Adapter, parent api.ID, mode api.DispatchMode, kids ...fake.Child) ([]api.ID, []error) {
 	t.Helper()
 	text := api.NewID().String()
 	ad.Spawns(ep, text, kids...)
 	run := api.NewID()
-	if _, err := ep.Submit(context.Background(), api.Command{ID: run, Target: parent, Body: api.MessageDispatch{Text: text, Mode: api.AfterActive}}); err != nil {
+	if _, err := ep.Submit(context.Background(), api.Command{ID: run, Target: parent, Body: api.MessageDispatch{Text: text, Mode: mode}}); err != nil {
 		t.Fatal(err)
 	}
 	ids, errs := make([]api.ID, len(kids)), make([]error, len(kids))
@@ -338,7 +349,7 @@ func TestARemoteChildIsPlacedOnlyOnAMachineInMachinesJSON(t *testing.T) {
 	if err := RemoveMachine(dir, "laptop"); err != nil {
 		t.Fatal(err)
 	}
-	_, errs = spawn(t, ep, ad, parent, fake.Child{Title: "there again", Task: "go", Remote: "laptop"})
+	_, errs = spawnNow(t, ep, ad, parent, fake.Child{Title: "there again", Task: "go", Remote: "laptop"})
 	refused(t, "a child on laptop once it was removed", errs[0], `no machine called "laptop"`)
 	for _, name := range []string{"engine.db", "engine.db-wal"} {
 		if db, err := os.ReadFile(filepath.Join(dir, name)); err == nil && strings.Contains(string(db), laptop.Token) {
