@@ -290,6 +290,8 @@ interface ListItem {
   header?: boolean;
   /** A thread's id: a right click opens Glitched's menu of it. Needs threads:read. */
   thread?: string;
+  /** Up to 256 bytes: the section it folds with as Glitched opens and closes it, in a sidebar.body copy. An item, header or not, that names a section folds with it; a section's own title names none. */
+  section?: string;
 }
 
 /**
