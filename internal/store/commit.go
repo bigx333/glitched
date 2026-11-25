@@ -803,7 +803,12 @@ func scanRequestRow(rows *sql.Rows) (api.ID, engine.Request, error) {
 	return thread, r, err
 }
 
-func loadAllLiveThreads(ctx context.Context, q querier) ([]engine.Thread, error) {
+// liveViews is the view of every thread not deleted, in the order the
+// thread list shows them. It reads each thread as View does, in one query
+// per table: a message without its text, a request without its answer and,
+// unless pending, its body. So the list costs what it shows, not every
+// message its threads were sent.
+func (s *Store) liveViews(ctx context.Context, q querier) ([]api.Thread, error) {
 	rows, err := q.QueryContext(ctx, `SELECT `+threadSelectCols+` FROM threads WHERE deleted = 0 ORDER BY updated_at DESC, id`)
 	if err != nil {
 		return nil, err
@@ -825,7 +830,7 @@ func loadAllLiveThreads(ctx context.Context, q querier) ([]engine.Thread, error)
 	}
 	rows.Close()
 	if len(out) == 0 {
-		return out, nil
+		return nil, nil
 	}
 
 	if err := queryEach(ctx, q, `SELECT r.thread, r.id, r.generation, r.state, r.signalled, r.outcome, r.error, r.ended, r.model, r.access, r.silent, r.limit_resets, r.resume_cancelled, r.dropped
@@ -845,7 +850,7 @@ func loadAllLiveThreads(ctx context.Context, q querier) ([]engine.Thread, error)
 		return nil, err
 	}
 
-	if err := queryEach(ctx, q, `SELECT m.thread, m.id, m.text, m.mode, m.pos, m.state, m.run
+	if err := queryEach(ctx, q, `SELECT m.thread, m.id, '', m.mode, m.pos, m.state, m.run
 		FROM messages m JOIN threads t ON t.id = m.thread WHERE t.deleted = 0 ORDER BY m.thread, m.ord`, func(rows *sql.Rows) error {
 		thread, m, err := scanMessageRow(rows)
 		if err != nil {
@@ -859,7 +864,7 @@ func loadAllLiveThreads(ctx context.Context, q querier) ([]engine.Thread, error)
 		return nil, err
 	}
 
-	if err := queryEach(ctx, q, `SELECT q.thread, q.id, q.run, q.generation, q.dedup, q.kind, q.body, q.answer, q.state
+	if err := queryEach(ctx, q, `SELECT q.thread, q.id, q.run, q.generation, q.dedup, q.kind, CASE WHEN q.state = ? THEN q.body END, NULL, q.state
 		FROM requests q JOIN threads t ON t.id = q.thread WHERE t.deleted = 0 ORDER BY q.thread, q.ord`, func(rows *sql.Rows) error {
 		thread, r, err := scanRequestRow(rows)
 		if err != nil {
@@ -869,10 +874,14 @@ func loadAllLiveThreads(ctx context.Context, q querier) ([]engine.Thread, error)
 			out[idx].Requests = append(out[idx].Requests, r)
 		}
 		return nil
-	}); err != nil {
+	}, int(api.RequestPending)); err != nil {
 		return nil, err
 	}
-	return out, nil
+	views := make([]api.Thread, len(out))
+	for i, t := range out {
+		views[i] = s.view(t)
+	}
+	return views, nil
 }
 
 func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error) {

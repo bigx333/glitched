@@ -130,13 +130,11 @@ func (s *Store) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 	}
 	snap := api.Snapshot{Cursor: api.Cursor{Log: s.log, Seq: head}, Threads: []api.Thread{}}
 	if q.Thread.IsZero() {
-		threads, err := loadAllLiveThreads(ctx, tx)
+		views, err := s.liveViews(ctx, tx)
 		if err != nil {
 			return api.Snapshot{}, err
 		}
-		for _, t := range threads {
-			snap.Threads = append(snap.Threads, s.view(t))
-		}
+		snap.Threads = append(snap.Threads, views...)
 		return snap, nil
 	}
 	t, err := loadThread(ctx, tx, q.Thread)
