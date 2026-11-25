@@ -256,6 +256,9 @@ func (t *Tools) answer(ctx context.Context, caller api.Caller, task api.Thread, 
 	if err != nil {
 		return nil, fmt.Errorf("task_answer: %w", refusal(err))
 	}
+	if task.Remote != nil {
+		return map[string]any{"task_id": task.ID.String(), "sent": true, "note": "Sent to the machine the task runs on. Its person may answer there first; the task's report says how it went on."}, nil
+	}
 	return map[string]any{"task_id": task.ID.String(), "answered": true}, nil
 }
 

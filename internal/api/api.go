@@ -730,9 +730,11 @@ func (t Tailnet) Running() bool { return t.State == "Running" }
 type Query struct {
 	Thread ID     `json:"thread,omitzero"`
 	After  Cursor `json:"after,omitzero"`
-	// Views is that a thread's subscription also sends the thread's view,
-	// as a StreamThread item, after a catch-up that replays its events
-	// and after each commit that moves it. A Read ignores it.
+	// Views is that a thread's subscription also sends the thread's view
+	// at each commit that moves it, on the item of the commit's last event
+	// of the thread, so the two arrive whole, and on a catch-up's last
+	// replayed event, or as a StreamThread item when it replays none. A
+	// Read ignores it.
 	Views bool `json:"views,omitempty"`
 }
 

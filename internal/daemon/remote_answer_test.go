@@ -75,8 +75,8 @@ func TestAParentAnswersItsRemoteChildsQuestion(t *testing.T) {
 	})
 	o := mcp.Origin{Thread: parent, Access: api.AccessAsk}
 	answer := map[string]any{"task_id": kid.String(), "request_id": question.String(), "answers": []map[string]any{{"picked": []string{"SQLite"}}, {"picked": []string{"Unit"}}}, "client_request_id": "pick"}
-	if text, failed := taskTool(t, p.a.Endpoint(), o, "task_answer", answer); failed {
-		t.Fatalf("task_answer: %s", text)
+	if text, failed := taskTool(t, p.a.Endpoint(), o, "task_answer", answer); failed || !strings.Contains(text, `"sent"`) {
+		t.Fatalf("task_answer: %s, want it sent", text)
 	}
 	until(t, "B's child answered, and its turn done", func() bool {
 		th := p.onB(b)
@@ -124,6 +124,9 @@ func TestAParentCannotAnswerItsRemoteChildsApproval(t *testing.T) {
 	if !failed || !strings.Contains(text, "approvals and credentials are the user's") {
 		t.Fatalf("task_answer of an approval: %q, want it refused", text)
 	}
+	if _, err := p.a.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: kid, Body: api.RequestRespond{Request: approval.ID, Answer: []byte(`{"allow":true}`)}}); err == nil {
+		t.Fatal("A's person answered the approval on B through its placeholder")
+	}
 	ep := transport.NewEndpointClient(transport.Tailnet{Address: p.addrB, Token: p.token}, api.ID{})
 	defer ep.Close()
 	_, err := ep.Submit(context.Background(), api.Command{ID: api.NewID(), Target: b, Body: api.RequestRespond{Request: approval.ID, Answer: []byte(`{"allow":true}`)}})
@@ -132,5 +135,36 @@ func TestAParentCannotAnswerItsRemoteChildsApproval(t *testing.T) {
 	}
 	if r, _ := p.onB(b).Request(approval.ID); r.State != api.RequestPending {
 		t.Fatalf("B's approval is %v, want it still pending", r.State)
+	}
+}
+
+// Once B's person took the child over, by a message of their own while it
+// waits on its question, A's parent's agent can't answer it: A refuses at
+// once, and the question stays B's person's.
+func TestARemoteChildTakenOverThereTakesNoAnswerFromItsParent(t *testing.T) {
+	p := newRemotes(t, fake.New(fake.Asking()), "fake", engine.Limits{})
+	p.stopA()
+	p.adA = fake.New(fake.Turn(true))
+	p.startA()
+	parent := api.NewID()
+	if _, err := p.a.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: parent, Body: api.ThreadCreate{Workspace: p.repo, Title: "asking parent", Model: p.model, Access: api.AccessAsk}}); err != nil {
+		t.Fatal(err)
+	}
+	p.parent = parent
+	kid := p.place("asks")
+	b := p.bound(kid).Thread
+	until(t, "the question's wake on A", func() bool { _, wakes := p.reports(kid); return len(wakes) == 1 })
+	question := p.onB(b).Requests[0].ID
+	if _, err := p.b.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: b, Body: api.MessageDispatch{Text: "mine now", Mode: api.AfterActive}}); err != nil {
+		t.Fatal(err)
+	}
+	until(t, "A sees the takeover", func() bool { return p.placeholder(kid).Remote.Taken })
+	until(t, "A's parent turn live", func() bool { return engine.View(p.placeholder(parent)).Run == api.RunWaiting })
+	text, failed := taskTool(t, p.a.Endpoint(), mcp.Origin{Thread: parent, Access: api.AccessAsk}, "task_answer", map[string]any{"task_id": kid.String(), "request_id": question.String(), "answers": []map[string]any{{"picked": []string{"SQLite"}}, {"picked": []string{"Unit"}}}})
+	if !failed || !strings.Contains(text, "took it over") {
+		t.Fatalf("task_answer after a takeover: %q, want it refused", text)
+	}
+	if r, _ := p.onB(b).Request(question); r.State != api.RequestPending {
+		t.Fatalf("B's question is %v, want it still pending", r.State)
 	}
 }
