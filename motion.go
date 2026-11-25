@@ -84,6 +84,12 @@ func chevron(c *ui.Context, open bool) ui.Element {
 	return ch.Rotate(ch.AnimateTo("turn", deg, turn))
 }
 
+// chevronAt is a disclosure chevron turned deg, 90 down: as its section
+// opens, whoever turns it says how far, frame by frame.
+func chevronAt(c *ui.Context, deg float32) ui.Element {
+	return ui.Icon(c, icChevronR).FontSize(12).Rotate(deg)
+}
+
 // pingPong eases there and back again over one period, for a pulse.
 func pingPong(t float32) float32 {
 	if t < 0.5 {

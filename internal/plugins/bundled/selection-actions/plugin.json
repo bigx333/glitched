@@ -3,7 +3,7 @@
   "name": "Selection actions",
   "description": "Quote and Explain in the floating selection bar. Built into Glitched; make a copy in Settings › Plugins to change the actions or the Explain prompt.",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "main.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": ["ui.place", "ui.replace", "threads:write"],

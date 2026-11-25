@@ -15,7 +15,7 @@ type Color = "$text" | "$text.muted" | "$text.faint" | "$accent" | "$success" | 
 type Option = string | { value: string; label?: string };
 
 /** 0 to 64 points: every side; top and bottom, then the sides; or top, right, bottom and left. */
-type Spacing = number | [number, number] | [number, number, number, number];
+type Spacing = number | [number] | [number, number] | [number, number, number, number];
 
 /** Containers lay out their children. */
 interface Layout {
@@ -86,6 +86,7 @@ type Widget = {
       weight?: number;
       color?: Color;
       italic?: boolean;
+      singleLine?: boolean;
       selectable?: boolean;
       padding?: Spacing;
       grow?: boolean;
@@ -93,7 +94,7 @@ type Widget = {
   | { type: "markdown"; id?: string; text: string }
   | { type: "badge"; id?: string; text: string; style?: "default" | "accent" | "success" | "warning" | "danger" | "count"; color?: Color }
   /** The header's hairline pill, as its workspace and tokens; the tooltip is also its name to assistive tools. */
-  | { type: "badge"; id?: string; text: string; style: "pill"; tooltip?: string }
+  | { type: "badge"; id?: string; text: string; style: "pill"; tooltip?: string; color?: Color; /** 0 to 1, draws a progress ring before the text. */ value?: number }
   | { type: "divider"; id?: string; /** vertical: a line that stands up in its row, as tall as the row. */ style?: "vertical" }
   | { type: "spacer" | "spinner"; id?: string }
   | { type: "icon"; id?: string; /** One of the app's icons, or "plugin:<file>.svg". */ name: string; color?: Color; /** 8 to 48 points. */ fontSize?: number }
@@ -139,10 +140,11 @@ type Widget = {
       controlled?: boolean;
       /** Give it the keyboard as it is drawn. */
       focus?: boolean;
+      grow?: boolean;
       multiline?: boolean;
       disabled?: boolean;
-      /** search: a magnifier and a clear button. */
-      style?: "default" | "search";
+      /** search: a magnifier and a clear button; bare: no frame, filling its row and taking the keyboard. */
+      style?: "default" | "search" | "bare";
       onChange?: Handler;
       /** Enter, in a single-line input. */
       onSubmit?: Handler;
@@ -223,15 +225,16 @@ type Widget = {
       options: (Option | { separator: true })[];
       disabled?: boolean;
       tooltip?: string;
-      /** outline: a hairline pill with a chevron, as the header's Open in. ghost: drawn as a ghost button, with its children, as the composer's workspace. */
+      /** ghost: drawn as a ghost button, with its children, as the composer's workspace. */
       style?: "default" | "outline" | "ghost";
       /** A ghost menu's, in place of an icon: text, tile, icon and spacer only. */
       children?: Widget[];
       gap?: number;
-      padding?: number | number[];
+      padding?: Spacing;
       /** An outline menu's. */
       icon?: string;
       compact?: boolean;
+      active?: boolean;
       /** The chosen option's value is the event's. */
       onChange?: Handler;
     }
@@ -271,6 +274,8 @@ interface ListWidget {
   chooseOnHover?: boolean;
   /** Up from the first item goes to the last, Down from the last to the first; Home and End stop at the ends. */
   wrapAround?: boolean;
+  /** Keep keys out of the list: it takes no focus, and only the pointer chooses. */
+  noKeys?: boolean;
   /** The choice moved: the event's value is its key. */
   onChange?: Handler;
   /** Enter, Cmd-Enter (Control-Enter off macOS), a double click, or a click with submitOnClick: the value is the key, and modifiers the keys held. */
@@ -290,6 +295,8 @@ interface ListItem {
   header?: boolean;
   /** A thread's id: a right click opens Glitched's menu of it. Needs threads:read. */
   thread?: string;
+  /** Up to 256 bytes: the section it folds with as Glitched opens and closes it, in a sidebar.body copy. An item, header or not, that names a section folds with it; a section's own title names none. */
+  section?: string;
 }
 
 /**
@@ -327,20 +334,28 @@ type NativeWidget = {
       /** bare: only what the row says, with nothing around it; the copy draws the bubble, note and outline. Without, the row as Glitched drew it before. */
       props?: { bare?: boolean };
       /** A bare body's: insets the words inside their own text, so it selects with them. */
-      padding?: number | number[];
+      padding?: Spacing;
     }
   | {
       /** A failed command's Retry and Dismiss, in timeline.message, 8 points after what is before it; nothing in any other row, taking no room of its own, though its row's gap and its own grow still do. */
       name: "transcript.retry";
     }
   | {
-      /** A message's actions, in message.toolbar, as Glitched draws them: Copy; Edit & resend, a message of yours'; Retry, under the last reply that says something of a turn of yours that failed, was stopped or was given up on, or under your message when the turn said nothing. Nothing, and no room or gap, where the message has no such action. */
-      name: "message.copy" | "message.edit" | "message.retry";
+      /** The child reports of its copy's card, in timeline.report. */
+      name: "report.body";
+    }
+  | {
+      /** A message's actions, in message.toolbar, as Glitched draws them: Copy; Edit & resend, a message of yours'; Retry, under the last reply that says something of a turn of yours that failed, was stopped or was given up on, or under your message when the turn said nothing; Fork from here, under a turn's last reply. Nothing, and no room or gap, where the message has no such action. */
+      name: "message.copy" | "message.edit" | "message.retry" | "message.fork";
     }
   | {
       /** The command a plugin put in message.actions at index, of the context's items; nothing at an index no command has. */
       name: "message.item";
       props: { index: number };
+    }
+  | {
+      /** A queued message's row in composer.queue. */
+      name: "queue.text" | "queue.steer" | "queue.edit" | "queue.up" | "queue.down" | "queue.remove";
     }
   | {
       /** When the message was sent, or the reply came, in message.toolbar, in the user's formats: the time today, the day too before, the year too in another year, and how long a turn ran under its last reply; the day written out in its tooltip. Nothing for a message not sent yet. */
@@ -360,14 +375,38 @@ type NativeWidget = {
        * In a list's row of sidebar.body, about the thread its item names:
        * the row's actions (place it with when: "hover"), the field that
        * renames it while the user does, its project's tile with its state
-       * and jokes, or its children's toggle.
+       * and jokes, its children's toggle, what it shows at its end while
+       * idle, what plugins place in the row, and its machine badge.
        */
-      name: "thread.row.actions" | "thread.rename" | "thread.tile" | "thread.children";
+      name: "thread.row.actions" | "thread.rename" | "thread.tile" | "thread.children" | "thread.slot" | "thread.machine";
     }
   | {
       /** In a list's row of sidebar.body, palette or agents.body: what the item's thread is doing, as a mark or, with dot, the agents panel's dot. */
       name: "thread.status";
-      props?: { dot?: boolean };
+      props?: { dot?: boolean; size?: number };
+    }
+  | {
+      /** In a list's row of palette or agents.body: how long ago the item's thread was last active. */
+      name: "thread.age";
+    }
+  | {
+      /** In a list's row of agents.body: the menu trigger shown while pointed at. */
+      name: "thread.actions";
+    }
+  | {
+      /** In a list's row of sidebar.body or agents.body: the thread's title. */
+      name: "thread.title";
+      props?: { child?: boolean };
+    }
+  | {
+      /** In a list's row of sidebar.body: what the row shows at its end while idle. */
+      name: "thread.mark";
+      props?: { child?: boolean };
+    }
+  | {
+      /** In sidebar.body: a section's header, which opens and closes it on a click. */
+      name: "sidebar.section";
+      props: { section: string };
     }
   | {
       /** Glitched's Send button, in composer.send. */
@@ -411,7 +450,7 @@ type NativeWidget = {
 interface DrawnButton {
   id: string;
   /** Its text, and its name to assistive tools when it has no tooltip. */
-  label: string;
+  label?: string;
   /** Shown on hover, and its name to assistive tools. */
   tooltip?: string;
   disabled?: boolean;
@@ -426,6 +465,7 @@ interface GhostButton extends DrawnButton {
   /** Up to 4 characters over its corner. */
   badge?: string;
   size?: "small";
+  compact?: boolean;
   /** A theme token, or #rrggbb. */
   color?: Color | string;
   padding?: Spacing;
@@ -471,6 +511,35 @@ interface ThreadRecord {
   tokens?: number;
   /** Its workspace is on this machine, where glitched.run runs. */
   local?: boolean;
+  /** What its agent gets on its next run; only in a thread.header record. */
+  skills?: SkillList;
+}
+
+interface Skill {
+  name: string;
+  description: string;
+  source: string;
+  shown: string;
+  from?: string;
+  replaces?: string;
+}
+
+interface SkippedSkill {
+  source: string;
+  name?: string;
+  why: string;
+}
+
+interface SyncedFrom {
+  name: string;
+  pulled: string;
+}
+
+interface SkillList {
+  skills: Skill[];
+  skipped?: SkippedSkill[];
+  delivery?: string;
+  synced?: SyncedFrom;
 }
 
 interface Disposition {
@@ -506,11 +575,20 @@ interface ProjectRecord {
   color: string;
   /** The sidebar shows it, filtered to some projects. */
   filtered?: boolean;
+  /** Its workspace is on this machine. */
+  local?: boolean;
 }
 
-type UIEvent = {
+interface PlaceRef<C = ThreadRecord | ComponentContext> {
+  id: string;
+  at: Slot | Component;
+  key: string;
+  context?: C;
+}
+
+type UIEvent<C = ThreadRecord | ComponentContext> = {
   kind: "ui";
-  type: "click" | "change" | "submit" | "close";
+  type: "click" | "change" | "submit" | "close" | "blur";
   handler: string;
   /** The id of the widget. */
   node: string;
@@ -518,7 +596,7 @@ type UIEvent = {
   value?: string | boolean | { path: string; remaining: number };
   payload?: unknown;
   /** Set in a place: which copy, and the context it was drawn with. */
-  place?: { id: string; at: Slot | Component; key: string; context?: ThreadRecord | ComponentContext };
+  place?: PlaceRef<C>;
   /** Set for a widget in a list's row: the list's id and the row's key. */
   row?: { list: string; key: string };
   /** A list's submit: the keys held. cmd is Command on macOS, Control elsewhere. */
@@ -540,7 +618,7 @@ type AppEvent =
   | { kind: "app"; type: "grant.changed"; data: { capability: string; granted: boolean } }
   | { kind: "timer"; id: string };
 
-type GlitchedEvent = UIEvent | AppEvent;
+type GlitchedEvent<C = ThreadRecord | ComponentContext> = UIEvent<C> | AppEvent;
 
 /** The args of a command chosen in a menu of Glitched's (glitched.menus): thread.menu's, project.menu's, message.actions'. */
 type MenuArgs =
@@ -549,8 +627,45 @@ type MenuArgs =
   | { thread: ThreadRecord; message: { role: "user" | "assistant"; /** With messages:read. */ text?: string } };
 
 /** What init and update answer. Leave state out to keep it. */
-interface Update<S> {
+interface Update<S = unknown> {
   state?: S;
+}
+
+/** A stock mygo-plugin page action. */
+interface PageAction {
+  id: string;
+  title: string;
+  kind?: string;
+  url?: string;
+  meta?: Record<string, unknown>;
+}
+
+/** One row in a stock mygo-plugin page section. */
+interface PageItem {
+  id: string;
+  title: string;
+  subtitle?: string;
+  imageURL?: string;
+  kind?: string;
+  meta?: Record<string, unknown>;
+  actions?: PageAction[];
+}
+
+interface PageSection {
+  title?: string;
+  items: PageItem[];
+}
+
+/** What page answers for a stock mygo-plugin page. */
+interface Page {
+  title: string;
+  subtitle?: string;
+  markdown?: string;
+  sections: PageSection[];
+}
+
+interface PageArgs {
+  id: string;
 }
 
 /** Glitched's slots. Stable ones keep their name and context across updates. */
@@ -568,8 +683,12 @@ type Slot = "thread.header" | "thread.row" | "sidebar.footer";
 type Component =
   | "thread.header.actions"
   | "thread.panel.diff"
+  | "thread.panel.subagent"
   | "thread.row.actions"
   | "sidebar.projects"
+  | "sidebar.body"
+  | "agents.body"
+  | "palette"
   | "hero.heading"
   | "thread.empty"
   | "settings.page.general"
@@ -581,11 +700,13 @@ type Component =
   | "composer.access"
   | "composer.workspace"
   | "composer.model"
+  | "composer.queue"
   | "timeline.message"
   | "timeline.report"
   | "message.toolbar"
   | "thread.header.breadcrumb"
   | "thread.header.usage"
+  | "thread.header.plan"
   | "thread.panel.terminal"
   | "thread.panel.preview"
   | "selection.actions"
@@ -642,6 +763,7 @@ interface KeybindingsPageContext {
 type ComponentContext =
   | HeaderActionsContext
   | DiffPanelContext
+  | SubagentPanelContext
   | ThreadEmptyContext
   | GeneralPageContext
   | AppearancePageContext
@@ -649,20 +771,116 @@ type ComponentContext =
   | KeybindingsPageContext
   | RowActionsContext
   | ProjectStripContext
+  | SidebarBodyContext
+  | AgentsBodyContext
+  | PaletteContext
   | ComposerContext
   | ComposerSendContext
   | ComposerAccessContext
+  | ComposerWorkspaceContext
   | ComposerModelContext
+  | ComposerQueueContext
   | TimelineMessageContext
   | TimelineReportContext
   | MessageToolbarContext
   | HeaderBreadcrumbContext
   | HeaderUsageContext
+  | HeaderPlanContext
   | TerminalPanelContext
   | PreviewPanelContext
   | SelectionActionsContext
   | CLIUpdatesContext
   | Record<string, never>;
+
+interface SubagentStep {
+  kind: string;
+  title: string;
+  status: "started" | "completed" | "failed";
+  exit?: number;
+  output?: string;
+}
+
+interface SubagentPart {
+  text?: string;
+  step?: SubagentStep;
+}
+
+/** The context of thread.panel.subagent. */
+interface SubagentPanelContext {
+  thread: ThreadRecord;
+  part: "header" | "body";
+  title: string;
+  parts: SubagentPart[];
+  steps: number;
+  earlier: number;
+  ended: boolean;
+  outcome?: "completed" | "stopped" | "failed" | "abandoned" | "cut";
+  tokens: number;
+}
+
+interface SidebarRow {
+  thread?: string;
+  title?: string;
+  depth?: number;
+  status?: ThreadRecord["status"];
+  kids?: boolean;
+  renaming?: boolean;
+  more?: number;
+  parent?: string;
+  full?: boolean;
+}
+
+interface SidebarSection {
+  id: "inbox" | "working" | "snoozed" | "settled";
+  title: string;
+  empty?: string;
+  closed?: boolean;
+  rows: SidebarRow[];
+}
+
+/** The context of sidebar.body. */
+interface SidebarBodyContext {
+  part: "inbox" | "bottom";
+  maxHeight?: number;
+  emptyHeight: number;
+  page: number;
+  selected: string;
+  machines?: boolean;
+  slots?: boolean;
+  sections: SidebarSection[];
+}
+
+/** The context of agents.body. */
+interface AgentsBodyContext {
+  rows: { thread: string; title: string; depth: number; status: NonNullable<ThreadRecord["status"]> }[];
+  more: boolean;
+}
+
+/** The context of palette. */
+interface PaletteContext {
+  query: string;
+  actions: CommandRecord[];
+  threads: { id: string; title: string; project: string; ago: string }[];
+  rowHeight: number;
+  headerHeight: number;
+  noneHeight: number;
+}
+
+/** The context of thread.header.plan. */
+interface HeaderPlanContext {
+  thread: ThreadRecord;
+  narrow: boolean;
+  steps: { text: string; status: "pending" | "active" | "done" }[];
+}
+
+/** The context of composer.queue. */
+interface ComposerQueueContext {
+  key: string;
+  index: number;
+  count: number;
+  held?: boolean;
+  editing?: boolean;
+}
 
 /**
  * The context of timeline.message: which row a copy is and what it is
@@ -672,7 +890,7 @@ type ComponentContext =
 interface TimelineMessageContext {
   /** The row's key, the same while it changes. */
   key: string;
-  kind: "user" | "assistant" | "work" | "failed" | "error";
+  kind: "user" | "assistant" | "work" | "plan" | "failed" | "error";
   /** A reply still coming in: its context stays the same till it ends. */
   streaming?: boolean;
   /** Under a message that hasn't simply been sent: queued, sending, cancelled, not sent. */
@@ -738,6 +956,8 @@ interface HeaderUsageContext {
   tokens: number;
   /** Its and every thread's under it. */
   total: number;
+  /** How full the thread's context is, once its agent said. */
+  context?: { used?: number; window?: number; model?: string; stale?: boolean; cacheExpires?: string };
 }
 
 /** The context of thread.panel.terminal: chrome around the native terminal.body. */
@@ -844,6 +1064,8 @@ interface ComposerWorkspaceContext {
   workspace: string;
   /** The machine's name, only while there is more than one. */
   machine?: string;
+  /** The branch of a thread in a worktree of its own, or the worktree a draft asks for. */
+  worktree?: string;
   /** A new thread's composer, whose workspace the user chooses from Glitched's choices at the end of a ghost menu. */
   draft: boolean;
 }
@@ -866,6 +1088,7 @@ interface ComposerModelContext {
   key: string;
   effort: string;
   fast: boolean;
+  ultrafast?: boolean;
   /** The family whose models the popover shows, by its provider. */
   familyKey: string;
   /** The only family a thread offers, its provider, or "" in the draft. */
@@ -940,6 +1163,7 @@ interface PanelState {
   terminal: boolean;
   diff: boolean;
   preview: boolean;
+  subagent?: boolean;
 }
 
 interface InitArgs {
@@ -949,13 +1173,13 @@ interface InitArgs {
   /** A tab's thread. */
   context?: ThreadRecord;
 }
-interface ViewArgs<S> extends InitArgs {
+interface ViewArgs<S = unknown> extends InitArgs {
   state: S;
   values: Values;
 }
-interface UpdateArgs<S> extends InitArgs {
+interface UpdateArgs<S = unknown, C = ThreadRecord | ComponentContext> extends InitArgs {
   state: S;
-  event: GlitchedEvent;
+  event: GlitchedEvent<C>;
   values: Values;
 }
 /**
@@ -966,38 +1190,41 @@ interface UpdateArgs<S> extends InitArgs {
  * drawings. Anything else (an event, a timer, a setting, a reload) asks for
  * every copy shown. null leaves a copy empty.
  */
-interface PlaceArgs<S> {
+interface PlaceArgs<S = unknown, C = ThreadRecord | ComponentContext> {
   id: string;
   at: Slot | Component;
   state: S;
   /** The copies to draw now: every copy shown after an event, a timer, a setting or a reload, otherwise only those that came or changed. A component's copies have its context: HeaderActionsContext for thread.header.actions, DiffPanelContext for thread.panel.diff, and so on. */
   /** compact: a narrow header asks a thread.header copy for its smallest drawing. */
-  items: { key: string; context?: ThreadRecord | ComponentContext; compact?: boolean }[];
+  items: { key: string; context?: C; compact?: boolean }[];
 }
 /** rows draws the rows of a list that Glitched shows: a widget or null each, in the order of keys; null for a key the state no longer has. A row is at most 200 widgets and 16 KiB. */
-interface RowsArgs<S> extends InitArgs {
+interface RowsArgs<S = unknown, C = ThreadRecord | ComponentContext> extends InitArgs {
   /** The list's id. */
   list: string;
   /** Up to 200 items' keys. */
   keys: string[];
   state: S;
   /** Set for a list in a place: the copy it is in. */
-  place?: { id: string; at: Slot | Component; key: string; context?: ThreadRecord | ComponentContext };
+  place?: PlaceRef<C>;
 }
-interface CommandArgs {
+interface CommandArgs<A = unknown> {
   id: string;
-  args?: unknown;
+  args?: A;
 }
 /** An agent's call of a tool the manifest lists. */
-interface ToolArgs {
+interface ToolArgs<A = Record<string, unknown>> {
   name: string;
-  args: Record<string, unknown>;
+  args: A;
   call: { thread: string };
 }
 /** A window's call of its service: glitched.service.call(method, args). */
-interface ServeArgs {
+interface ServeArgs<A = unknown> {
   method: string;
-  args: unknown;
+  args: A;
+}
+interface TimerArgs {
+  id: string;
 }
 
 /** What glitched.run answers. A run past its timeout has status -1. */
@@ -1016,7 +1243,7 @@ declare const glitched: {
   /** The panels beside the chat. Needs ui.place. */
   panels: {
     /** Opens or closes one; open says which way, else it flips. */
-    toggle(panel: "terminal" | "diff" | "preview", open?: boolean): Promise<PanelState>;
+    toggle(panel: "terminal" | "diff" | "preview" | "subagent", open?: boolean): Promise<PanelState>;
     state(): Promise<PanelState>;
   };
   /** Opens the thread's workspace, on this machine, in an app. Needs threads:read. */
@@ -1074,7 +1301,16 @@ declare const glitched: {
   cliUpdates: {
     update(machine: string, provider: string, whenIdle?: boolean): Promise<void>;
     updateAll(): Promise<void>;
-    check(machine: string, provider: string): Promise<void>;
+    check(): Promise<void>;
+  };
+  skills: {
+    list(thread: string): Promise<SkillList>;
+  };
+  palette: {
+    close(palette?: string): Promise<void>;
+  };
+  sidebar: {
+    more(key: string): Promise<void>;
   };
   threads: {
     list(): Promise<ThreadRecord[]>;
@@ -1113,13 +1349,13 @@ declare const glitched: {
      */
     configure(thread: string, options: { model?: string; effort?: string; fast?: boolean }): Promise<void>;
     /** The access of its next turns, one the access picker offers; with "", the default for new threads. Needs threads:access. */
-    setAccess(thread: string, access: AccessLevel): Promise<void>;
+    setAccess(thread: string, access: AccessLevel | ""): Promise<void>;
   };
   commands: {
     /** The command palette's actions, in its order. Needs commands. */
     list(): Promise<CommandRecord[]>;
     /** Does what choosing the action in the palette does, and closes it; only one list names now. Needs commands. */
-    run(id: string): Promise<void>;
+    run(id: string, palette?: string): Promise<void>;
   };
   models: {
     /** The models the composer's picker offers, and the efforts. */
@@ -1143,6 +1379,8 @@ declare const glitched: {
     filter(keys: string[]): Promise<void>;
     /** Opens Add project's folder picker. Needs threads:write. */
     add(): Promise<void>;
+    /** Opens Clone repository's dialog. Needs threads:write. */
+    clone(): Promise<void>;
     /** Asks the user first, with Glitched's own confirm. Needs threads:write. */
     remove(workspace: string, machine?: string): Promise<void>;
   };
@@ -1162,6 +1400,8 @@ declare const glitched: {
 /** mygo-plugin's host global: the subset Glitched plugins use most. */
 declare const host: {
   readonly platform: string;
+  readonly arch: string;
+  readonly dir: string;
   readonly dataDir: string;
   language(): string;
   /** A setting's value as text: "true", "25", the chosen option's value. */

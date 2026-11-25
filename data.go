@@ -984,11 +984,13 @@ func (a *app) follow() {
 	if want == a.opened {
 		return
 	}
-	if a.opened.env != nil {
-		a.backend.CloseThread(a.opened.env, a.opened.id)
-	}
+	// Open before close: the close may make room among the cached
+	// transcripts by the one about to show.
 	if want.env != nil {
 		a.backend.OpenThread(want.env, want.id)
+	}
+	if a.opened.env != nil {
+		a.backend.CloseThread(a.opened.env, a.opened.id)
 	}
 	a.opened = want
 }

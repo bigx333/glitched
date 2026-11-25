@@ -3,7 +3,7 @@
   "name": "Composer send",
   "description": "The composer's Send control. Built into Glitched; make a copy in Settings › Plugins to draw or arrange it differently.",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "main.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": ["ui.place", "ui.replace", "threads:write"],

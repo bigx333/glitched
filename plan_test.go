@@ -69,15 +69,15 @@ func planShot(t *testing.T, h *harness, name string) {
 // timeline, a checklist where the run first said one, which its later
 // plans replace.
 func TestTheThreadShowsItsAgentsPlan(t *testing.T) {
-	h := planned(t, "plan",
+	h := planned(t, "checklist",
 		planOf(api.PlanActive, api.PlanPending, api.PlanPending),
 		provider.TextDelta{Text: "Reading the parser."},
 		planOf(api.PlanDone, api.PlanActive, api.PlanPending),
 	)
-	if by := drawnBy(h, "thread.header.plan"); by != "plan" {
-		t.Fatalf("the plan's pill is drawn by %s, want the built-in Plan", by)
+	if by := drawnBy(h, "thread.header.plan"); by != "checklist" {
+		t.Fatalf("the plan's pill is drawn by %s, want the built-in Checklist", by)
 	}
-	for _, want := range []string{"1 of 3 · Fix the bug", "Plan", "1 of 3 done", "Read the code", "Fix the bug", "Run the tests"} {
+	for _, want := range []string{"1 of 3 · Fix the bug", "Checklist", "1 of 3 done", "Read the code", "Fix the bug", "Run the tests"} {
 		if !h.tt.HasText(want) {
 			t.Errorf("the thread doesn't show %q: %q", want, h.tt.Texts())
 		}
@@ -87,7 +87,7 @@ func TestTheThreadShowsItsAgentsPlan(t *testing.T) {
 	}
 	texts := hover(t, h, "1 of 3 · Fix the bug")
 	planShot(t, h, "plan-hover")
-	for _, want := range []string{"Plan, 1 of 3 done", "✓ Read the code", "→ Fix the bug", "○ Run the tests"} {
+	for _, want := range []string{"Checklist, 1 of 3 done", "✓ Read the code", "→ Fix the bug", "○ Run the tests"} {
 		if !has(texts, want) {
 			t.Errorf("the pill's tooltip doesn't say %q: %q", want, texts)
 		}
@@ -98,13 +98,13 @@ func TestTheThreadShowsItsAgentsPlan(t *testing.T) {
 // copy went.
 func TestAClearedPlanLeavesThePluginsHeader(t *testing.T) {
 	h := planned(t, "plan-cleared", planOf(api.PlanActive, api.PlanPending))
-	if by := drawnBy(h, "thread.header.plan"); by != "plan" {
-		t.Fatalf("the plan's pill is drawn by %s, want the built-in Plan", by)
+	if by := drawnBy(h, "thread.header.plan"); by != "checklist" {
+		t.Fatalf("the plan's pill is drawn by %s, want the built-in Checklist", by)
 	}
 	th := h.a.current()
 	th.Transcript.Plan = nil
 	settlePlugins(t, h.a, h.tt, h.p)
-	if s := h.a.plugins.App("plan"); s.PlaceView("plan", th.id().String()) != nil || drawnBy(h, "thread.header.plan") != "none" {
+	if s := h.a.plugins.App("checklist"); s.PlaceView("checklist", th.id().String()) != nil || drawnBy(h, "thread.header.plan") != "none" {
 		t.Errorf("the built-in still draws the cleared plan, drawn by %s: %q", drawnBy(h, "thread.header.plan"), h.tt.Texts())
 	}
 }
@@ -116,7 +116,7 @@ func TestASettleRunsTheDrawingPostedAsItLooked(t *testing.T) {
 	h := planned(t, "plan-cleared-late", planOf(api.PlanActive, api.PlanPending))
 	release := make(chan struct{})
 	defer plugins.HoldPlaceDraws(func(id string) {
-		if id == "plan" {
+		if id == "checklist" {
 			<-release
 		}
 	})()
@@ -137,7 +137,7 @@ func TestASettleRunsTheDrawingPostedAsItLooked(t *testing.T) {
 	th := h.a.current()
 	th.Transcript.Plan = nil
 	settlePlugins(t, h.a, h.tt, h.p)
-	if h.a.plugins.App("plan").PlaceView("plan", th.id().String()) != nil {
+	if h.a.plugins.App("checklist").PlaceView("checklist", th.id().String()) != nil {
 		t.Errorf("the settle ended with the cleared plan's drawing unrun: %q", h.tt.Texts())
 	}
 }
@@ -178,7 +178,7 @@ func TestADonePlanStaysInTheHeader(t *testing.T) {
 		planOf(api.PlanDone, api.PlanDone, api.PlanDone),
 		provider.TextDelta{Text: "All done."},
 	)
-	if !slices.Contains(h.tt.Texts(), "3 of 3") || drawnBy(h, "thread.header.plan") != "plan" {
+	if !slices.Contains(h.tt.Texts(), "3 of 3") || drawnBy(h, "thread.header.plan") != "checklist" {
 		t.Errorf("a done plan left the header: %q", h.tt.Texts())
 	}
 	if !h.tt.HasText("3 of 3 done") {
@@ -186,12 +186,12 @@ func TestADonePlanStaysInTheHeader(t *testing.T) {
 	}
 }
 
-// The built-in Plan's main.js and its native copy draw the same pill,
+// The built-in Checklist's main.ts and its native copy draw the same pill,
 // node for node, whatever the plan.
-func TestTheBuiltInPlanIsItsNativeCopy(t *testing.T) {
+func TestTheBuiltInChecklistIsItsNativeCopy(t *testing.T) {
 	root := t.TempDir()
-	folder := filepath.Join(root, "plan")
-	src, err := fs.Sub(bundled.FS, "plan")
+	folder := filepath.Join(root, "checklist")
+	src, err := fs.Sub(bundled.FS, "checklist")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,9 +209,9 @@ func TestTheBuiltInPlanIsItsNativeCopy(t *testing.T) {
 	q := make(chan func(), 1024)
 	h := plugins.Open(t.TempDir(), plugins.Options{Post: func(fn func()) { q <- fn }, Bundled: os.DirFS(root), ReleaseKeys: []string{key.Public()}})
 	t.Cleanup(h.Close)
-	s := h.App("plan")
+	s := h.App("checklist")
 	if s == nil {
-		t.Fatalf("the built-in didn't load: %v", h.Failed("plan"))
+		t.Fatalf("the built-in didn't load: %v", h.Failed("checklist"))
 	}
 	step := func(text, status string) headerPlanStep { return headerPlanStep{Text: text, Status: status} }
 	for i, p := range []headerPlan{
@@ -225,9 +225,9 @@ func TestTheBuiltInPlanIsItsNativeCopy(t *testing.T) {
 		{Steps: []headerPlanStep{step("Wait for review", "blocked"), step("Inherit", "constructor"), step("Prototype", "__proto__")}},
 	} {
 		key := string(rune('a' + i))
-		s.SetItems("plan", []plugins.PlaceItem{{Key: key, Version: key, Context: p}})
+		s.SetItems("checklist", []plugins.PlaceItem{{Key: key, Version: key, Context: p}})
 		deadline := time.After(5 * time.Second)
-		for s.PlaceView("plan", key) == nil && s.Err == nil {
+		for s.PlaceView("checklist", key) == nil && s.Err == nil {
 			select {
 			case fn := <-q:
 				fn()
@@ -235,10 +235,10 @@ func TestTheBuiltInPlanIsItsNativeCopy(t *testing.T) {
 				t.Fatalf("the built-in drew nothing for %+v: %v", p, s.Err)
 			}
 		}
-		if got, want := s.PlaceView("plan", key), planBadge(p); !reflect.DeepEqual(got, want) {
+		if got, want := s.PlaceView("checklist", key), planBadge(p); !reflect.DeepEqual(got, want) {
 			g, _ := json.Marshal(got)
 			w, _ := json.Marshal(want)
-			t.Errorf("for %+v main.js drew %s, its native copy %s", p, g, w)
+			t.Errorf("for %+v main.ts drew %s, its native copy %s", p, g, w)
 		}
 	}
 }

@@ -46,7 +46,13 @@ type Config struct {
 	// no engine answers, as the engine's own Config.Detect would; nil
 	// reads this machine's.
 	Detect func(context.Context) (api.Tailnet, error)
+	// TranscriptCacheSize caps how many closed threads keep their folded
+	// Transcript in memory. Zero defaults to defaultClosedTranscriptCache;
+	// a negative value keeps none.
+	TranscriptCacheSize int
 }
+
+const defaultClosedTranscriptCache = 20
 
 const (
 	probeTimeout   = 750 * time.Millisecond
@@ -95,7 +101,13 @@ type Manager struct {
 	// reported in; again, whether Restart was called meanwhile.
 	restarting, again bool
 	// embedded is the engine embedded here, once it reported in.
-	embedded *daemon.Daemon
+	embedded    *daemon.Daemon
+	closedCache []cacheKey
+}
+
+type cacheKey struct {
+	env    *Env
+	thread api.ID
 }
 
 func New(cfg Config) *Manager {
@@ -422,6 +434,7 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 		for id, th := range e.Threads {
 			if th.known && !live[id] {
 				th.unfollow()
+				m.cacheDrop(e, id)
 				delete(e.Threads, id)
 				e.Membership++
 			}
@@ -482,6 +495,7 @@ func (m *Manager) view(e *Env, v api.Thread) bool {
 	if v.Deleted {
 		if th != nil {
 			th.unfollow()
+			m.cacheDrop(e, v.ID)
 			delete(e.Threads, v.ID)
 			e.Membership++
 		}
@@ -548,6 +562,7 @@ func (m *Manager) down(e *Env, s Status) {
 		th.sub = nil
 	}
 	if _, dup := s.(Duplicate); dup {
+		m.cacheDropEnv(e)
 		clear(e.Threads)
 		e.Membership++
 		e.log = api.ID{}
@@ -561,6 +576,7 @@ func (m *Manager) OpenThread(e *Env, thread api.ID) {
 	if th == nil || th.open {
 		return
 	}
+	m.cacheDrop(e, thread)
 	if th.Transcript == nil {
 		th.Transcript = &Transcript{}
 	}
@@ -568,9 +584,10 @@ func (m *Manager) OpenThread(e *Env, thread api.ID) {
 	m.follow(e, th)
 }
 
-// CloseThread stops following a thread. Its transcript stays cached for
-// the next OpenThread, but no longer keeps the answers, failed or taken,
-// to requests only it showed waiting.
+// CloseThread stops following a thread. Its transcript stays cached (up to
+// Config.TranscriptCacheSize closed threads in LRU order) for the next
+// OpenThread, but no longer keeps the answers, failed or taken, to requests
+// only it showed waiting.
 func (m *Manager) CloseThread(e *Env, thread api.ID) {
 	th := e.Threads[thread]
 	if th == nil || !th.open {
@@ -583,6 +600,50 @@ func (m *Manager) CloseThread(e *Env, thread api.ID) {
 		return message && p.sent
 	})
 	th.dropUnasked()
+	if th.Transcript != nil {
+		m.cacheTouch(e, thread)
+	}
+}
+
+func (m *Manager) cacheLimit() int {
+	if m.cfg.TranscriptCacheSize == 0 {
+		return defaultClosedTranscriptCache
+	}
+	if m.cfg.TranscriptCacheSize < 0 {
+		return 0
+	}
+	return m.cfg.TranscriptCacheSize
+}
+
+func (m *Manager) cacheDrop(e *Env, thread api.ID) {
+	m.closedCache = slices.DeleteFunc(m.closedCache, func(k cacheKey) bool {
+		return k.env == e && k.thread == thread
+	})
+}
+
+func (m *Manager) cacheDropEnv(e *Env) {
+	m.closedCache = slices.DeleteFunc(m.closedCache, func(k cacheKey) bool {
+		return k.env == e
+	})
+}
+
+func (m *Manager) cacheTouch(e *Env, thread api.ID) {
+	m.cacheDrop(e, thread)
+	limit := m.cacheLimit()
+	if limit <= 0 {
+		if th := e.Threads[thread]; th != nil && !th.open {
+			th.Transcript = nil
+		}
+		return
+	}
+	m.closedCache = append(m.closedCache, cacheKey{env: e, thread: thread})
+	for len(m.closedCache) > limit {
+		ev := m.closedCache[0]
+		m.closedCache = m.closedCache[1:]
+		if old := ev.env.Threads[ev.thread]; old != nil && !old.open {
+			old.Transcript = nil
+		}
+	}
 }
 
 func (th *Thread) unfollow() {

@@ -3,7 +3,7 @@
   "name": "Thread tools",
   "description": "Copy branch name and Open in editor in a thread's menu. Built into Glitched; make a copy in Settings › Plugins to change them.",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "main.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": ["ui.place", "threads:read", "clipboard", "programs"],

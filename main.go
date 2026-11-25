@@ -268,6 +268,10 @@ type app struct {
 	// sidebarTall is how tall the sidebar was as last laid out, or the
 	// window, before it was.
 	sidebarTall float32
+	// bottomBox is where the sidebar's bottom part, Working, Snoozed and
+	// Settled, was as last laid out: zero before it was, and while none
+	// shows.
+	bottomBox ui.Rect
 	// sidebarRows are the threads in the rows of each part of the
 	// sidebar's body, as last built.
 	sidebarRows map[string]map[api.ID]bool
@@ -377,6 +381,7 @@ type app struct {
 	// The inbox: the project it's filtered to, and its closed sections.
 	projectFilter map[projectKey]bool // the projects the sidebar shows; none is all
 	sectionClosed map[category]bool
+	sectionFold   map[category]*sectionFold // how far open each shows as it opens and shuts (foldSections)
 	// rowFx is the joke playing on a thread's row, by thread.
 	rowFx map[api.ID]rowGagFx
 	// attachments go with the next message; pastes counts pasted images,
@@ -772,6 +777,7 @@ func newApp(dir string, engine func(*daemon.Config), detect func(context.Context
 		sidebarWidth:   272,
 		collapsed:      map[string]bool{},
 		sectionClosed:  map[category]bool{catWorking: true, catSnoozed: true, catSettled: true},
+		sectionFold:    map[category]*sectionFold{},
 		sidebarRows:    map[string]map[api.ID]bool{},
 		sidebarPages:   map[string]int{},
 		sidebarKept:    map[api.ID]bool{},

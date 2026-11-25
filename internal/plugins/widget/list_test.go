@@ -1,6 +1,7 @@
 package widget
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -19,6 +20,8 @@ func TestAListIsCheckedItemByItem(t *testing.T) {
 		listView(items),
 		listView(items + `, "value": "a", "controlled": true, "rowHeight": 28, "gap": 2, "padding": [4, 8], "input": "find", "submitOnClick": true, "onChange": "chose", "onSubmit": "opened"`),
 		`{"body": {"type": "list", "id": "l", "label": "L", "height": 200, "items": []}}`,
+		// A header under a section, as its "more not listed", folds with it.
+		listView(`, "items": [{"key": "h", "label": "Working", "header": true}, {"key": "a", "label": "A", "section": "w"}, {"key": "f", "label": "9 more", "header": true, "section": "w"}]`),
 	}
 	for _, s := range ok {
 		if _, err := Decode([]byte(s)); err != nil {
@@ -26,22 +29,23 @@ func TestAListIsCheckedItemByItem(t *testing.T) {
 		}
 	}
 	bad := map[string]string{
-		listView(`, "items": [{"key": "a", "label": "A"}, {"key": "a", "label": "B"}]`):    `the key "a" is used twice`,
-		listView(`, "items": [{"key": "", "label": "A"}]`):                                 "a key is 1 to 256 bytes",
-		listView(`, "items": [{"key": "a"}]`):                                              "a label is 1 to 1024 bytes",
-		listView(`, "items": [{"key": "a", "label": "A", "height": 401}]`):                 "a height is 8 to 400",
-		listView(`, "items": [{"key": "a", "label": "A", "header": true, "thread": "t"}]`): "a header has no thread",
-		listView(items + `, "value": "h"`):                                                 `value "h" is no item of the list, or a header`,
-		listView(items + `, "value": "zz"`):                                                `value "zz" is no item`,
-		listView(items + `, "value": 3`):                                                   "a list's value is the key",
-		listView(items + `, "rowHeight": 4`):                                               "a rowHeight is 8 to 400",
-		listView(items + `, "input": "nope"`):                                              `its input "nope" is no single-line input`,
-		listView(items + `, "onClick": "x"`):                                               "a list has no onClick",
-		`{"body": {"type": "list", "id": "l", "grow": true}}`:                              "a list needs a label",
-		`{"body": {"type": "list", "id": "l", "label": "L"}}`:                              "a list grows or has a height",
-		`{"body": {"type": "list", "label": "L", "grow": true}}`:                           "a list needs an id",
-		`{"body": {"type": "column", "rowHeight": 20}}`:                                    "a column has no items, rowHeight",
-		`{"body": {"type": "text", "text": "x", "when": "hover"}}`:                         "when is for a widget in a list's row",
+		listView(`, "items": [{"key": "a", "label": "A"}, {"key": "a", "label": "B"}]`):                    `the key "a" is used twice`,
+		listView(`, "items": [{"key": "", "label": "A"}]`):                                                 "a key is 1 to 256 bytes",
+		listView(`, "items": [{"key": "a"}]`):                                                              "a label is 1 to 1024 bytes",
+		listView(`, "items": [{"key": "a", "label": "A", "height": 401}]`):                                 "a height is 8 to 400",
+		listView(`, "items": [{"key": "a", "label": "A", "header": true, "thread": "t"}]`):                 "a header has no thread",
+		listView(`, "items": [{"key": "a", "label": "A", "section": "` + strings.Repeat("s", 257) + `"}]`): "a section is up to 256 bytes",
+		listView(items + `, "value": "h"`):                                                                 `value "h" is no item of the list, or a header`,
+		listView(items + `, "value": "zz"`):                                                                `value "zz" is no item`,
+		listView(items + `, "value": 3`):                                                                   "a list's value is the key",
+		listView(items + `, "rowHeight": 4`):                                                               "a rowHeight is 8 to 400",
+		listView(items + `, "input": "nope"`):                                                              `its input "nope" is no single-line input`,
+		listView(items + `, "onClick": "x"`):                                                               "a list has no onClick",
+		`{"body": {"type": "list", "id": "l", "grow": true}}`:                                              "a list needs a label",
+		`{"body": {"type": "list", "id": "l", "label": "L"}}`:                                              "a list grows or has a height",
+		`{"body": {"type": "list", "label": "L", "grow": true}}`:                                           "a list needs an id",
+		`{"body": {"type": "column", "rowHeight": 20}}`:                                                    "a column has no items, rowHeight",
+		`{"body": {"type": "text", "text": "x", "when": "hover"}}`:                                         "when is for a widget in a list's row",
 		`{"body": {"type": "column", "children": [{"type": "input", "id": "i", "onSubmit": "s"}, {"type": "list", "id": "l", "label": "L", "grow": true, "input": "i"}]}}`:                                                       "without an onSubmit",
 		`{"body": {"type": "column", "children": [{"type": "input", "id": "i"}, {"type": "list", "id": "l", "label": "L", "grow": true, "input": "i"}, {"type": "list", "id": "m", "label": "M", "grow": true, "input": "i"}]}}`: "the input \"i\" moves another list",
 	}
@@ -73,6 +77,26 @@ func TestAListOfTwentyThousandFitsAView(t *testing.T) {
 	over := strings.Replace(view, "[", `[{"key": "one more", "label": "One more"},`, 1)
 	if _, err := Decode([]byte(over)); err == nil || !strings.Contains(err.Error(), "up to 20000 items") {
 		t.Errorf("20001 items: %v", err)
+	}
+}
+
+// An item names the section it folds with, as a view says it, and as the
+// rows export tells it back.
+func TestAListItemNamesItsSection(t *testing.T) {
+	v, err := Decode([]byte(listView(`, "items": [{"key": "h", "label": "Working", "header": true}, {"key": "a", "label": "A", "section": "` + strings.Repeat("w", 256) + `"}]`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := v.Body.Children[1].Items
+	if items[0].Section != "" || items[1].Section != strings.Repeat("w", 256) {
+		t.Fatalf("decoded %+v", items)
+	}
+	b, err := json.Marshal(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `[{"key":"h","label":"Working","header":true},{"key":"a","label":"A","section":"` + strings.Repeat("w", 256) + `"}]`; string(b) != want {
+		t.Fatalf("encoded %s, want %s", b, want)
 	}
 }
 

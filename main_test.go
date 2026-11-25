@@ -803,6 +803,7 @@ func TestInbox(t *testing.T) {
 		t.Error("closed Settled section shows its threads")
 	}
 	h.clickPlugin("Settled")
+	h.tt.Advance(300 * time.Millisecond) // it opens over 200 ms
 	if !inSidebar(fix.View.Title) {
 		t.Error("opened Settled section hides the settled thread")
 	}
