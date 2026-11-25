@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -41,6 +42,22 @@ type remotes struct {
 	limits     engine.Limits
 	continueB  bool // B continues the runs its restart lost
 	steps      func(step string, placeholder api.ID)
+}
+
+// rebind retries listen while its address is in use: a port a test
+// closed, or one freeAddr found free, may be another process's for a
+// moment, as an outgoing connection's on a busy machine.
+func rebind(t *testing.T, listen func() error) {
+	t.Helper()
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		err := listen()
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, syscall.EADDRINUSE) || time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+	}
 }
 
 func freeAddr(t *testing.T) string {
@@ -98,10 +115,11 @@ func (p *remotes) machine(server string) {
 
 func (p *remotes) startB() {
 	p.t.Helper()
-	d, err := Start(context.Background(), Config{Dir: p.dirB, Hub: true, Epoch: 1, Listen: []string{p.addrB}, ContinueAfterRestart: p.continueB, Providers: provider.Mux{p.model.Provider: p.adB}})
-	if err != nil {
-		p.t.Fatal(err)
-	}
+	var d *Daemon
+	rebind(p.t, func() (err error) {
+		d, err = Start(context.Background(), Config{Dir: p.dirB, Hub: true, Epoch: 1, Listen: []string{p.addrB}, ContinueAfterRestart: p.continueB, Providers: provider.Mux{p.model.Provider: p.adB}})
+		return err
+	})
 	p.b = d
 	p.t.Cleanup(func() { d.Close() })
 }
@@ -353,10 +371,11 @@ func (x *proxy) start() {
 	x.t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	tn := transport.Tailnet{Address: x.addr}
-	ln, err := tn.Listen(ctx)
-	if err != nil {
-		x.t.Fatal(err)
-	}
+	var ln net.Listener
+	rebind(x.t, func() (err error) {
+		ln, err = tn.Listen(ctx)
+		return err
+	})
 	g := &grants{dir: x.dirB, base: ctx}
 	go g.watch(ctx)
 	authorize := func(r *http.Request, proved func(transport.Key) bool) (transport.Grant, error) {
@@ -816,10 +835,11 @@ func TestAMachineThatIsAnotherOrGoneLosesTheChild(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		c, err := Start(context.Background(), Config{Dir: dirC, Hub: true, Epoch: 1, Listen: []string{addrC}, Providers: provider.Mux{"fake": fake.New(nil)}})
-		if err != nil {
-			t.Fatal(err)
-		}
+		var c *Daemon
+		rebind(t, func() (err error) {
+			c, err = Start(context.Background(), Config{Dir: dirC, Hub: true, Epoch: 1, Listen: []string{addrC}, Providers: provider.Mux{"fake": fake.New(nil)}})
+			return err
+		})
 		t.Cleanup(func() { c.Close() })
 		b, err := json.Marshal([]Machine{{Label: "b", Server: addrC, Engine: p.engineB, Link: p.link.ID, Token: tokenC}})
 		if err != nil {
