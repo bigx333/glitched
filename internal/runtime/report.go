@@ -52,7 +52,8 @@ func (h *Host) report(e store.Effect, b engine.ReportToParent) {
 // it waits on, why it failed, or the last of what it said. The reply is
 // all of why it failed or of what it said last, for the parent's agent.
 // A remote child's done run said its reply on its machine, which the
-// report carries, and what a remote child waits on is answered there.
+// report carries, and what a remote child waits on is its machine's to
+// show: its question goes there by task_answer.
 func (h *Host) outcome(ctx context.Context, child api.ID, b engine.ReportToParent) (outcome, reply string, err error) {
 	switch {
 	case b.Kind == api.ReportBlocked && b.On != "":

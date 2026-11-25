@@ -114,6 +114,7 @@ type Remote struct {
 	Silent    bool            `json:"silent,omitempty"`
 	Slot      api.RunState    `json:"slot,omitempty"`
 	Pending   []api.ID        `json:"pending,omitempty"`
+	Questions []api.ID        `json:"questions,omitempty"`
 	Reported  []api.ID        `json:"reported,omitempty"`
 	Lost      string          `json:"lost,omitempty"`
 	Create    *api.Command    `json:"create,omitempty"`

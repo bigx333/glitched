@@ -87,10 +87,18 @@ func DecideWith(t Thread, c api.Command, env Env, now time.Time) ([]Event, []Eff
 				return nil, nil, rejected("an agent can only message, stop or answer the question of a thread under its own")
 			}
 		case api.RequestRespond:
-			if i := t.requestAt(b.Request); i < 0 {
+			approval := rejected("an agent can answer only a question of a thread under its own: approvals and credentials are the user's")
+			if r := t.Remote; r != nil {
+				if !slices.Contains(r.Questions, b.Request) {
+					if slices.Contains(r.Pending, b.Request) {
+						return nil, nil, approval
+					}
+					return nil, nil, api.ErrNotFound
+				}
+			} else if i := t.requestAt(b.Request); i < 0 {
 				return nil, nil, api.ErrNotFound
 			} else if t.Requests[i].Kind != api.KindQuestion {
-				return nil, nil, rejected("an agent can answer only a question of a thread under its own: approvals and credentials are the user's")
+				return nil, nil, approval
 			}
 		default:
 			return nil, nil, rejected("an agent can only message, stop or answer the question of a thread under its own")
@@ -120,7 +128,8 @@ func DecideWith(t Thread, c api.Command, env Env, now time.Time) ([]Event, []Eff
 // reaches its machine as an effect, which sends it there as a command
 // frozen now: a settle or a delete settles the child there, where it
 // keeps its transcript, a stop stops its run, a message is sent there and
-// queues nothing here, and a narrower access narrows it there. A
+// queues nothing here, an answer to a question it asks there is sent
+// there, and a narrower access narrows it there. A
 // placeholder whose create was never tried has nothing there to settle.
 // The machine's person who took the child over there has it from then
 // on: an agent's message or stop is refused, as for a local child the
@@ -191,7 +200,14 @@ func (d *decision) placeholder(id api.ID, b api.Intent) error {
 		d.effects = append(d.effects, RemoteSend{Engine: r.Engine, Link: r.Link, Settles: d.t.Remote.Settles, Command: d.there(id, "send", api.MessageDispatch{Text: b.Text, Mode: b.Mode, Fence: d.t.Remote.Settles})})
 		return nil
 	case api.RequestRespond:
-		return rejected("this child runs on another machine, and what it asks is answered there")
+		switch {
+		case !slices.Contains(r.Questions, b.Request):
+			return rejected("this child's machine has no question of that id open; its approvals and credentials are answered there")
+		case r.State == RemoteLostState:
+			return rejected("this child's machine no longer has it here: " + r.Lost)
+		}
+		d.effects = append(d.effects, RemoteSend{Engine: r.Engine, Link: r.Link, Settles: r.Settles, Command: d.there(id, "answer", api.RequestRespond{Request: b.Request, Answer: b.Answer})})
+		return nil
 	}
 	return rejected("this child runs on another machine, and runs nothing here")
 }
@@ -1627,10 +1643,10 @@ func (d *decision) remote(o Observation) error {
 				keys, reports = append(keys, p.Key), append(reports, p)
 			}
 		}
-		if o.Cursor == r.Cursor && o.Run == r.Run && o.Silent == r.Silent && o.Slot == r.Slot && slices.Equal(o.Pending, r.Pending) && o.Taken == r.Taken && reflect.DeepEqual(o.Ended, r.Ended) && o.Model == r.Model && o.Access == r.Access && reflect.DeepEqual(o.Turn, r.Turn) && o.Held == r.Held && len(keys) == 0 {
+		if o.Cursor == r.Cursor && o.Run == r.Run && o.Silent == r.Silent && o.Slot == r.Slot && slices.Equal(o.Pending, r.Pending) && slices.Equal(o.Questions, r.Questions) && o.Taken == r.Taken && reflect.DeepEqual(o.Ended, r.Ended) && o.Model == r.Model && o.Access == r.Access && reflect.DeepEqual(o.Turn, r.Turn) && o.Held == r.Held && len(keys) == 0 {
 			return nil
 		}
-		if err := d.emit(api.RemoteSeen{Cursor: o.Cursor, Run: o.Run, Silent: o.Silent, State: o.Slot, Pending: o.Pending, Taken: o.Taken, Ended: o.Ended, Model: o.Model, Access: o.Access, Turn: o.Turn, Held: o.Held, Keys: keys}); err != nil {
+		if err := d.emit(api.RemoteSeen{Cursor: o.Cursor, Run: o.Run, Silent: o.Silent, State: o.Slot, Pending: o.Pending, Questions: o.Questions, Taken: o.Taken, Ended: o.Ended, Model: o.Model, Access: o.Access, Turn: o.Turn, Held: o.Held, Keys: keys}); err != nil {
 			return err
 		}
 		for _, p := range reports {
@@ -1767,7 +1783,7 @@ func askText(o Reported) string {
 	}
 	answer := "Answer it with task_answer, or leave it to the user, who sees it too."
 	if o.On != "" {
-		answer = "It runs on " + o.On + ", where the user answers it: task_answer doesn't reach it there yet."
+		answer = "It runs on " + o.On + ". Answer it with task_answer, or leave it to the user there, who sees it too."
 	}
 	return fmt.Sprintf("<task id=\"%s\" title=\"%s\" state=\"waiting_on_question\" request=\"%s\">\n<task_question>\n%s</task_question>\n</task>\n%s",
 		o.Report.Child, html.EscapeString(o.Report.Title), o.Question, b.String(), answer)

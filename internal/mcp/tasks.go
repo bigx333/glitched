@@ -223,10 +223,18 @@ func (t *Tools) answer(ctx context.Context, caller api.Caller, task api.Thread, 
 		return nil, errors.New("task_answer: no answers; to leave the question to the user, don't call this")
 	}
 	generation, found := uint64(0), false
-	if i := slices.IndexFunc(task.Requests, func(r api.Request) bool { return r.ID == id }); i >= 0 {
+	switch i := slices.IndexFunc(task.Requests, func(r api.Request) bool { return r.ID == id }); {
+	case task.Remote != nil:
+		// A task on another machine asks there: the engine checks the
+		// answer against the questions it waits on there, and that
+		// machine names the question's generation.
+		found = true
+	case i >= 0:
 		generation, found = task.Requests[i].Generation, true
-	} else if generation, found, err = t.opened(ctx, task.ID, id); err != nil {
-		return nil, err
+	default:
+		if generation, found, err = t.opened(ctx, task.ID, id); err != nil {
+			return nil, err
+		}
 	}
 	if !found {
 		return nil, missing
@@ -238,6 +246,9 @@ func (t *Tools) answer(ctx context.Context, caller api.Caller, task api.Thread, 
 	_, err = t.Engine.Submit(ctx, api.Command{ID: derive(t.Origin.Thread, "answer", key), Target: task.ID, Caller: &caller, Body: api.RequestRespond{Request: id, Generation: generation, Answer: answer}})
 	if errors.Is(err, api.ErrAlreadyAnswered) {
 		return nil, errors.New("task_answer: the question was already answered, by the user or an earlier call")
+	}
+	if errors.Is(err, api.ErrNotFound) {
+		return nil, missing
 	}
 	if errors.Is(err, api.ErrConflict) && in.RequestID != "" {
 		return nil, fmt.Errorf("task_answer: client_request_id %q already answered something else from this thread; use a new client_request_id for a new answer", in.RequestID)
