@@ -60,6 +60,7 @@ var pluginIcons = map[string]*ui.SVG{
 	"file":     icFile,
 	"wrap":     icWrap,
 	"copy":     icCopy,
+	"quote":    icQuote,
 	"note":     icFile,
 	"inbox":    icInbox,
 	"child":    icChild,
@@ -449,6 +450,15 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		}
 		a.notify(mygo.NotificationOptions{ID: nid, Title: args.Title, Body: args.Body, Subtitle: name, Group: "plugins"})
 		return nil, nil
+	case "browser.blur", "browser.draft", "browser.navigate", "browser.back", "browser.forward", "browser.reload", "browser.stop", "browser.newTab", "browser.closeTab", "browser.activateTab":
+		return a.browserEffect(e)
+	case "cliupdates.update":
+		return a.cliUpdateEffect(e.Args)
+	case "cliupdates.updateAll":
+		return a.cliUpdateAllEffect()
+	case "cliupdates.check":
+		a.checkCLIs()
+		return nil, nil
 	case "panels.toggle":
 		return a.panelEffect(e.Args)
 	case "panels.state":
@@ -607,6 +617,8 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 			return nil, fmt.Errorf("%w: composer.submit would start a thread at %s, which needs the threads:access capability", plugins.ErrDenied, a.access)
 		}
 		return a.submitEffect(e.Args)
+	case "composer.quote":
+		return a.quoteEffect(e.Args)
 	case "threads.markRead":
 		t, err := a.pluginFind(e.Args)
 		if err != nil {

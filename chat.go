@@ -94,7 +94,7 @@ func (a *app) chatPage(c *ui.Context) {
 					dir = homeDir()
 				}
 				drawer := ui.Column(c).Key("terminal").Height(220).Transition(panel(0, 16))
-				drawer.Children(func() { a.terminal(c, dir) })
+				drawer.Children(func() { a.terminal(c, t, dir) })
 				a.terminalFocused = drawer.FocusWithin()
 			}
 		})
@@ -878,7 +878,7 @@ func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 		a.forkDivider(c, t, rs.es[i])
 		return
 	}
-	m := timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note, Failed: e.failed.Err != nil, At: e.at}
+	m := timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note, Failed: e.failed.Err != nil, At: e.at, Working: e.working, Paused: e.paused, Took: e.took, Work: timelineWork(e.work), Plan: e.plan}
 	acted := false
 	a.pluginComponent(c, "timeline.message", &t, componentCopy{
 		key: e.key,
@@ -947,6 +947,45 @@ type timelineMessage struct {
 	Failed    bool   `json:"failed,omitempty"`
 	// At is when a message was sent or a reply's words came.
 	At time.Time `json:"at,omitzero"`
+	// Working, Paused, Took, Work and Plan structure work and plan rows.
+	Working bool               `json:"working,omitempty"`
+	Paused  string             `json:"paused,omitempty"`
+	Took    string             `json:"took,omitempty"`
+	Work    []timelineWorkStep `json:"work,omitempty"`
+	Plan    []api.PlanStep     `json:"plan,omitempty"`
+}
+
+// timelineWorkStep is a step of a work row, structured for a plugin's own
+// work log. Its output is included only while the row shows it: a failed
+// command's.
+type timelineWorkStep struct {
+	Item     string    `json:"item"`
+	Kind     string    `json:"kind"`
+	Title    string    `json:"title"`
+	Status   string    `json:"status"`
+	Path     string    `json:"path,omitempty"`
+	Exit     *int      `json:"exit,omitempty"`
+	Output   string    `json:"output,omitempty"`
+	Started  time.Time `json:"started,omitzero"`
+	Ended    time.Time `json:"ended,omitzero"`
+	Subagent bool      `json:"subagent,omitempty"`
+	Steps    int       `json:"steps,omitempty"`
+}
+
+func timelineWork(ws []client.WorkStep) []timelineWorkStep {
+	out := make([]timelineWorkStep, 0, len(ws))
+	for _, w := range ws {
+		steps := 0
+		if w.Subagent != nil {
+			steps = w.Subagent.Steps()
+		}
+		out = append(out, timelineWorkStep{
+			Item: w.Item, Kind: w.Kind, Title: w.Title, Status: string(w.Status), Path: w.Path,
+			Exit: w.Exit, Output: w.Output, Started: w.Started, Ended: w.Ended,
+			Subagent: w.Subagent != nil, Steps: steps,
+		})
+	}
+	return out
 }
 
 var entryKindNames = map[entryKind]string{entryUser: "user", entryAssistant: "assistant", entryWork: "work", entryPlan: "plan", entryFailed: "failed", entryError: "error"}
@@ -1752,12 +1791,6 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 	empty := a.message(t) == ""
 	live := t.View.Stoppable()
 	working := live && empty
-	if live && !empty {
-		if t.View.Working() {
-			a.queueButton(c, t)
-		}
-		a.stopButton(c, t)
-	}
 	label := "Send"
 	if working {
 		label = "Stop"
@@ -1890,15 +1923,25 @@ func (a *app) sendControl(c *ui.Context, t thread, keys bool) {
 	if t.View.Resumable {
 		a.resumeButton(c, t)
 	}
-	if !a.pluginComponent(c, "composer.send", &t, componentCopy{key: composerKey(t), box: box, context: ctx}) {
-		a.sendButton(c, t, keys)
-		return
+	// The native circular Send is itself Stop with nothing to send, as it
+	// is in Glitched's fallback and the built-in's native drawing. Only a
+	// replacement of someone else's needs Glitched's own Stop then; with a
+	// draft, Stop always stands beside what Send does.
+	nativeStop := false
+	if drawn := a.frameOf("composer.send").drawn["composer.send"]; drawn != nil && len(drawn.copies) == 1 {
+		nativeStop = drawn.copies[0].plugin == "" || drawn.copies[0].builtin
 	}
-	if t.View.Stoppable() {
+	if t.View.Stoppable() && (a.message(t) != "" || !nativeStop) {
 		if a.message(t) != "" && t.View.Working() {
 			a.queueButton(c, t)
 		}
 		a.stopButton(c, t).Shrink(0)
+	}
+	if !a.pluginComponent(c, "composer.send", &t, componentCopy{key: composerKey(t), box: box, builtinBox: func() ui.Element {
+		return ui.Row(c).Key("send-plugin").AlignItems(ui.Center).Shrink(0)
+	}, context: ctx}) {
+		a.sendButton(c, t, keys)
+		return
 	}
 	if keys && c.Shortcut(ui.Cmd, ui.KeyEnter) {
 		a.sendOrStop(t, false)
@@ -2185,7 +2228,14 @@ func (a *app) modelRef() api.ModelRef {
 
 var accessOf = map[string]api.Access{accessAsk: api.AccessAsk, accessAuto: api.AccessAutoEdits, accessFull: api.AccessFull}
 
-func (a *app) terminal(c *ui.Context, workspace string) {
+type terminalPanel struct {
+	Thread plugins.ThreadRecord `json:"thread"`
+	Part   string               `json:"part"`
+	Title  string               `json:"title"`
+	Error  bool                 `json:"error,omitempty"`
+}
+
+func (a *app) terminal(c *ui.Context, t thread, workspace string) {
 	s, err := a.shellFor(workspace)
 	title := "zsh"
 	if s != nil {
@@ -2194,15 +2244,31 @@ func (a *app) terminal(c *ui.Context, workspace string) {
 	// The drawer is the terminal's colors, which are the theme's.
 	th := a.theme.terminal()
 	ui.Column(c).Height(220).Background(th.Background).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
-		ui.Row(c).Padding(4, 8, 4, 12).Gap(6).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
-			ui.Icon(c, icTerminal).FontSize(12).TextColor(palette.muted)
-			ui.Text(c, title).FontSize(11.5).TextColor(palette.muted).SingleLine().Shrink(1)
-			ui.Spacer(c)
-			if a.iconButton(c, "close-terminal", icX, "Close terminal", false).Padding(3).Clicked() {
-				a.showTerminal = false
+		key := composerKey(t)
+		ctx := func(part string) func(plugins.ThreadRecord) any {
+			return func(r plugins.ThreadRecord) any {
+				return terminalPanel{Thread: r, Part: part, Title: title, Error: err != nil}
 			}
+		}
+		a.pluginComponent(c, "thread.panel.terminal", &t, componentCopy{
+			key: key + "/header", box: func() ui.Element { return ui.Row(c).Shrink(1) }, context: ctx("header"),
+			native: func(*widget.Node) { a.terminalHeader(c, title) },
 		})
-		a.terminalBody(c, s, err)
+		a.pluginComponent(c, "thread.panel.terminal", &t, componentCopy{
+			key: key + "/body", box: func() ui.Element { return ui.Column(c).Grow(1).Shrink(1).Basis(0).FillWidth() }, context: ctx("body"),
+			native: func(*widget.Node) { a.terminalBody(c, s, err) },
+		})
+	})
+}
+
+func (a *app) terminalHeader(c *ui.Context, title string) {
+	ui.Row(c).Padding(4, 8, 4, 12).Gap(6).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
+		ui.Icon(c, icTerminal).FontSize(12).TextColor(palette.muted)
+		ui.Text(c, title).FontSize(11.5).TextColor(palette.muted).SingleLine().Shrink(1)
+		ui.Spacer(c)
+		if a.iconButton(c, "close-terminal", icX, "Close terminal", false).Padding(3).Clicked() {
+			a.showTerminal = false
+		}
 	})
 }
 

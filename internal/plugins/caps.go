@@ -34,6 +34,7 @@ var Capabilities = []Capability{
 	{"service", true, "Run in the background, with no window"},
 	{"commands", true, "Run Glitched's actions, the ones its command palette offers you"},
 	{"settings:write", true, "Change Glitched's settings: the theme, the accent, defaults for new threads and how the app behaves"},
+	{"providers:update", true, "Check for and install updates of the provider programs agents run"},
 	{"models:ask", true, "Ask an AI model to write text, on your account's usage"},
 }
 
@@ -75,6 +76,7 @@ var Effects = map[string]string{
 	"threads.configure":      "threads:write",
 	"threads.setAccess":      "threads:access",
 	"composer.submit":        "threads:write",
+	"composer.quote":         "threads:write",
 	"models.list":            "",
 	"skills.list":            "threads:read",
 	"projects.remove":        "threads:write",
@@ -84,6 +86,19 @@ var Effects = map[string]string{
 	"projects.clone":         "threads:write",
 	"commands.list":          "commands",
 	"commands.run":           "commands",
+	"cliupdates.update":      "providers:update",
+	"cliupdates.updateAll":   "providers:update",
+	"cliupdates.check":       "providers:update",
+	"browser.blur":           "ui.place",
+	"browser.draft":          "ui.place",
+	"browser.navigate":       "ui.place",
+	"browser.back":           "ui.place",
+	"browser.forward":        "ui.place",
+	"browser.reload":         "ui.place",
+	"browser.stop":           "ui.place",
+	"browser.newTab":         "ui.place",
+	"browser.closeTab":       "ui.place",
+	"browser.activateTab":    "ui.place",
 }
 
 // Effect is something a plugin asks the app to do, which only the app

@@ -74,14 +74,14 @@ func TestAPendingCLIUpdateShowsInTheSidebar(t *testing.T) {
 	_, engine := agyAt(t, "1.5.14", "1.5.15")
 	h := startWith(t, tempDir(t), engine)
 	h.until("the update", func() bool { return showing(h, "Agent CLI updates") })
-	h.click("Agent CLI updates")
+	h.clickPlugin("Agent CLI updates")
 	h.tt.Advance(time.Second)
 	for _, s := range []string{"CLI updates", "Antigravity", "1.5.14 → 1.5.15", "Update"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("the list doesn't show %q: %q", s, h.tt.Texts())
 		}
 	}
-	h.click("Agent CLI updates")
+	h.clickPlugin("Agent CLI updates")
 	openProviders(h, "antigravity")
 	for _, s := range []string{"Update available", "Update to 1.5.15"} {
 		if !h.tt.HasText(s) {
@@ -156,7 +156,7 @@ func TestTheSidebarsUpdateStaysTillTheLastCLIIsCurrent(t *testing.T) {
 	if !showing(h, "Agent CLI updates") || !showing(h, "2") {
 		t.Fatalf("two pending updates don't show: %q", h.tt.Texts())
 	}
-	h.click("Agent CLI updates")
+	h.clickPlugin("Agent CLI updates")
 	h.tt.Advance(time.Second)
 	h.click("Update all")
 	h.until("both updates", func() bool { return len(calls) == 2 && !h.tt.HasText("Updating…") })
@@ -199,7 +199,7 @@ func TestAnUpdateRefusedForARunningTurnOffersToWait(t *testing.T) {
 		h.a.post(func() { done(res, nil) })
 	})
 	pending(h, "claude")
-	h.click("Agent CLI updates")
+	h.clickPlugin("Agent CLI updates")
 	h.tt.Advance(time.Second)
 	h.click("Update")
 	h.until("the refusal", func() bool { return h.tt.HasText("Update when it ends") })
@@ -225,7 +225,7 @@ func TestAnUpdateGlitchedWontRunShowsTheCommand(t *testing.T) {
 		Manual:  "Codex is installed where only an administrator can change it.",
 	}}
 	h.tt.Frame()
-	h.click("Agent CLI updates")
+	h.clickPlugin("Agent CLI updates")
 	h.tt.Advance(time.Second)
 	for _, s := range []string{"sudo npm install -g @openai/codex@latest", "Copy", "Codex is installed where only an administrator can change it. Run this in Terminal on this machine:"} {
 		if !h.tt.HasText(s) {
@@ -385,7 +385,7 @@ func TestAnUpdateWaitingForATurnCanBeCancelled(t *testing.T) {
 		}
 	}
 	pending(h, "claude")
-	h.click("Agent CLI updates")
+	h.clickPlugin("Agent CLI updates")
 	h.tt.Advance(time.Second)
 	h.click("Update")
 	h.until("the refusal", func() bool { return h.tt.HasText("Update when it ends") })
@@ -517,7 +517,7 @@ func TestTheCLIUpdateButtonSaysWhichUpdateRunsFailedOrNeedsYou(t *testing.T) {
 	local := h.a.backend.Envs()[0]
 	h.a.models.served["codex"].Update.Manual = "Codex is installed where only an administrator can change it."
 	h.a.clis.runs[cliKey{local, "claude"}] = &cliRun{running: true}
-	h.tt.Frame()
+	settleTester(h.tt)
 	if !showing(h, "Updating") {
 		t.Errorf("an update running doesn't show: %q", h.tt.Texts())
 	}
@@ -526,7 +526,7 @@ func TestTheCLIUpdateButtonSaysWhichUpdateRunsFailedOrNeedsYou(t *testing.T) {
 	}
 	h.a.clis.runs[cliKey{local, "claude"}] = &cliRun{failed: "claude update failed: exit status 1."}
 	h.tt.Move(0, 0)
-	h.tt.Frame()
+	settleTester(h.tt)
 	if showing(h, "Updating") || !showing(h, "Updates") {
 		t.Errorf("a failed update still shows as running: %q", h.tt.Texts())
 	}
@@ -545,7 +545,7 @@ func TestAnUpdatingCLIWithNoVersionsStaysOnTheButton(t *testing.T) {
 	p := h.a.models.served["claude"]
 	p.Update = nil
 	h.a.models.served["claude"] = p
-	h.tt.Frame()
+	settleTester(h.tt)
 	if !showing(h, "Updating") {
 		t.Errorf("the update running doesn't show: %q", h.tt.Texts())
 	}
@@ -577,13 +577,13 @@ func TestAnUpdateShowsItsCommandBeforeItRuns(t *testing.T) {
 		t.Fatalf("Update shows no command: %q", h.tt.Texts())
 		return ""
 	}
-	h.click("Agent CLI updates")
+	h.clickPlugin("Agent CLI updates")
 	h.tt.Advance(time.Second)
 	if s := tip(); s != "Runs /bin/claude update on this machine." {
 		t.Errorf("the list's Update says %q", s)
 	}
 	h.tt.Move(0, 0)
-	h.click("Agent CLI updates")
+	h.clickPlugin("Agent CLI updates")
 	openProviders(h, "claude")
 	if s := tip(); s != "Runs /bin/claude update on this machine." {
 		t.Errorf("the Providers Update says %q", s)

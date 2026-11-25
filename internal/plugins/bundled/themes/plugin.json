@@ -1,0 +1,53 @@
+{
+  "id": "themes",
+  "name": "Themes",
+  "description": "Catppuccin Mocha and Rosé Pine Dawn for Glitched. Built into Glitched; make a copy in Settings › Plugins to tweak their colors.",
+  "version": "1.0.0",
+  "main": "main.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": [],
+  "glitched": {
+    "themes": [
+      {
+        "name": "Mocha",
+        "dark": true,
+        "terminal": "Catppuccin Mocha",
+        "colors": {
+          "bg": "#1e1e2e",
+          "sidebar": "#181825",
+          "surface": "#262637",
+          "hover": "#cdd6f40f",
+          "active": "#cdd6f41a",
+          "border": "#cdd6f41a",
+          "text": "#cdd6f4",
+          "muted": "#a6adc8",
+          "faint": "#9399b2",
+          "green": "#a6e3a1",
+          "red": "#f38ba8",
+          "amber": "#f9e2af",
+          "blue": "#89b4fa"
+        }
+      },
+      {
+        "name": "Dawn",
+        "terminal": "Rose Pine Dawn",
+        "colors": {
+          "bg": "#faf4ed",
+          "sidebar": "#f2e9e1",
+          "surface": "#fffaf3",
+          "hover": "#5752790f",
+          "active": "#5752791a",
+          "border": "#5752791f",
+          "text": "#575279",
+          "muted": "#605c78",
+          "faint": "#66627e",
+          "green": "#286983",
+          "red": "#b4637a",
+          "amber": "#ea9d34",
+          "blue": "#56949f"
+        }
+      }
+    ]
+  }
+}

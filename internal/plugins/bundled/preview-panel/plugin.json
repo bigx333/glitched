@@ -1,0 +1,11 @@
+{
+  "id": "preview-panel",
+  "name": "Preview panel",
+  "description": "The preview browser's navigation bar, tabs, and empty-tab page around its native web view. Built into Glitched; make a copy in Settings › Plugins to change it.",
+  "version": "1.0.0",
+  "main": "main.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "ui.replace"],
+  "glitched": { "places": [{ "id": "preview", "at": "thread.panel.preview", "replaces": true }] }
+}

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -11,6 +13,8 @@ import (
 	"github.com/egoist/mygo/ui/markdown/parser"
 
 	"glitched/internal/api"
+	"glitched/internal/plugins"
+	"glitched/internal/plugins/widget"
 )
 
 // Text selected in an assistant's reply brings up a bar by the selection,
@@ -28,6 +32,20 @@ const quoteWait = 300 * time.Millisecond
 
 // explainAsk is what Explain asks.
 const explainAsk = "Explain this."
+
+type selectionActions struct {
+	Thread plugins.ThreadRecord `json:"thread"`
+}
+
+func (a *app) selectionActionButtons(c *ui.Context) {
+	if quoteButton(c, "quote", icQuote, "Quote").Clicked() {
+		a.attachQuote(a.quote.text, "")
+		return
+	}
+	if quoteButton(c, "explain", icSparkles, "Explain").Clicked() {
+		a.attachQuote(a.quote.text, explainAsk)
+	}
+}
 
 // quoteOf is a reply's: its thread, and its entry's key.
 type quoteOf struct {
@@ -435,14 +453,12 @@ func (a *app) quoteBarAt(c *ui.Context, t thread, at ui.Element, spot quoteSpot)
 				}
 				return
 			}
-			if quoteButton(c, "quote", icQuote, "Quote").Clicked() {
-				a.attachQuote(s.text, "")
-				return
-			}
-			if quoteButton(c, "explain", icSparkles, "Explain").Clicked() {
-				a.attachQuote(s.text, explainAsk)
-				return
-			}
+			box := func() ui.Element { return ui.Row(c).Shrink(0) }
+			ctx := func(r plugins.ThreadRecord) any { return selectionActions{Thread: r} }
+			a.pluginComponent(c, "selection.actions", &t, componentCopy{
+				key: composerKey(t) + "/selection", box: box, context: ctx,
+				native: func(*widget.Node) { a.selectionActionButtons(c) },
+			})
 		})
 		if bar.OverlayShortcut(0, ui.KeyEscape) || bar.PressedOutside() {
 			a.closeQuote()
@@ -498,6 +514,31 @@ func (a *app) attachQuote(text, ask string) {
 	a.draft = withAsk(a.draft, ask)
 	a.draftToEnd = true
 	a.draftArea.Focus()
+}
+
+// quoteEffect is composer.quote: it puts the selection open in this
+// thread's composer on it, with ask added to the draft. The selection's
+// text itself stays with Glitched, which already showed it.
+func (a *app) quoteEffect(args json.RawMessage) (any, error) {
+	var in struct {
+		Thread string
+		Ask    string
+	}
+	if err := json.Unmarshal(args, &in); err != nil || in.Thread == "" {
+		return nil, errors.New("composer.quote needs the thread the selection is in")
+	}
+	t, err := a.threadNamed(in.Thread)
+	if err != nil {
+		return nil, err
+	}
+	if t.id() != a.current().id() || a.quote.state != quoteOpen || strings.TrimSpace(a.quote.text) == "" {
+		return nil, errors.New("there is no selection open in that thread")
+	}
+	if len(in.Ask) > 4000 {
+		return nil, errors.New("composer.quote's ask is over 4,000 bytes")
+	}
+	a.attachQuote(a.quote.text, in.Ask)
+	return nil, nil
 }
 
 // withAsk is draft with ask after it, a blank line between.

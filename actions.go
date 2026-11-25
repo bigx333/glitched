@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/i18n"
@@ -238,15 +239,76 @@ func askedBefore(es []entry, i int) (string, bool) {
 // line; args are what the plugin's command is passed.
 func (a *app) pluginMenuItems(m *ui.Menu, at string, args func(plugin string) map[string]any) {
 	items := a.plugins.MenuItems(at)
-	if len(items) == 0 {
+	shown := items[:0]
+	arguments := make(map[string]map[string]any, len(items))
+	for _, it := range items {
+		arguments[it.Plugin] = args(it.Plugin)
+		if menuArgumentsMeet(arguments[it.Plugin], it.Requires) {
+			shown = append(shown, it)
+		}
+	}
+	if len(shown) == 0 {
 		return
 	}
 	m.Separator()
-	for _, it := range items {
+	for _, it := range shown {
 		if m.Item(it.Title).Chosen() {
-			a.runMenuItem(it, args(it.Plugin))
+			a.runMenuItem(it, arguments[it.Plugin])
 		}
 	}
+}
+
+// menuArgumentsMeet reports whether every dotted field requires names is
+// non-zero in args, which are the same arguments the command receives.
+func menuArgumentsMeet(args map[string]any, requires []string) bool {
+	if len(requires) == 0 {
+		return true
+	}
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return false
+	}
+	var root any
+	if json.Unmarshal(raw, &root) != nil {
+		return false
+	}
+	for _, path := range requires {
+		v := root
+		for _, part := range strings.Split(path, ".") {
+			m, ok := v.(map[string]any)
+			if !ok {
+				return false
+			}
+			if v, ok = m[part]; !ok {
+				return false
+			}
+		}
+		switch v := v.(type) {
+		case nil:
+			return false
+		case bool:
+			if !v {
+				return false
+			}
+		case string:
+			if v == "" {
+				return false
+			}
+		case float64:
+			if v == 0 {
+				return false
+			}
+		case []any:
+			if len(v) == 0 {
+				return false
+			}
+		case map[string]any:
+			if len(v) == 0 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // runMenuItem runs a plugin's command chosen in a menu of the app's, and

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -257,6 +258,124 @@ func (a *app) runUpdate(e *client.Env, name string, whenIdle bool, done func(tra
 		return a.updateRunner(e, name, whenIdle, done)
 	}
 	return a.backend.UpdateProvider(e, name, whenIdle, done)
+}
+
+// cliMachine is how a plugin names a machine whose CLI it acts on: the
+// local one as local, a remote one by its engine's id.
+func cliMachine(e *client.Env) string {
+	if e.Kind == client.Local {
+		return "local"
+	}
+	return e.ID.String()
+}
+
+type cliUpdateRecord struct {
+	Machine     string `json:"machine"`
+	MachineName string `json:"machineName"`
+	Provider    string `json:"provider"`
+	Title       string `json:"title"`
+	Installed   string `json:"installed,omitempty"`
+	Latest      string `json:"latest,omitempty"`
+	Manual      bool   `json:"manual,omitempty"`
+	Online      bool   `json:"online"`
+	Waiting     bool   `json:"waiting,omitempty"`
+	Running     bool   `json:"running,omitempty"`
+	Failed      bool   `json:"failed,omitempty"`
+	Busy        bool   `json:"busy,omitempty"`
+}
+
+type cliUpdatesView struct {
+	Updates      []cliUpdateRecord `json:"updates"`
+	Tooltip      string            `json:"tooltip"`
+	Running      bool              `json:"running,omitempty"`
+	Failed       bool              `json:"failed,omitempty"`
+	Needed       bool              `json:"needed,omitempty"`
+	CanUpdateAll bool              `json:"canUpdateAll"`
+}
+
+// cliUpdatesState is what the footer component's copies are given. The
+// rows themselves stay native: their controls run the engine's updater.
+func (a *app) cliUpdatesState() cliUpdatesView {
+	pending := a.pendingCLIs()
+	out := cliUpdatesView{Tooltip: a.cliUpdatesTip(pending)}
+	several := len(a.backend.Envs()) > 1
+	for _, en := range pending {
+		r := a.clis.runs[en.key]
+		u := en.info.Update
+		f := familyOf(en.key.provider)
+		title := f.name
+		if several {
+			title += " on " + machineWords(en.env)
+		}
+		rec := cliUpdateRecord{
+			Machine: cliMachine(en.env), MachineName: machineName(en.env), Provider: en.key.provider, Title: title,
+			Online: online(en.env), Waiting: r != nil && r.waiting, Running: r != nil && r.running,
+			Failed: r != nil && r.failed != "", Busy: r != nil && r.busy,
+		}
+		if u != nil {
+			rec.Installed, rec.Latest, rec.Manual = u.Installed, u.Latest, u.Manual != ""
+		}
+		out.Running = out.Running || rec.Running
+		out.Failed = out.Failed || rec.Failed
+		out.Needed = out.Needed || rec.Busy || rec.Manual
+		if u != nil && u.Manual == "" && rec.Online && !rec.Running {
+			out.CanUpdateAll = true
+		}
+		out.Updates = append(out.Updates, rec)
+	}
+	return out
+}
+
+// cliEntryNamed is the entry machine and provider name, for a plugin's
+// update call.
+func (a *app) cliEntryNamed(machine, provider string) (cliEntry, error) {
+	for _, en := range a.cliEntries() {
+		if cliMachine(en.env) == machine && en.key.provider == provider {
+			return en, nil
+		}
+	}
+	return cliEntry{}, fmt.Errorf("no %s CLI on that machine", provider)
+}
+
+// cliUpdateEffect is cliupdates.update: one entry's updater, now or once
+// its provider's turn ends.
+func (a *app) cliUpdateEffect(args json.RawMessage) (any, error) {
+	var in struct {
+		Machine, Provider string
+		WhenIdle          bool
+	}
+	if err := json.Unmarshal(args, &in); err != nil || in.Machine == "" || in.Provider == "" {
+		return nil, errors.New("cliupdates.update needs a machine and provider")
+	}
+	en, err := a.cliEntryNamed(in.Machine, in.Provider)
+	if err != nil {
+		return nil, err
+	}
+	a.updateCLI(en, in.WhenIdle)
+	return nil, nil
+}
+
+// cliUpdateAllEffect is cliupdates.updateAll: every runnable update the
+// popover lists.
+func (a *app) cliUpdateAllEffect() (any, error) {
+	for _, en := range a.pendingCLIs() {
+		r := a.clis.runs[en.key]
+		if en.info.Update != nil && en.info.Update.Manual == "" && online(en.env) && (r == nil || !r.running) {
+			a.updateCLI(en, false)
+		}
+	}
+	return nil, nil
+}
+
+// cliUpdateNative draws the update row a plugin names, when it is still
+// one Glitched knows.
+func (a *app) cliUpdateNative(c *ui.Context, machine, provider, title string) {
+	en, err := a.cliEntryNamed(machine, provider)
+	if err != nil {
+		ui.Text(c, "This update is no longer listed.").TextColor(palette.muted)
+		return
+	}
+	a.cliUpdate(c, en, title)
 }
 
 // cliUpdate is a CLI's update, as a provider's row and the sidebar's list

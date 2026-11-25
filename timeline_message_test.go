@@ -17,10 +17,17 @@ import (
 )
 
 const rowsManifest = `{"id": "my-rows", "name": "My rows", "main": "index.js", "contract": "glitched", "contractVersion": 2,
-	"capabilities": ["ui.place", "ui.replace"], "glitched": {"places": [{"id": "row", "at": "timeline.message", "replaces": true}]}}`
+	"capabilities": ["ui.place", "ui.replace", "messages:read"], "glitched": {"places": [{"id": "row", "at": "timeline.message", "replaces": true}]}}`
 
 func rowsModule(body string) string {
 	return `export function place({ items }) { return items.map(({ key, context }) => (` + body + `)) }`
+}
+
+// allowRows grants what replacing the timeline takes.
+func allowRows(t *testing.T, a *app, id string) {
+	t.Helper()
+	allow(t, a, id, "ui.replace")
+	allow(t, a, id, "messages:read")
 }
 
 // timelineHarness is a thread of a few turns, shown.
@@ -66,9 +73,7 @@ func TestTimelineRowsAreABuiltInPluginYoursCanWrap(t *testing.T) {
 	if shows("Mine user") || !rows() {
 		t.Fatal("yours drew the rows before it was granted ui.replace")
 	}
-	if err := a.plugins.SetGranted("my-rows", "ui.replace", true); err != nil {
-		t.Fatal(err)
-	}
+	allowRows(t, a, "my-rows")
 	if !shows("Mine user") || !shows("Mine assistant") || !shows("Mine work") || !rows() {
 		t.Fatalf("yours doesn't draw around transcript.body: %q", tt.Texts())
 	}
@@ -122,9 +127,7 @@ func TestThePluginsPageSaysWhoDrawsTheCopiesAPluginAnswersNullFor(t *testing.T) 
 	}
 
 	writeOwnPlugin(t, a, "my-rows", rowsManifest, `export function place({ items }) { return items.map(() => null) }`)
-	if err := a.plugins.SetGranted("my-rows", "ui.replace", true); err != nil {
-		t.Fatal(err)
-	}
+	allowRows(t, a, "my-rows")
 	if st := state("my-rows", "timeline.message"); st.word != "Answered null" || st.why != "It answered null for every copy shown, so the built-in draws it." {
 		t.Errorf("Settings says %q: %q of rows answered null for every copy", st.word, st.why)
 	}
@@ -149,9 +152,7 @@ func TestThePluginsPageSaysWhoDrawsTheCopiesAPluginAnswersNullFor(t *testing.T) 
 	// Each copy it answers null for names who draws that one.
 	writeOwnPlugin(t, a, "my-rows", rowsManifest, rowsModule(`context.kind !== "assistant" ? null : { type: "column", children: [{ type: "text", text: "Mine " + context.kind }, { type: "native", id: "body", name: "transcript.body" }] }`))
 	writeOwnPlugin(t, a, "my-work", strings.NewReplacer("my-rows", "my-work", "My rows", "My work").Replace(rowsManifest), rowsModule(`context.kind !== "work" ? null : { type: "column", children: [{ type: "text", text: "Work " + context.kind }, { type: "native", id: "body", name: "transcript.body" }] }`))
-	if err := a.plugins.SetGranted("my-work", "ui.replace", true); err != nil {
-		t.Fatal(err)
-	}
+	allowRows(t, a, "my-work")
 	st = state("my-rows", "timeline.message")
 	if !tt.HasText("Mine assistant") || !tt.HasText("Work work") {
 		t.Fatalf("my-rows and my-work don't each draw their rows: %q", tt.Texts())
@@ -202,9 +203,7 @@ export function place({ items }) {
 		{ type: "text", text: "Mine " + context.kind + (context.streaming ? " streaming " : " ") + (drawn[key] = (drawn[key] || 0) + 1) },
 		{ type: "native", id: "body", name: "transcript.body" }] }))
 }`)
-	if err := a.plugins.SetGranted("my-rows", "ui.replace", true); err != nil {
-		t.Fatal(err)
-	}
+	allowRows(t, a, "my-rows")
 	a.listFor(h.thread("A thread").id()).ScrollToEnd()
 	settlePlugins(t, a, tt, h.p)
 	// apply folds an event in, as following the thread does.
@@ -283,9 +282,7 @@ func TestASelectedReplyKeepsItsQuoteWhenTheBuiltInTakesOver(t *testing.T) {
 	if !barShown(h) || a.quote.text != sel {
 		t.Fatalf("after the layout handoff, selection=%q and quote bar=%v; want %q with the quote bar", a.quote.text, barShown(h), sel)
 	}
-	if err := tt.Click("Quote"); err != nil {
-		t.Fatal(err)
-	}
+	h.clickPlugin("Quote")
 	if !slices.ContainsFunc(a.attachments, func(at attachment) bool { return at.quote && at.text == sel }) {
 		t.Fatalf("Quote did not attach the original selected text %q", sel)
 	}
@@ -302,15 +299,13 @@ func TestASelectedReplyKeepsItsQuoteWhenALateCopyTakesOver(t *testing.T) {
 	h.untilShown("the reply", "Looking at the code.")
 	settlePlugins(t, a, tt, h.p)
 	manifest := `{"id":"async-rows","name":"Async rows","main":"index.js","contract":"glitched","contractVersion":2,
-	"capabilities":["ui.place","ui.replace"],"glitched":{"places":[{"id":"row","at":"timeline.message","replaces":true}]}}`
+	"capabilities":["ui.place","ui.replace","messages:read"],"glitched":{"places":[{"id":"row","at":"timeline.message","replaces":true}]}}`
 	writeOwnPlugin(t, a, "async-rows", manifest, `
 export async function place({items}) {
 	await glitched.app.settings.get()
 	return items.map(() => ({type:"native", id:"body", name:"transcript.body"}))
 }`)
-	if err := a.plugins.SetGranted("async-rows", "ui.replace", true); err != nil {
-		t.Fatal(err)
-	}
+	allowRows(t, a, "async-rows")
 	tt.Frame()
 	key := replyKeyOf(t, h)
 	s := a.plugins.App("async-rows")
@@ -380,7 +375,7 @@ func TestGlitchedWaitsForTheBuiltInRowsWithTheirOwnDrawing(t *testing.T) {
 	js := strings.Replace(string(src), "row(context))", "row(cases[pick[key]]))", 1)
 	js = strings.Replace(js, "({ context })", "({ key })", 1) + "\nconst cases = " + string(cs) + ";\nconst pick = " + string(ps) + ";\n"
 	writeOwnPlugin(t, a, "my-rows", rowsManifest, js)
-	allow(t, a, "my-rows", "ui.replace")
+	allowRows(t, a, "my-rows")
 	settlePlugins(t, a, tt, h.p)
 	seen := map[string]bool{}
 	for _, e := range rs.es {
@@ -410,7 +405,7 @@ func TestTheBubbleSampleRestylesYourMessages(t *testing.T) {
 		files[i] = string(b)
 	}
 	writeOwnPlugin(t, a, "bubble", files[0], files[1])
-	allow(t, a, "bubble", "ui.replace")
+	allowRows(t, a, "bubble")
 	settlePlugins(t, a, tt, h.p)
 	if !tt.HasText(turnText(1)) || !tt.HasText("Reply 1.") {
 		t.Fatalf("the rows don't draw: %q", tt.Texts())

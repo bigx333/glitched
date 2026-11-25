@@ -128,7 +128,7 @@ func (a *app) terminalBody(c *ui.Context, s *shell, err error) {
 	case s != nil:
 		// The view sizes the terminal in cells of its font, and takes
 		// the keyboard as the drawer opens.
-		terminal.View(c.Key(s), s.term).Grow(1).Padding(6, 8).AutoFocus()
+		terminal.View(c.Key(s), s.term).Grow(1).FillWidth().FillHeight().Padding(6, 8).AutoFocus()
 	default:
 		a.cannedTerminal(c)
 	}

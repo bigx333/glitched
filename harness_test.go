@@ -266,7 +266,10 @@ func startWith(t *testing.T, dir string, engine func(*daemon.Config)) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { a.backend.Close() })
-	h := &harness{t, a, ui.NewTester(a.view, 1320, 860), p}
+	tt := ui.NewTester(a.view, 1320, 860)
+	settlers.Store(tt, func() { settlePlugins(t, a, tt, p) })
+	t.Cleanup(func() { settlers.Delete(tt) })
+	h := &harness{t, a, tt, p}
 	h.until("this machine's engine", func() bool { return a.backend.Envs()[0].Status == client.Status(client.Online{}) })
 	return h
 }
@@ -354,12 +357,15 @@ func (h *harness) click(text string) {
 	if err := h.tt.Click(text); err != nil {
 		h.t.Fatal(err)
 	}
-	// A click a plugin took is done once its session is: what it asked
-	// the app for is posted by then.
-	if h.a.plugins != nil && !h.a.plugins.Idle() {
-		h.until("the plugins to settle", h.a.plugins.Idle)
-		h.p.run()
-		h.tt.Frame()
+}
+
+// clickPlugin clicks a plugin's declarative widget once the window shows
+// it, and waits for the plugin to answer the click.
+func (h *harness) clickPlugin(text string) {
+	h.t.Helper()
+	h.click(text)
+	if h.a.plugins != nil {
+		settlePlugins(h.t, h.a, h.tt, h.p)
 	}
 }
 

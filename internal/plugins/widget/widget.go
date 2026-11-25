@@ -113,13 +113,19 @@ type Native struct {
 // Natives are the native widgets a plugin may place, by name. Only these
 // draw: a name that isn't one, a locked one included, refuses the view.
 var Natives = map[string]Native{
-	"diff.body":       {Props: map[string]string{"path": "string"}, In: []string{"thread.panel.diff"}, Thread: true, Fires: []string{"onChange"}},
-	"theme.card":      {Props: map[string]string{"theme": "string"}, In: []string{"settings.page.appearance"}, Fires: []string{"onChange"}},
-	"composer.input":  {In: []string{"composer"}, Thread: true},
-	"transcript.body": {Props: map[string]string{"bare": "bool"}, In: []string{"timeline.message"}, Thread: true},
+	"diff.body":              {Props: map[string]string{"path": "string"}, In: []string{"thread.panel.diff"}, Thread: true, Fires: []string{"onChange"}},
+	"terminal.body":          {In: []string{"thread.panel.terminal"}, Thread: true},
+	"cli.update":             {Props: map[string]string{"machine": "string", "provider": "string", "title": "string"}, In: []string{"sidebar.footer.updates"}},
+	"browser.webview":        {In: []string{"thread.panel.preview"}},
+	"composer.send.button":   {In: []string{"composer.send"}, Thread: true},
+	"composer.access.picker": {In: []string{"composer.access"}, Thread: true},
+	"theme.card":             {Props: map[string]string{"theme": "string"}, In: []string{"settings.page.appearance"}, Fires: []string{"onChange"}},
+	"composer.input":         {In: []string{"composer"}, Thread: true},
+	"transcript.body":        {Props: map[string]string{"bare": "bool"}, In: []string{"timeline.message"}, Thread: true},
 	// transcript.retry is a failed command's Retry and Dismiss, by its
 	// row's error or under its message's note.
 	"transcript.retry": {In: []string{"timeline.message"}, Thread: true},
+	"report.body":      {In: []string{"timeline.report"}, Thread: true},
 	// A message's actions, as Glitched draws them under it: Copy, Edit &
 	// resend (a message of yours), Retry (a turn that failed or was
 	// stopped), Fork from here (a turn's last reply, once it ended), and
@@ -160,7 +166,7 @@ var Natives = map[string]Native{
 	// tile; the effort's name in its color as the button shows it, what
 	// runs where the provider runs another; fast mode's lightning while
 	// it's on; and the effort slider with fast mode's switch.
-	"model.tile":    {Props: map[string]string{"family": "string", "size": "number"}, In: []string{"composer.model"}, InRow: true},
+	"model.tile":    {Props: map[string]string{"family": "string", "size": "number"}, In: []string{"composer.model", "sidebar.footer.updates"}, InRow: true},
 	"model.level":   {In: []string{"composer.model"}, Thread: true},
 	"model.zap":     {In: []string{"composer.model"}},
 	"model.effort":  {In: []string{"composer.model"}},
@@ -190,6 +196,7 @@ var Locked = map[string]string{
 	"settings.plugins":    "it is where you turn plugins off, so no plugin draws it",
 	"settings.servers":    "pairing an engine trusts a machine, so only Glitched draws it",
 	"settings.providers":  "it chooses the program Glitched runs as an agent, so only Glitched draws it",
+	"settings.machine":    "pairing tokens and engine restarts trust this machine, so only Glitched draws it",
 	"confirm.destructive": "a confirm before something is deleted must be Glitched's own",
 }
 
@@ -236,6 +243,7 @@ type Node struct {
 	// Controlled says the plugin holds the control's value: once the
 	// plugin took the user's changes, the view's value is the value.
 	Controlled bool `json:"controlled,omitempty"`
+	Focus      bool `json:"focus,omitempty"`
 	Disabled   bool `json:"disabled,omitempty"`
 	Selectable bool `json:"selectable,omitempty"`
 
@@ -248,6 +256,8 @@ type Node struct {
 	OnClick  *Handler `json:"onClick,omitempty"`
 	OnChange *Handler `json:"onChange,omitempty"`
 	OnSubmit *Handler `json:"onSubmit,omitempty"`
+	// OnBlur is an input's, as it loses the keyboard.
+	OnBlur *Handler `json:"onBlur,omitempty"`
 	// OnClose is a dialog's, as the user dismisses it.
 	OnClose *Handler `json:"onClose,omitempty"`
 

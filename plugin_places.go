@@ -134,6 +134,7 @@ func scopeOf(d *componentDrawn) int {
 // or nothing; and the plugins that answered null for it.
 type copyDrawn struct {
 	plugin   string
+	builtin  bool
 	glitched bool
 	nulls    []string
 }

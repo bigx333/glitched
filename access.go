@@ -190,9 +190,14 @@ func (a *app) accessControl(c *ui.Context, t thread) {
 		}
 		return composerAccess{Thread: r, Access: a.access, Levels: levels}
 	}
-	if !a.pluginComponent(c, "composer.access", &t, componentCopy{key: composerKey(t), box: box, context: ctx}) {
+	if !a.pluginComponent(c, "composer.access", &t, componentCopy{key: composerKey(t), box: box, builtinBox: func() ui.Element {
+		return ui.Row(c).Key("access-plugin").AlignItems(ui.Center).Shrink(0)
+	}, context: ctx}) {
 		a.accessPicker(c, t)
 		return
+	}
+	if drawn := a.frameOf("composer.access").drawn["composer.access"]; drawn != nil && len(drawn.copies) == 1 && drawn.copies[0].builtin {
+		return // the built-in's native picker already says the access in force
 	}
 	p := a.accessPending(t)
 	shown, label := a.accessShown(t)

@@ -1,0 +1,11 @@
+{
+  "id": "composer-access",
+  "name": "Composer access",
+  "description": "The composer's access picker. Built into Glitched; make a copy in Settings › Plugins to draw or arrange it differently.",
+  "version": "1.0.0",
+  "main": "main.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "ui.replace", "threads:access"],
+  "glitched": { "places": [{ "id": "access", "at": "composer.access", "replaces": true }] }
+}

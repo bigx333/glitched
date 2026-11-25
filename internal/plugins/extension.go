@@ -49,6 +49,9 @@ type Menu struct {
 	Command string `json:"command"`
 	At      string `json:"at"`
 	Icon    string `json:"icon,omitempty"`
+	// Requires are dotted fields of the command's arguments that must be
+	// non-zero for the item to show, as "thread.local".
+	Requires []string `json:"requires,omitempty"`
 }
 
 // MenuSlots are the menus a plugin's commands may join, and what the
@@ -151,6 +154,7 @@ const MinEvery = 30
 var (
 	toolName   = regexp.MustCompile(`^[a-z][a-z0-9_]{0,40}$`)
 	localID    = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,63}$`)
+	menuField  = regexp.MustCompile(`^[a-z][A-Za-z0-9_]*(\.[a-z][A-Za-z0-9_]*)*$`)
 	programRef = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}$`)
 )
 
@@ -270,6 +274,11 @@ func (x Extension) check(folder string) error {
 	for _, m := range x.Menus {
 		if _, ok := MenuSlots[m.At]; !ok {
 			return fmt.Errorf("glitched.menus: no menu %q", m.At)
+		}
+		for _, need := range m.Requires {
+			if !menuField.MatchString(need) {
+				return fmt.Errorf("glitched.menus: %s: requires %q, not a dotted field of its arguments", m.Command, need)
+			}
 		}
 		if (m.At == "message.actions") != (m.Icon != "") || len(m.Icon) > 64 {
 			return fmt.Errorf("glitched.menus: %s: a message's actions show an icon, which no menu's item does", m.Command)

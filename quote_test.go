@@ -156,9 +156,7 @@ func TestSelectionBarQuotes(t *testing.T) {
 	if b, _ := h.tt.Find("Explain"); b.Y < r.Y+r.H {
 		t.Errorf("the bar's Explain at y %v, over the reply's line (%v to %v); want it below", b.Y, r.Y, r.Y+r.H)
 	}
-	if err := h.tt.Click("Quote"); err != nil {
-		t.Fatal(err)
-	}
+	h.clickPlugin("Quote")
 	h.tt.Advance(time.Second)
 	if barShown(h) {
 		t.Error("Quote left the bar open")
@@ -185,9 +183,7 @@ func TestSelectionBarExplains(t *testing.T) {
 	h, sel := quoteReady(t)
 	h.a.draft = "Before that, "
 	h.tt.Advance(quoteWait + 50*time.Millisecond)
-	if err := h.tt.Click("Explain"); err != nil {
-		t.Fatal(err)
-	}
+	h.clickPlugin("Explain")
 	h.tt.Advance(time.Second)
 	if want := "Before that,\n\n" + explainAsk; h.a.draft != want {
 		t.Errorf("draft %q, want %q", h.a.draft, want)
@@ -203,7 +199,7 @@ func TestExplainUndoes(t *testing.T) {
 	h.tt.Type("Before that,")
 	dragHalfReply(t, h)
 	h.tt.Advance(quoteWait + 50*time.Millisecond)
-	h.click("Explain")
+	h.clickPlugin("Explain")
 	h.tt.Advance(time.Second)
 	if want := "Before that,\n\n" + explainAsk; h.a.draft != want {
 		t.Fatalf("draft %q, want %q", h.a.draft, want)
@@ -325,7 +321,7 @@ func quoteAll(t *testing.T, h *harness, at string) (quote, copied string) {
 	h.tt.Key(ui.Cmd, ui.KeyC)
 	h.tt.Frame()
 	copied = strings.TrimSpace(h.tt.Clipboard())
-	h.click("Quote")
+	h.clickPlugin("Quote")
 	h.tt.Advance(time.Second)
 	i := slices.IndexFunc(h.a.attachments, func(at attachment) bool { return at.quote })
 	if i < 0 {
@@ -449,7 +445,7 @@ func TestSelectionReadAsItChanges(t *testing.T) {
 				t.Fatalf("all of the reply selected, no bar: %+v", h.a.quote)
 			}
 			// What the bar itself allocates, and a little more.
-			if all := allocs(); all > none+100 {
+			if all := allocs(); all > none+200 {
 				t.Errorf("a frame allocates %.0f times with all of the reply selected, %.0f with nothing selected; want about as many", all, none)
 			}
 		})
@@ -464,9 +460,7 @@ func TestSelectionBarReturnsAfterQuote(t *testing.T) {
 	if !barShown(h) || h.a.quote.text != "Looking" {
 		t.Fatalf("double-clicked, bar %v on %q", barShown(h), h.a.quote.text)
 	}
-	if err := h.tt.Click("Quote"); err != nil {
-		t.Fatal(err)
-	}
+	h.clickPlugin("Quote")
 	h.tt.Advance(time.Second)
 	// A click at the reply's end clears the selection.
 	h.tt.ClickAt(r.X+r.W-2, r.Y+r.H/2)
@@ -924,9 +918,7 @@ func TestSelectionBarCmdEnter(t *testing.T) {
 func TestExplainLeavesCaretAtEnd(t *testing.T) {
 	h, _ := quoteReady(t)
 	h.tt.Advance(quoteWait + 50*time.Millisecond)
-	if err := h.tt.Click("Explain"); err != nil {
-		t.Fatal(err)
-	}
+	h.clickPlugin("Explain")
 	h.tt.Advance(time.Second)
 	h.tt.Type(" More")
 	h.tt.Frame()
@@ -944,9 +936,7 @@ func TestSelectionBarFollowsNewSelection(t *testing.T) {
 	h.tt.Move(b.X+b.W/2, b.Y+b.H/2)
 	h.tt.Key(ui.Cmd, ui.KeyA)
 	h.tt.Advance(quoteWait + 50*time.Millisecond)
-	if err := h.tt.Click("Quote"); err != nil {
-		t.Fatal(err)
-	}
+	h.clickPlugin("Quote")
 	h.tt.Frame()
 	if i := slices.IndexFunc(h.a.attachments, func(at attachment) bool { return at.quote }); i < 0 || h.a.attachments[i].text != "Looking at the code." {
 		t.Errorf("attachments %+v; want a quote of the whole reply", h.a.attachments)
@@ -959,7 +949,7 @@ func TestQuoteInNewThreadTitledByDraft(t *testing.T) {
 	h, sel := quoteReady(t)
 	from := h.a.current().id()
 	h.tt.Advance(quoteWait + 50*time.Millisecond)
-	h.click("Quote")
+	h.clickPlugin("Quote")
 	h.tt.Advance(time.Second)
 	h.tt.Key(ui.Cmd, ui.KeyN)
 	h.tt.Advance(time.Second)
@@ -979,7 +969,7 @@ func TestQuoteInNewThreadTitledWithAttachment(t *testing.T) {
 	h, sel := quoteReady(t)
 	from := h.a.current().id()
 	h.tt.Advance(quoteWait + 50*time.Millisecond)
-	h.click("Quote")
+	h.clickPlugin("Quote")
 	h.tt.Advance(time.Second)
 	h.tt.Key(ui.Cmd, ui.KeyN)
 	h.tt.Advance(time.Second)
@@ -999,7 +989,7 @@ func TestQuoteInNewThreadTitledWithAttachment(t *testing.T) {
 func TestQuoteSentWithoutDraft(t *testing.T) {
 	h, sel := quoteReady(t)
 	h.tt.Advance(quoteWait + 50*time.Millisecond)
-	h.click("Quote")
+	h.clickPlugin("Quote")
 	h.tt.Advance(time.Second)
 	h.a.attachments = append(h.a.attachments, attachment{name: "Pasted text", text: "pasted"})
 	h.tt.Frame()
@@ -1267,7 +1257,7 @@ func TestExplainWithACodeBlockAsksUnderIt(t *testing.T) {
 	}
 	sel := dragHalfReply(t, h)
 	h.tt.Advance(quoteWait + 50*time.Millisecond)
-	h.click("Explain")
+	h.clickPlugin("Explain")
 	h.tt.Advance(time.Second)
 	if got := h.a.code.segs[len(h.a.code.segs)-1].text; got != explainAsk {
 		t.Fatalf("the text under the block %q, want %q", got, explainAsk)

@@ -55,6 +55,7 @@ globalThis.glitched = Object.freeze({
   composer: Object.freeze({
     draft: (text, where) => app("composer.draft", typeof where === "object" && where !== null ? { ...where, text } : { text, workspace: where }),
     submit: (thread) => app("composer.submit", { thread: thread ?? "" }),
+    quote: (thread, ask) => app("composer.quote", { thread: thread ?? "", ask: ask ?? "" }),
   }),
   threads: Object.freeze({
     list: () => app("threads.list"),
@@ -80,6 +81,23 @@ globalThis.glitched = Object.freeze({
   }),
   palette: Object.freeze({ close: (palette) => app("palette.close", { palette: palette ?? "" }) }),
   sidebar: Object.freeze({ more: (key) => app("sidebar.more", { key }) }),
+  browser: Object.freeze({
+    blur: (tab) => app("browser.blur", { tab }),
+    draft: (tab, text) => app("browser.draft", { tab, text }),
+    navigate: (tab, url) => app("browser.navigate", { tab, url }),
+    back: (tab) => app("browser.back", { tab }),
+    forward: (tab) => app("browser.forward", { tab }),
+    reload: (tab) => app("browser.reload", { tab }),
+    stop: (tab) => app("browser.stop", { tab }),
+    newTab: (url) => app("browser.newTab", { url: url ?? "" }),
+    closeTab: (tab) => app("browser.closeTab", { tab }),
+    activateTab: (tab) => app("browser.activateTab", { tab }),
+  }),
+  cliUpdates: Object.freeze({
+    update: (machine, provider, whenIdle) => app("cliupdates.update", { machine, provider, whenIdle: whenIdle ?? false }),
+    updateAll: () => app("cliupdates.updateAll"),
+    check: () => app("cliupdates.check"),
+  }),
   projects: Object.freeze({
     remove: (workspace, machine) => app("projects.remove", { workspace, machine: machine ?? "" }),
     list: () => app("projects.list"),

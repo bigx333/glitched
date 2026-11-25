@@ -39,8 +39,12 @@ func writeOwnPlugin(t *testing.T, a *app, folder, manifest, js string) {
 }
 
 func replacing(id, at string) string {
+	caps := `"ui.place", "ui.replace"`
+	if need := plugins.ComponentNamed(at).Needs; need != "" {
+		caps += `, "` + need + `"`
+	}
 	return `{"id": "` + id + `", "name": "` + id + `", "main": "index.js", "contract": "glitched", "contractVersion": 2,
-	"capabilities": ["ui.place", "ui.replace"], "glitched": {"places": [{"id": "row", "at": "` + at + `", "replaces": true}]}}`
+	"capabilities": [` + caps + `], "glitched": {"places": [{"id": "row", "at": "` + at + `", "replaces": true}]}}`
 }
 
 const mineModule = `export function place({ items }) {
@@ -182,6 +186,11 @@ func TestAFrameWaitsOnceForAComponentsNewCopies(t *testing.T) {
 // frame waiting for it again, wherever it moves.
 func TestACopyAnsweredNullIsNotWaitedForAgain(t *testing.T) {
 	a := offline(t)
+	// The built-in is the next replacer otherwise; the copy's null falling
+	// through to the native body is what this tests.
+	if err := a.plugins.SetEnabled("composer-send", false); err != nil {
+		t.Fatal(err)
+	}
 	writeOwnPlugin(t, a, "my-send", sendManifest, `export function place({ items }) {
 	return items.map(() => null)
 }`)

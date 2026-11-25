@@ -62,20 +62,11 @@ func (a *app) threadMenu(c *ui.Context, m *ui.Menu, t thread, cat category) {
 		}).Disabled(none || len(others) == 0)
 	}
 	if t.local() {
-		m.Separator()
-		if m.Item("Copy branch name").Chosen() {
-			if b, err := branchOf(projectDir(t.View.Workspace)); err != nil {
-				c.AddToast(ui.Toast{Title: "No branch to copy", Description: err.Error(), Type: "info"})
-			} else {
-				c.WriteClipboard(b)
-				c.AddToast(ui.Toast{Title: "Copied", Description: b})
+		if path := a.providerLog(t); path != "" {
+			m.Separator()
+			if m.Item("Reveal provider log").Chosen() {
+				revealFile(path)
 			}
-		}
-		if ed := editorCLI(); ed != "" && m.Item("Open in editor").Chosen() {
-			a.openInEditor(c, ed, projectDir(t.View.Workspace))
-		}
-		if path := a.providerLog(t); path != "" && m.Item("Reveal provider log").Chosen() {
-			revealFile(path)
 		}
 	}
 	a.pluginMenuItems(m, "thread.menu", func(plugin string) map[string]any {

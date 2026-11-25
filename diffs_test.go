@@ -33,7 +33,7 @@ import (
 // reviewed and copy its path.
 func TestDiffFileActions(t *testing.T) {
 	h, th := checked(t)
-	h.click("Edit " + sidebarPath)
+	h.clickPlugin("Edit " + sidebarPath)
 	h.diffsRead()
 	d := h.diffOf(th, sidebarPath)
 	if d.Old.String() != sidebarBefore || d.New.String() != sidebarAfter {
@@ -46,7 +46,7 @@ func TestDiffFileActions(t *testing.T) {
 	if !d.Wrap {
 		t.Error("long lines don't wrap by default")
 	}
-	h.click("Wrap long lines")
+	h.clickPlugin("Wrap long lines")
 	h.tt.Frame()
 	if d.Wrap {
 		t.Error("long lines still wrap after the button")
@@ -65,11 +65,11 @@ func TestDiffFileActions(t *testing.T) {
 	}
 	h.hover("Diff of " + sidebarPath)
 	h.tt.Advance(time.Second)
-	h.click("Mark reviewed")
+	h.clickPlugin("Mark reviewed")
 	if !d.reviewed {
 		t.Error("file not marked reviewed")
 	}
-	h.click("Copy path")
+	h.clickPlugin("Copy path")
 	if h.tt.Clipboard() != sidebarPath {
 		t.Errorf("clipboard %q", h.tt.Clipboard())
 	}
@@ -87,7 +87,7 @@ func TestNoDiffActionChangesTheWorkspace(t *testing.T) {
 	h, th := checked(t)
 	ws := th.View.Workspace
 	before := snapshot(t, ws)
-	h.click("Edit " + sidebarPath)
+	h.clickPlugin("Edit " + sidebarPath)
 	h.diffsRead()
 	d := h.diffOf(th, sidebarPath)
 	r, ok := h.tt.Find("New text")
@@ -97,18 +97,18 @@ func TestNoDiffActionChangesTheWorkspace(t *testing.T) {
 	h.tt.Move(r.X+r.W/2, r.Y+8)
 	h.tt.Advance(time.Second)
 	n := len(d.Hunks())
-	h.click("Mark change reviewed")
+	h.clickPlugin("Mark change reviewed")
 	if len(d.Hunks()) != n-1 {
 		t.Fatalf("%d changes after marking one of %d reviewed", len(d.Hunks()), n)
 	}
 	h.tt.Key(ui.Cmd, ui.KeyBracketRight)
 	h.tt.Key(ui.Cmd, ui.KeyBracketLeft)
 	h.tt.Key(ui.Cmd|ui.Shift, ui.KeyEnter)
-	h.click("Wrap long lines")
+	h.clickPlugin("Wrap long lines")
 	h.tt.SetSize(1600, 900)
 	h.tt.Frame()
-	h.click("Split")
-	h.click("Unified")
+	h.clickPlugin("Split")
+	h.clickPlugin("Unified")
 	h.hover("Diff of " + sidebarPath)
 	h.tt.Advance(time.Second)
 	for _, label := range []string{"Mark reviewed", "Copy path", "Open in editor"} {
@@ -119,7 +119,7 @@ func TestNoDiffActionChangesTheWorkspace(t *testing.T) {
 		h.tt.Frame()
 		h.tt.Key(ui.Cmd|ui.Shift, ui.KeyEnter)
 	}
-	h.click("Close diff")
+	h.clickPlugin("Close diff")
 	h.tt.Advance(time.Second)
 	if after := snapshot(t, ws); !maps.Equal(after, before) {
 		t.Fatalf("the workspace changed under the panel:\n%v\nwas\n%v", after, before)
@@ -482,7 +482,7 @@ func TestAFileOutsideTheWorkspaceIsNotShown(t *testing.T) {
 	h.a.select_(h.thread("Escape"))
 	h.until("its transcript", func() bool { return h.tt.HasText("Edited it.") })
 	h.tt.Advance(time.Second)
-	h.click("Edit ../victim.txt")
+	h.clickPlugin("Edit ../victim.txt")
 	h.diffsRead()
 	if !h.tt.HasText("Not shown: the file is outside the workspace.") || h.tt.HasText("the user's own text") {
 		t.Errorf("the panel doesn't say why; texts %q", h.tt.Texts())
@@ -520,7 +520,7 @@ func TestARemoteThreadsDiffSaysWhereItsFilesAre(t *testing.T) {
 	}
 	h.a.select_(h.thread("Sort the sidebar"))
 	h.until("its transcript", func() bool { return h.tt.HasText("One test fails.") })
-	h.click("Edit " + sidebarPath)
+	h.clickPlugin("Edit " + sidebarPath)
 	h.diffsRead()
 	if !h.tt.HasText("The files are on devbox.") || !h.tt.HasText(sidebarPath) {
 		t.Fatalf("the diff of a server's thread: %q", h.tt.Texts())
@@ -548,7 +548,7 @@ func TestEachThreadReviewsItsOwnDiff(t *testing.T) {
 		h.a.select_(th)
 		h.until("its transcript", func() bool { return len(changedFiles(entriesOf(th))) == 2 })
 		h.tt.Advance(time.Second)
-		h.click("Edit " + path)
+		h.clickPlugin("Edit " + path)
 		h.diffsRead()
 	}
 	open(first, "README.md")
@@ -593,7 +593,7 @@ func TestOpenInEditorOpensTheEditedFile(t *testing.T) {
 	h.a.select_(h.thread("Both"))
 	h.until("its transcript", func() bool { return h.tt.HasText("Edited both.") })
 	h.tt.Advance(time.Second)
-	h.click("Edit " + sidebarPath)
+	h.clickPlugin("Edit " + sidebarPath)
 	h.diffsRead()
 	// Each row is named by the path from the workspace.
 	for _, path := range []string{sidebarPath, "README.md"} {
@@ -603,7 +603,7 @@ func TestOpenInEditorOpensTheEditedFile(t *testing.T) {
 		}
 		h.tt.Move(r.X+r.W/2, r.Y+r.H/2)
 		h.tt.Advance(time.Second)
-		h.click("Open in editor")
+		h.clickPlugin("Open in editor")
 	}
 	if want := []string{filepath.Join(ws, sidebarPath), abs}; !slices.Equal(opened, want) {
 		t.Fatalf("opened %q, want %q", opened, want)
@@ -656,7 +656,7 @@ func TestASplitDiffGoesWithoutAPanic(t *testing.T) {
 		leave   func(h *harness, dir string, second thread)
 	}
 	for _, w := range []way{
-		{name: "closed", leave: func(h *harness, _ string, _ thread) { h.click("Close diff") }},
+		{name: "closed", leave: func(h *harness, _ string, _ thread) { h.clickPlugin("Close diff") }},
 		{name: "closed with its divider focused", leave: func(h *harness, _ string, _ thread) {
 			for range 40 {
 				if h.tt.Key(0, ui.KeyTab); h.tt.Focused("Divider") {
@@ -666,7 +666,7 @@ func TestASplitDiffGoesWithoutAPanic(t *testing.T) {
 			if !h.tt.Focused("Divider") {
 				h.t.Fatal("Tab never reached the divider")
 			}
-			h.click("Close diff")
+			h.clickPlugin("Close diff")
 		}},
 		{name: "for the preview", leave: func(h *harness, _ string, _ thread) { h.tt.Key(ui.Cmd|ui.Shift, ui.KeyP) }},
 		{name: "for the plugin tab", leave: func(h *harness, dir string, _ thread) {
@@ -696,7 +696,7 @@ func TestASplitDiffGoesWithoutAPanic(t *testing.T) {
 		{name: "narrowed, then closed", leave: func(h *harness, _ string, _ thread) {
 			h.tt.SetSize(1100, 900)
 			divider(h, false)
-			h.click("Close diff")
+			h.clickPlugin("Close diff")
 		}},
 		{name: "the sidebar shown in the frame it closes", width: 1440, leave: func(h *harness, _ string, _ thread) {
 			h.a.toggleSidebar(false)
@@ -707,13 +707,13 @@ func TestASplitDiffGoesWithoutAPanic(t *testing.T) {
 			h.tt.Frame()
 			h.tt.Advance(time.Second)
 			divider(h, false)
-			h.click("Close diff")
+			h.clickPlugin("Close diff")
 		}},
 		{name: "the sidebar widened, then closed", width: 1530, sidebar: true, leave: func(h *harness, _ string, _ thread) {
 			h.a.sidebarWidth += 70
 			h.tt.Frame()
 			divider(h, false)
-			h.click("Close diff")
+			h.clickPlugin("Close diff")
 		}},
 		{name: "replaced by your panel, closed", leave: func(h *harness, _ string, _ thread) {
 			yours(h, strings.ReplaceAll(yourDiffPanel, "NATIVE", `"diff.body"`))
@@ -726,7 +726,7 @@ func TestASplitDiffGoesWithoutAPanic(t *testing.T) {
 			h.tt.Frame()
 			h.until("the built-in panel", func() bool { return h.tt.HasText("Changes") })
 			divider(h, true)
-			h.click("Close diff")
+			h.clickPlugin("Close diff")
 		}},
 		{name: "in your panel's popover, dismissed", leave: func(h *harness, _ string, _ thread) {
 			yours(h, inYours(`{ type: "button", id: "open", style: "ghost", icon: "plug", label: "Diff popover", open: true, popover: { type: "column", width: 440, children: [BODY] } }`))
@@ -737,7 +737,7 @@ func TestASplitDiffGoesWithoutAPanic(t *testing.T) {
 			h.tt.Key(0, ui.KeyEscape)
 		}},
 		{name: "reopened while it goes", leave: func(h *harness, _ string, _ thread) {
-			h.click("Close diff")
+			h.clickPlugin("Close diff")
 			h.a.showDiff = true
 			h.tt.Frame()
 			divider(h, true)
@@ -762,7 +762,7 @@ func TestASplitDiffGoesWithoutAPanic(t *testing.T) {
 			h.tt.Frame()
 			h.diffOf(first, sidebarPath)
 			settlePlugins(t, h.a, h.tt, h.p)
-			h.click("Split")
+			h.clickPlugin("Split")
 			h.tt.Advance(time.Second)
 			if h.a.layout() != editor.DiffSplit {
 				t.Fatal("the diff isn't split")
@@ -836,7 +836,7 @@ func TestADiffFileShowsItsName(t *testing.T) {
 	if h.tt.HasText(ws) {
 		t.Errorf("the work log shows the workspace's path: %q", h.tt.Texts())
 	}
-	h.click("Write " + ruled)
+	h.clickPlugin("Write " + ruled)
 	h.diffsRead()
 	settlePlugins(t, h.a, h.tt, h.p)
 	for _, f := range []string{ruled, hooked} {

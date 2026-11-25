@@ -52,7 +52,7 @@ func TestView(t *testing.T) {
 	if h.a.backend.Unread(fix.Thread) {
 		t.Error("the thread shown is still unread")
 	}
-	h.click("Toggle diff  ⌘D")
+	h.clickPlugin("Toggle diff  ⌘D")
 	if !h.a.showDiff || !h.tt.HasText("No changes in this thread yet.") {
 		t.Errorf("diff panel not shown: %q", h.tt.Texts())
 	}
@@ -552,8 +552,8 @@ func TestInboxMergesMachinesByRecency(t *testing.T) {
 		t.Fatalf("the inbox lists\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 
-	h.click("api")
-	h.click("billing")
+	h.clickPlugin("api")
+	h.clickPlugin("billing")
 	got = nil
 	for _, it := range h.a.itemsIn(catInbox) {
 		got = append(got, it.t.View.Title)
@@ -779,7 +779,7 @@ func TestInbox(t *testing.T) {
 	}
 	// Settle it from its row's actions.
 	h.hover(fix.View.Title)
-	h.click("Settle")
+	h.clickPlugin("Settle")
 	if c := h.a.categoryOf(fix); c != catSettled {
 		t.Errorf("settled thread in section %d", c)
 	}
@@ -802,7 +802,7 @@ func TestInbox(t *testing.T) {
 	if inSidebar(fix.View.Title) {
 		t.Error("closed Settled section shows its threads")
 	}
-	h.click("Settled")
+	h.clickPlugin("Settled")
 	if !inSidebar(fix.View.Title) {
 		t.Error("opened Settled section hides the settled thread")
 	}
@@ -821,7 +821,7 @@ func TestInbox(t *testing.T) {
 		t.Errorf("the second turn shows %q", h.tt.Texts())
 	}
 	// The strip filters to a project.
-	h.click("agent-phone")
+	h.clickPlugin("agent-phone")
 	for _, cat := range []category{catInbox, catWorking, catSnoozed, catSettled} {
 		for _, it := range h.a.itemsIn(cat) {
 			if it.p.name() != "agent-phone" {
@@ -881,14 +881,14 @@ func TestSnooze(t *testing.T) {
 	// pushing the rows down: point at the row once it has.
 	settlePlugins(t, h.a, h.tt, h.p)
 	h.hover(th.View.Title)
-	h.click("Snooze")
+	h.clickPlugin("Snooze")
 	settlePlugins(t, h.a, h.tt, h.p)
 	if h.a.snoozeFor != th.id() || !h.tt.HasText("sleep on it") {
 		t.Fatalf("snooze popover not open: %s", h.a.snoozeFor)
 	}
 	// Off the row, onto the popover's choice.
 	h.hover("Tomorrow")
-	h.click("Tomorrow")
+	h.clickPlugin("Tomorrow")
 	want := morning(h.tt.Now(), 1)
 	h.until("the engine to snooze it", func() bool {
 		d := th.View.Disposition
@@ -898,10 +898,10 @@ func TestSnooze(t *testing.T) {
 	if h.a.shownIn(th) != catSnoozed {
 		t.Errorf("snoozed thread shown in section %d", h.a.shownIn(th))
 	}
-	h.click("Snoozed")
+	h.clickPlugin("Snoozed")
 	h.tt.Advance(time.Second)
 	h.hover(th.View.Title)
-	h.click("Back to inbox")
+	h.clickPlugin("Back to inbox")
 	h.until("the engine to bring it back", func() bool { return th.View.Disposition.State == api.Open && len(th.Pending) == 0 })
 	if h.a.categoryOf(th) != catInbox {
 		t.Errorf("thread back in section %d, want the inbox", h.a.categoryOf(th))
@@ -963,13 +963,13 @@ func TestDiffPanel(t *testing.T) {
 		t.Errorf("%d changes after accepting one of %d", len(d.Hunks()), n)
 	}
 	// Split needs the room: at 1320 the panel would be 608 wide.
-	h.click("Split")
+	h.clickPlugin("Split")
 	if a.diffLayout != editor.DiffUnified {
 		t.Error("Split switched the layout without the room for it")
 	}
 	tt.SetSize(1600, 900)
 	settlePlugins(t, a, tt, h.p)
-	h.click("Split")
+	h.clickPlugin("Split")
 	if a.diffLayout != editor.DiffSplit {
 		t.Error("Split did not switch the layout")
 	}
@@ -1294,17 +1294,17 @@ func TestProjectFilter(t *testing.T) {
 		return m
 	}
 	for _, name := range []string{"t3code", "agent-phone"} {
-		h.click(name)
+		h.clickPlugin(name)
 	}
 	if s := shown(); !s["t3code"] || !s["agent-phone"] || s["mygo"] {
 		t.Errorf("filtered to t3code and agent-phone, the sidebar shows %v", s)
 	}
-	h.click("mygo")
+	h.clickPlugin("mygo")
 	if len(a.projectFilter) != 0 {
 		t.Errorf("every project chosen should be no filter, got %v", a.projectFilter)
 	}
-	h.click("agent-phone")
-	h.click("All")
+	h.clickPlugin("agent-phone")
+	h.clickPlugin("All")
 	if len(a.projectFilter) != 0 {
 		t.Error("All should clear the filter")
 	}
@@ -1314,7 +1314,7 @@ func TestProjectFilter(t *testing.T) {
 // would otherwise hide every thread left.
 func TestProjectFilterForgetsProjectsGone(t *testing.T) {
 	h := machines(t)
-	h.click("api")
+	h.clickPlugin("api")
 	h.tt.Advance(time.Second)
 	if err := h.a.backend.RemoveServer("devbox"); err != nil {
 		t.Fatal(err)

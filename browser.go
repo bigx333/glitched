@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"net/url"
 	"slices"
 	"strings"
@@ -9,6 +11,8 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/browse"
+	"glitched/internal/plugins"
+	"glitched/internal/plugins/widget"
 )
 
 // The preview pane is a browser: tabs, each a page of its own, made the
@@ -30,6 +34,7 @@ type browser struct {
 	// navigating then doesn't type over; focusAddress gives it the
 	// keyboard in the next frame, as ⌘L and a new tab do.
 	typing, focusAddress bool
+	focusAddressHold     int
 	// shown is whether the pane was open as the last frame began: its
 	// closing lets go of the address (letGo).
 	shown bool
@@ -114,9 +119,15 @@ func (a *app) newTab(url string) {
 	}
 	b.add(url, at)
 	if url == "" {
-		b.focusAddress = true
+		b.askFocusAddress()
 	}
 	a.showPreview, a.showDiff = true, false
+}
+
+// askFocusAddress gives the address the keyboard. It holds the request
+// for a few frames: a plugin's input with it draws asynchronously.
+func (b *browser) askFocusAddress() {
+	b.focusAddress, b.focusAddressHold = true, 4
 }
 
 // closeTab closes the tab at index i and its page. Closing the last
@@ -328,88 +339,262 @@ func tabLabel(t *browserTab) string {
 	return "New tab"
 }
 
-func (a *app) previewPanel(c *ui.Context) {
+type previewTabState struct {
+	ID         int    `json:"id"`
+	URL        string `json:"url"`
+	Draft      string `json:"draft"`
+	Title      string `json:"title"`
+	Label      string `json:"label"`
+	Active     bool   `json:"active"`
+	Loading    bool   `json:"loading"`
+	Failed     bool   `json:"failed,omitempty"`
+	Error      string `json:"error,omitempty"`
+	CanBack    bool   `json:"canBack"`
+	CanForward bool   `json:"canForward"`
+}
+
+type previewPanelState struct {
+	Part       string            `json:"part"`
+	Tabs       []previewTabState `json:"tabs"`
+	Active     int               `json:"active"`
+	URL        string            `json:"url"`
+	Draft      string            `json:"draft"`
+	Loading    bool              `json:"loading"`
+	Failed     bool              `json:"failed,omitempty"`
+	Error      string            `json:"error,omitempty"`
+	Page       bool              `json:"page"`
+	CanBack    bool              `json:"canBack"`
+	CanForward bool              `json:"canForward"`
+	Focus      bool              `json:"focus,omitempty"`
+	DevURL     string            `json:"devUrl"`
+	BarHeight  float32           `json:"barHeight"`
+	BarRight   float32           `json:"barRight"`
+}
+
+// previewState is what the preview panel's component copies are given:
+// every tab, and the state of the one shown.
+func (a *app) previewState(bar ui.TitleBar, part string) previewPanelState {
 	b := &a.browser
 	t := b.current()
 	p := a.tabPage(t)
+	out := previewPanelState{
+		Part: part, Active: t.id, URL: t.url, Draft: t.draft, Loading: p != nil && p.IsLoading(),
+		Failed: t.failed, Error: t.err, Page: p != nil, CanBack: p != nil && p.CanGoBack(), CanForward: p != nil && p.CanGoForward(),
+		Focus: b.focusAddress, DevURL: defaultPreviewURL, BarHeight: max(bar.Height, headerHeight), BarRight: bar.Right,
+	}
+	for i, tab := range b.tabs {
+		tp := tab.page
+		out.Tabs = append(out.Tabs, previewTabState{
+			ID: tab.id, URL: tab.url, Draft: tab.draft, Title: tab.title, Label: tabLabel(tab), Active: i == b.active,
+			Loading: tp != nil && tp.IsLoading(), Failed: tab.failed, Error: tab.err,
+			CanBack: tp != nil && tp.CanGoBack(), CanForward: tp != nil && tp.CanGoForward(),
+		})
+	}
+	return out
+}
+
+// browserTabNamed is the tab a plugin's browser call names.
+func (a *app) browserTabNamed(id float64) (*browserTab, int, error) {
+	for i, t := range a.browser.tabs {
+		if float64(t.id) == id {
+			return t, i, nil
+		}
+	}
+	return nil, -1, errors.New("no such preview tab")
+}
+
+// browserEffect is the preview panel's navigation and tab calls. They act
+// only on the panel in this window; browse.Page and the agent browser stay
+// Glitched's own.
+func (a *app) browserEffect(e plugins.Effect) (any, error) {
+	var in struct {
+		Tab  float64
+		URL  string
+		Text string
+	}
+	if err := json.Unmarshal(e.Args, &in); err != nil {
+		return nil, errors.New(e.Type + " needs a tab")
+	}
+	if e.Type == "browser.newTab" {
+		u := strings.TrimSpace(in.URL)
+		if u != "" {
+			u = normalizeURL(u)
+			if u == "" {
+				return nil, errors.New("browser.newTab needs an http or https address")
+			}
+		}
+		a.newTab(u)
+		return nil, nil
+	}
+	t, i, err := a.browserTabNamed(in.Tab)
+	if err != nil {
+		return nil, err
+	}
+	switch e.Type {
+	case "browser.navigate":
+		u := normalizeURL(in.URL)
+		if u == "" {
+			return nil, errors.New("browser.navigate needs an http or https address")
+		}
+		a.goTo(t, in.URL)
+	case "browser.back":
+		if p := a.tabPage(t); p == nil || !p.CanGoBack() {
+			return nil, errors.New("the tab can't go back")
+		} else {
+			p.GoBack()
+		}
+	case "browser.forward":
+		if p := a.tabPage(t); p == nil || !p.CanGoForward() {
+			return nil, errors.New("the tab can't go forward")
+		} else {
+			p.GoForward()
+		}
+	case "browser.reload":
+		a.reload(t)
+	case "browser.stop":
+		if p := a.tabPage(t); p != nil {
+			p.Stop()
+		}
+	case "browser.draft":
+		if len(in.Text) > 2048 {
+			return nil, errors.New("an address is at most 2048 bytes")
+		}
+		t.draft = in.Text
+		a.browser.typing = true
+	case "browser.blur":
+		a.browser.typing = false
+	case "browser.closeTab":
+		a.closeTab(i)
+	case "browser.activateTab":
+		a.browser.active = i
+	default:
+		return nil, errors.New("unknown browser call " + e.Type)
+	}
+	return nil, nil
+}
+
+func (a *app) previewPanel(c *ui.Context) {
 	ui.Column(c).Width(a.previewWidth()).FillHeight().Children(func() {
 		bar := c.TitleBar()
-		// Clear of the window's buttons on Windows and Linux, at its right.
-		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8+bar.Right, 0, 10).Gap(4).AlignItems(ui.Center)
-		head.DragWindow().Children(func() {
-			back := a.iconButton(c, "back", icArrowLeft, "Back", false).Padding(5)
-			fwd := a.iconButton(c, "forward", icArrowRight, "Forward", false).Padding(5)
-			// One button, which stops a page loading and reloads one that
-			// isn't: each call of iconButton builds one.
-			loading := p != nil && p.IsLoading()
-			var reload ui.Element
-			if loading {
-				reload = a.iconButton(c, "stop", icX, "Stop", false).Padding(5)
-			} else {
-				reload = a.iconButton(c, "reload", icRotate, "Reload  ⌘R", false).Padding(5)
-			}
-			back.Disabled(p == nil || !p.CanGoBack())
-			fwd.Disabled(p == nil || !p.CanGoForward())
-			reload.Disabled(p == nil && t.err == "")
-			if p != nil {
-				if back.Clicked() {
-					p.GoBack()
-				}
-				if fwd.Clicked() {
-					p.GoForward()
-				}
-			}
-			if reload.Clicked() {
-				if loading {
-					p.Stop()
-				} else {
-					a.reload(t)
-				}
-			}
-			// The address: Enter goes there; one without a scheme is
-			// https, or http on this machine and the local network.
-			in := ui.TextInput(c.Key(tabKey{t.id, "url"}), &t.draft).Grow(1).FontSize(12).Font("monospace").
-				Padding(5, 10).Radius(8).Label("Address").Placeholder("Type an address")
-			if b.focusAddress {
-				in.Focus()
-				b.focusAddress = false
-			}
-			b.typing = in.Focused()
-			if in.Submitted() && strings.TrimSpace(t.draft) != "" {
-				a.goTo(t, t.draft)
-			}
-			if a.iconButton(c, "new-tab", icPlus, "New tab  ⌘T", false).Padding(5).Clicked() {
-				a.newTab("")
-			}
-			if a.iconButton(c, "external", icExternal, "Open in browser", false).Padding(5).Disabled(t.url == "").Clicked() {
-				c.OpenURL(t.url)
-			}
-			if a.iconButton(c, "close-preview", icX, "Close preview", false).Padding(5).Clicked() {
-				a.showPreview = false
-			}
-		})
-		if len(b.tabs) > 1 {
-			a.tabStrip(c)
-			// The strip may have shown or closed a tab.
-			t = b.current()
-			p = a.tabPage(t)
+		ctx := func(part string) func(plugins.ThreadRecord) any {
+			return func(plugins.ThreadRecord) any { return a.previewState(bar, part) }
 		}
-		// Below its glass header, the panel on the sidebar's color.
-		ui.Column(c).Grow(1).Background(palette.sidebar).BorderWidth(1, 0, 0, 1).BorderColor(palette.border).Children(func() {
-			switch {
-			case p != nil:
-				p.Show(c).Grow(1)
-			case t.err != "":
-				ui.Text(c, "The preview could not start: "+t.err).TextColor(palette.muted).Margin(ui.Auto).Padding(24)
-			case t.url == "":
-				a.emptyTab(c, t)
-			default:
-				ui.Text(c, "The preview shows here, in the app's window.").TextColor(palette.muted).Margin(ui.Auto)
-			}
+		a.pluginComponent(c, "thread.panel.preview", nil, componentCopy{
+			key: "preview/header", box: func() ui.Element { return ui.Column(c).Key("component:thread.panel.preview:header").Shrink(0) }, context: ctx("header"),
+			native: func(*widget.Node) { a.previewHeader(c, bar) },
+		})
+		if len(a.browser.tabs) > 1 {
+			a.pluginComponent(c, "thread.panel.preview", nil, componentCopy{
+				key: "preview/tabs", box: func() ui.Element { return ui.Column(c).Key("component:thread.panel.preview:tabs").Shrink(0) }, context: ctx("tabs"),
+				native: func(*widget.Node) { a.tabStrip(c) },
+			})
+		} else {
+			// No copy is drawn: the plugin hears its strip went.
+			a.pluginComponent(c, "thread.panel.preview", nil)
+		}
+		a.pluginComponent(c, "thread.panel.preview", nil, componentCopy{
+			key: "preview/body", box: func() ui.Element {
+				return ui.Column(c).Key("component:thread.panel.preview:body").Grow(1).Shrink(1).Basis(0)
+			}, context: ctx("body"),
+			native: func(*widget.Node) { a.previewBody(c) },
 		})
 		// Last, over what is built before it; beside the page, not over it,
 		// as the page's web view takes the pointer over its bounds.
 		a.previewEdge(c)
+	})
+	// The flag is for a few frames' address, native or a plugin's: the
+	// plugin's drawing answers asynchronously. Focus itself then belongs
+	// to the input, so the flag doesn't focus it again.
+	if b := &a.browser; b.focusAddressHold > 0 {
+		b.focusAddressHold--
+		if b.focusAddressHold == 0 {
+			b.focusAddress = false
+		}
+	}
+}
+
+// previewHeader is the panel's navigation bar as Glitched draws it without
+// a plugin: back and forward, reload or stop, the address, a new tab, the
+// system browser and Close.
+func (a *app) previewHeader(c *ui.Context, bar ui.TitleBar) {
+	b := &a.browser
+	t := b.current()
+	p := a.tabPage(t)
+	// Clear of the window's buttons on Windows and Linux, at its right.
+	head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8+bar.Right, 0, 10).Gap(4).AlignItems(ui.Center)
+	head.DragWindow().Children(func() {
+		back := a.iconButton(c, "back", icArrowLeft, "Back", false).Padding(5)
+		fwd := a.iconButton(c, "forward", icArrowRight, "Forward", false).Padding(5)
+		// One button, which stops a page loading and reloads one that
+		// isn't: each call of iconButton builds one.
+		loading := p != nil && p.IsLoading()
+		var reload ui.Element
+		if loading {
+			reload = a.iconButton(c, "stop", icX, "Stop", false).Padding(5)
+		} else {
+			reload = a.iconButton(c, "reload", icRotate, "Reload  ⌘R", false).Padding(5)
+		}
+		back.Disabled(p == nil || !p.CanGoBack())
+		fwd.Disabled(p == nil || !p.CanGoForward())
+		reload.Disabled(p == nil && t.err == "")
+		if p != nil {
+			if back.Clicked() {
+				p.GoBack()
+			}
+			if fwd.Clicked() {
+				p.GoForward()
+			}
+		}
+		if reload.Clicked() {
+			if loading {
+				p.Stop()
+			} else {
+				a.reload(t)
+			}
+		}
+		// The address: Enter goes there; one without a scheme is
+		// https, or http on this machine and the local network.
+		in := ui.TextInput(c.Key(tabKey{t.id, "url"}), &t.draft).Grow(1).FontSize(12).Font("monospace").
+			Padding(5, 10).Radius(8).Label("Address").Placeholder("Type an address")
+		if b.focusAddress {
+			in.Focus()
+			b.focusAddress, b.focusAddressHold = false, 0
+		}
+		b.typing = in.Focused()
+		if in.Submitted() && strings.TrimSpace(t.draft) != "" {
+			a.goTo(t, t.draft)
+		}
+		if a.iconButton(c, "new-tab", icPlus, "New tab  ⌘T", false).Padding(5).Clicked() {
+			a.newTab("")
+		}
+		if a.iconButton(c, "external", icExternal, "Open in browser", false).Padding(5).Disabled(t.url == "").Clicked() {
+			c.OpenURL(t.url)
+		}
+		if a.iconButton(c, "close-preview", icX, "Close preview", false).Padding(5).Clicked() {
+			a.showPreview = false
+		}
+	})
+}
+
+// previewBody is the current tab's page, its error, or its empty page.
+// As the native browser.webview it is asked for only once the plugin knows
+// there is a page, so the web view itself is what shows.
+func (a *app) previewBody(c *ui.Context) {
+	b := &a.browser
+	t := b.current()
+	p := a.tabPage(t)
+	// Below its glass header, the panel on the sidebar's color.
+	ui.Column(c).Grow(1).Background(palette.sidebar).BorderWidth(1, 0, 0, 1).BorderColor(palette.border).Children(func() {
+		switch {
+		case p != nil:
+			p.Show(c).Grow(1)
+		case t.err != "":
+			ui.Text(c, "The preview could not start: "+t.err).TextColor(palette.muted).Margin(ui.Auto).Padding(24)
+		case t.url == "":
+			a.emptyTab(c, t)
+		default:
+			ui.Text(c, "The preview shows here, in the app's window.").TextColor(palette.muted).Margin(ui.Auto)
+		}
 	})
 }
 
@@ -498,7 +683,7 @@ func (a *app) browserShortcuts(c *ui.Context) {
 		return
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyL) {
-		a.browser.focusAddress = true
+		a.browser.askFocusAddress()
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyR) {
 		a.reload(a.browser.current())

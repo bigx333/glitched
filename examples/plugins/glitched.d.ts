@@ -137,6 +137,8 @@ type Widget = {
       value?: string;
       /** The plugin holds the value: once it took the user's changes, value is the value. */
       controlled?: boolean;
+      /** Give it the keyboard as it is drawn. */
+      focus?: boolean;
       multiline?: boolean;
       disabled?: boolean;
       /** search: a magnifier and a clear button. */
@@ -144,6 +146,8 @@ type Widget = {
       onChange?: Handler;
       /** Enter, in a single-line input. */
       onSubmit?: Handler;
+      /** The input loses the keyboard. */
+      onBlur?: Handler;
     }
   | {
       type: "toggle";
@@ -366,7 +370,28 @@ type NativeWidget = {
       props?: { dot?: boolean };
     }
   | {
-      /** In composer.model, in a list's row or not: a model's mark, the copy's model's or, with family, that family's; size is its side, 18 by default. */
+      /** Glitched's Send button, in composer.send. */
+      name: "composer.send.button";
+    }
+  | {
+      /** Glitched's access picker, in composer.access, whose hold-to-grant gesture and haptics stay native. */
+      name: "composer.access.picker";
+    }
+  | {
+      /** The terminal itself, in thread.panel.terminal. */
+      name: "terminal.body";
+    }
+  | {
+      /** The preview's web view, in thread.panel.preview. */
+      name: "browser.webview";
+    }
+  | {
+      /** A CLI update row's controls, in sidebar.footer.updates. */
+      name: "cli.update";
+      props: { machine: string; provider: string; title: string };
+    }
+  | {
+      /** In composer.model or sidebar.footer.updates, in a list's row or not: a model's or provider's mark, the copy's model's or, with family, that family's; size is its side, 18 by default. */
       name: "model.tile";
       props?: { family?: string; size?: number };
     }
@@ -557,9 +582,14 @@ type Component =
   | "composer.workspace"
   | "composer.model"
   | "timeline.message"
+  | "timeline.report"
   | "message.toolbar"
   | "thread.header.breadcrumb"
-  | "thread.header.usage";
+  | "thread.header.usage"
+  | "thread.panel.terminal"
+  | "thread.panel.preview"
+  | "selection.actions"
+  | "sidebar.footer.updates";
 
 /** The settings glitched.app.settings reads and sets, by settings.json's names. */
 interface AppSettings {
@@ -624,9 +654,14 @@ type ComponentContext =
   | ComposerAccessContext
   | ComposerModelContext
   | TimelineMessageContext
+  | TimelineReportContext
   | MessageToolbarContext
   | HeaderBreadcrumbContext
   | HeaderUsageContext
+  | TerminalPanelContext
+  | PreviewPanelContext
+  | SelectionActionsContext
+  | CLIUpdatesContext
   | Record<string, never>;
 
 /**
@@ -646,6 +681,27 @@ interface TimelineMessageContext {
   failed?: boolean;
   /** When you sent a message of yours (as the engine took it in, even while it waits, is held or was cancelled), or a reply's first words came, in ISO 8601; left out before the engine takes a message in and for other rows. */
   at?: string;
+  /** A work row's state and steps, structured for the plugin's own log. */
+  working?: boolean;
+  paused?: string;
+  took?: string;
+  work?: { item: string; kind: string; title: string; status: string; path?: string; exit?: number; output?: string; started?: string; ended?: string; subagent?: boolean; steps?: number }[];
+  /** A plan row's steps. */
+  plan?: { text: string; status: string }[];
+}
+
+/**
+ * The context of timeline.report: which child report card a copy is. Its
+ * layout must place the native report.body once; report.body draws the
+ * reports themselves.
+ */
+interface TimelineReportContext {
+  /** The row's key, the same while it changes. */
+  key: string;
+  /** How many reports the card holds. */
+  reports: number;
+  /** How the reports went to the parent's agent, when one did. */
+  wake?: string;
 }
 
 /**
@@ -682,6 +738,80 @@ interface HeaderUsageContext {
   tokens: number;
   /** Its and every thread's under it. */
   total: number;
+}
+
+/** The context of thread.panel.terminal: chrome around the native terminal.body. */
+interface TerminalPanelContext {
+  thread: ThreadRecord;
+  part: "header" | "body";
+  title: string;
+  error?: boolean;
+}
+
+/** A preview tab as thread.panel.preview's context lists it. */
+interface PreviewTab {
+  id: number;
+  url: string;
+  draft: string;
+  title: string;
+  label: string;
+  active: boolean;
+  loading: boolean;
+  failed?: boolean;
+  error?: string;
+  canBack: boolean;
+  canForward: boolean;
+}
+
+/** The context of thread.panel.preview: chrome around the native browser.webview. The browser calls act only on this window's panel. */
+interface PreviewPanelContext {
+  part: "header" | "tabs" | "body";
+  tabs: PreviewTab[];
+  active: number;
+  url: string;
+  draft: string;
+  loading: boolean;
+  failed?: boolean;
+  error?: string;
+  page: boolean;
+  canBack: boolean;
+  canForward: boolean;
+  /** Give the address the keyboard as it is drawn. */
+  focus?: boolean;
+  devUrl: string;
+  barHeight: number;
+  barRight: number;
+}
+
+/** The context of selection.actions, the floating selection bar's actions. */
+interface SelectionActionsContext {
+  thread: ThreadRecord;
+}
+
+/** One provider CLI with an update, as sidebar.footer.updates lists it. */
+interface CLIUpdate {
+  machine: string;
+  machineName: string;
+  provider: string;
+  title: string;
+  installed?: string;
+  latest?: string;
+  manual?: boolean;
+  online: boolean;
+  waiting?: boolean;
+  running?: boolean;
+  failed?: boolean;
+  busy?: boolean;
+}
+
+/** The context of sidebar.footer.updates. Each row's update controls stay the native cli.update. */
+interface CLIUpdatesContext {
+  updates: CLIUpdate[];
+  tooltip: string;
+  running?: boolean;
+  failed?: boolean;
+  needed?: boolean;
+  canUpdateAll: boolean;
 }
 
 /** The context of composer: its layout must place the native composer.input once. */
@@ -890,7 +1020,7 @@ declare const glitched: {
     state(): Promise<PanelState>;
   };
   /** Opens the thread's workspace, on this machine, in an app. Needs threads:read. */
-  openIn(app: "cursor" | "vscode" | "zed" | "finder", thread: string): Promise<void>;
+  openIn(app: "cursor" | "vscode" | "zed" | "finder" | "editor", thread: string): Promise<void>;
   app: {
     /** About's update check: the page shows it runs, then a toast says how it went. */
     checkForUpdates(): Promise<void>;
@@ -922,6 +1052,29 @@ declare const glitched: {
     draft(text: string, where?: string | { thread: string }): Promise<void>;
     /** Sends what the open composer holds, as Send does: the thread's, or a new thread's with "". Needs threads:write. */
     submit(thread: string): Promise<void>;
+    /** Quotes the open selection in the thread's composer, optionally asking ask about it. Needs threads:write. */
+    quote(thread: string, ask?: string): Promise<void>;
+  };
+  /** The preview browser in this window. Needs ui.place. */
+  browser: {
+    /** The address loses the keyboard. */
+    blur(tab: number): Promise<void>;
+    /** Keeps the tab's typed address as the user types it. */
+    draft(tab: number, text: string): Promise<void>;
+    navigate(tab: number, url: string): Promise<void>;
+    back(tab: number): Promise<void>;
+    forward(tab: number): Promise<void>;
+    reload(tab: number): Promise<void>;
+    stop(tab: number): Promise<void>;
+    newTab(url?: string): Promise<void>;
+    closeTab(tab: number): Promise<void>;
+    activateTab(tab: number): Promise<void>;
+  };
+  /** Engine-managed provider CLI updates. Needs providers:update. */
+  cliUpdates: {
+    update(machine: string, provider: string, whenIdle?: boolean): Promise<void>;
+    updateAll(): Promise<void>;
+    check(machine: string, provider: string): Promise<void>;
   };
   threads: {
     list(): Promise<ThreadRecord[]>;
