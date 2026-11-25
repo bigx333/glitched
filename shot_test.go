@@ -263,6 +263,12 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		a := testApp(t, t.TempDir(), nil, func(func()) {})
 		return a, ui.NewTester(a.view, 1320, 860)
 	}
+	h := sceneHarness(t, name)
+	return h.a, h.tt
+}
+
+// sceneHarness is the harness of the scene name, one of scene's but "".
+func sceneHarness(t *testing.T, name string) *harness {
 	var h *harness
 	switch name {
 	case "empty":
@@ -610,7 +616,7 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 	case "wizard":
 		h = wizardShot(t, os.Getenv("WIZARD"))
 	}
-	return h.a, h.tt
+	return h
 }
 
 // midTurn is a turn that stops mid-edit, as stalled holds it.

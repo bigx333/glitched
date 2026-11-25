@@ -25,6 +25,9 @@ function items(ctx) {
     const before = i === 0 ? 0 : 4;
     const after = s.rows.length === 0 && !(s.empty && !s.closed) ? GAP : 0;
     out.push({ key: "h:" + s.id, label: s.title, header: true, height: HEAD + before + after });
+    // A bottom section's rows fold with it as Glitched opens and closes
+    // it: each names it. Its header stays, and the inbox never closes.
+    const sec = ctx.part === "inbox" ? {} : { section: s.id };
     if (s.rows.length === 0 && s.empty && !s.closed) {
       out.push({ key: "e:" + s.id, label: s.empty, header: true, height: ctx.emptyHeight });
     }
@@ -36,11 +39,11 @@ function items(ctx) {
         const height = r.depth > 0 ? CHILD : ROW;
         if (r.full) {
           // The list holds as many as a list can: the rest are the palette's.
-          out.push({ key, label: `${r.more} more not listed: search for them with ⌘K`, header: true, height });
+          out.push({ key, label: `${r.more} more not listed: search for them with ⌘K`, header: true, height, ...sec });
           continue;
         }
         const n = Math.min(r.more, ctx.page);
-        out.push({ key, label: `Show ${n} more, of ${r.more} not shown`, height, version: String(r.more) });
+        out.push({ key, label: `Show ${n} more, of ${r.more} not shown`, height, version: String(r.more), ...sec });
         continue;
       }
       // A child lifted into Working shows there and under its line.
@@ -49,7 +52,7 @@ function items(ctx) {
       // The row's version is what its widgets are made of; its title, as
       // the rest the natives draw, is the app's to keep up to date.
       const version = [r.depth || 0, r.status, r.kids ? 1 : 0, r.renaming ? 1 : 0].join(":");
-      out.push({ key, label: "", thread: r.thread, height: r.depth > 0 ? CHILD : ROW, version });
+      out.push({ key, label: "", thread: r.thread, height: r.depth > 0 ? CHILD : ROW, version, ...sec });
     }
   });
   return out;
