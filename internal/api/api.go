@@ -614,9 +614,12 @@ func (t Thread) Working() bool { return t.Run != RunIdle && t.Run != RunUncertai
 // Silent is whether the live run is a silent one.
 func (t Thread) Silent() bool { return t.Turn != nil && t.Turn.Silent }
 
-// Stoppable is whether the thread has a run the user can stop: a live
-// one that isn't silent.
-func (t Thread) Stoppable() bool { return t.Live() && !t.Silent() }
+// Stoppable is whether the user can stop the thread: it has a live run
+// that isn't silent, or it is a link's thread whose messages wait with
+// no run, on its worktree or its ceiling, where a stop holds them.
+func (t Thread) Stoppable() bool {
+	return t.Live() && !t.Silent() || t.Origin != nil && !t.Live() && t.Queued > 0 && !t.Resumable
+}
 
 // Live is whether the thread has a run, an uncertain one too. Only an
 // interrupt, a settle or a delete ends an uncertain run.
