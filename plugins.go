@@ -72,6 +72,9 @@ var pluginIcons = map[string]*ui.SVG{
 	"message":  icMessage,
 }
 
+// releaseKeys are the keys that sign the built-in plugins.
+var releaseKeys = []string{bundled.ReleaseKey}
+
 // openPlugins loads the plugins installed in the state directory, whose
 // pages and effects run through the app.
 func (a *app) openPlugins(dir string) {
@@ -89,7 +92,7 @@ func (a *app) openPlugins(dir string) {
 		// The built-in plugins: Header actions draws the thread header's
 		// buttons till one of the user's replaces it.
 		Bundled:     bundled.FS,
-		ReleaseKeys: []string{bundled.ReleaseKey},
+		ReleaseKeys: releaseKeys,
 		SignOwn:     true,
 		// Plugins with timers wait for Start, once the window runs and the
 		// language is known.
