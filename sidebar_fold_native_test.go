@@ -26,6 +26,13 @@ func nativeScene(t *testing.T, open bool, many int) *harness {
 	if open {
 		o = "1"
 	}
+	return nativeSceneOpen(t, o, many)
+}
+
+// nativeSceneOpen is nativeScene with the sections OPEN names open from
+// the start: "snoozed" or "settled" opens that one alone.
+func nativeSceneOpen(t *testing.T, o string, many int) *harness {
+	t.Helper()
 	t.Setenv("OPEN", o)
 	t.Setenv("MANY", strconv.Itoa(many))
 	t.Setenv("MANYIN", "")
@@ -55,6 +62,30 @@ func nativeDraws(t *testing.T, h *harness) {
 	if _, ok := h.tt.AccessByRole(ui.RoleList, "Working, Snoozed and Settled"); ok {
 		t.Fatal("a plugin's list of Working, Snoozed and Settled shows")
 	}
+}
+
+// nativeRest is what Glitched's own shows of Snoozed, under it Settled,
+// with the section open names open from the start (nativeSceneOpen),
+// never clicked: where a section left so sits, laid out in this run, as
+// text sits a little otherwise on each platform.
+func nativeRest(t *testing.T, open string) nativeShot {
+	t.Helper()
+	h := nativeSceneOpen(t, open, 0)
+	w := &nativeWatch{t: t, h: h, cat: catSnoozed, header: "Snoozed", next: "Settled", row: "Snoozed until tomorrow"}
+	s := w.shot()
+	want := float32(0)
+	if open == "snoozed" {
+		want = 1
+	}
+	if s.p != want {
+		t.Fatalf("OPEN=%s, Snoozed is %.3f open: %v", open, s.p, s)
+	}
+	for _, cat := range []category{catSnoozed, catSettled} {
+		if f := h.a.sectionFold[cat]; f == nil || f.from != f.to {
+			t.Fatalf("OPEN=%s, section %d folded on its way to rest: %+v", open, cat, f)
+		}
+	}
+	return s
 }
 
 // rowBox is the whole box of the sidebar's row of the thread titled
@@ -245,20 +276,13 @@ func TestSidebarFoldNativeOpensSnoozedAsACurtain(t *testing.T) {
 			t.Errorf("frame %d, open: %v; at rest %v: it jumps at the end", i, s, rest)
 		}
 	}
-	// As Glitched's own drew it opened before sections folded.
-	if !closeTo(rest.head, 710.396, 0.01) || !closeTo(rest.next, 780.396, 0.01) || !closeTo(rest.title.Y, 743.0635, 0.01) {
-		t.Errorf("open at rest: Snoozed %.4f, Settled %.4f, its row's title %.4f; before, 710.396, 780.396 and 743.0635", rest.head, rest.next, rest.title.Y)
-	}
-	// As one left open.
-	fresh := nativeScene(t, false, 0)
-	fresh.a.sectionClosed[catSnoozed] = false
-	fresh.tt.Frame()
-	fresh.tt.Advance(time.Second)
-	fw := &nativeWatch{t: t, h: fresh, cat: catSnoozed, header: "Snoozed", next: "Settled", row: "Snoozed until tomorrow"}
-	// The pointer, where the click left it, is over the row opened, whose
-	// title gives way to its actions.
-	if f := fw.shot(); f.head != rest.head || f.next != rest.next || f.row != rest.row || f.title.Y != rest.title.Y || f.title.H != rest.title.H {
-		t.Errorf("opened, it shows %v; left open, %v", rest, f)
+	// As one open from the start, never clicked, sits: the pointer, where
+	// the click left it, is over the row opened, whose title gives way to
+	// its actions.
+	if f := nativeRest(t, "snoozed"); !closeTo(rest.head, f.head, 0.01) || !closeTo(rest.next, f.next, 0.01) || !f.hasRow ||
+		!closeTo(rest.row.Y, f.row.Y, 0.01) || !closeTo(rest.row.H, f.row.H, 0.01) || !closeTo(rest.title.Y, f.title.Y, 0.01) || !closeTo(rest.title.H, f.title.H, 0.01) {
+		t.Errorf("open at rest: Snoozed %.4f, Settled %.4f, its row %v, its title %v; left open, %.4f, %.4f, %v and %v",
+			rest.head, rest.next, rest.row, rest.title, f.head, f.next, f.row, f.title)
 	}
 	if t.Failed() || testing.Verbose() {
 		w.log()
@@ -328,8 +352,9 @@ func TestSidebarFoldNativeShutsSnoozedAsACurtain(t *testing.T) {
 			t.Errorf("frame %d, shut: %v; at rest %v: it jumps at the end", i, s, rest)
 		}
 	}
-	if !closeTo(rest.head, 710.396, 0.01) || !closeTo(rest.next, 748.396, 0.01) {
-		t.Errorf("shut at rest: Snoozed %.4f, Settled %.4f; before, 710.396 and 748.396", rest.head, rest.next)
+	// As one shut from the start, never clicked, sits.
+	if f := nativeRest(t, "settled"); !closeTo(rest.head, f.head, 0.01) || !closeTo(rest.next, f.next, 0.01) || f.hasRow {
+		t.Errorf("shut at rest: Snoozed %.4f, Settled %.4f; left shut, %v", rest.head, rest.next, f)
 	}
 	if t.Failed() || testing.Verbose() {
 		w.log()
