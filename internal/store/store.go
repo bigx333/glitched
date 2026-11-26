@@ -268,7 +268,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 20
+const schemaVersion = 21
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -423,6 +423,9 @@ ALTER TABLE runs ADD COLUMN wake INTEGER NOT NULL DEFAULT 0 CHECK (wake BETWEEN 
 ALTER TABLE runs ADD COLUMN woke INTEGER;
 ALTER TABLE runs ADD COLUMN prior INTEGER;
 ALTER TABLE runs ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0 CHECK (dismissed IN (0, 1));
+`,
+	20: `
+UPDATE threads SET disposition = 0, until = NULL WHERE role = 'manager' AND disposition <> 0;
 `,
 }
 

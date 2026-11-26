@@ -74,15 +74,19 @@ type managerDoc struct {
 	exists    bool
 	size      int64
 	truncated bool
+	omitted   bool
 	text      string
 }
 
 // managerDocNames are the docs the engine injects into a Manager and its
-// workers (internal/runtime/manager_docs.go), and managerDocLimit how much
-// of each it reads.
+// workers (internal/runtime/manager_docs.go), managerDocLimit how much of
+// each it reads, and managerDocTotalLimit the combined cap across all files.
 var managerDocNames = []string{"AGENTS.md", "WORKERS.md", "NOTES.md"}
 
-const managerDocLimit = 16 << 10
+const (
+	managerDocLimit      = 16 << 10
+	managerDocTotalLimit = 32 << 10
+)
 
 // managerStarters are what Create writes into a missing doc.
 var managerStarters = map[string]string{
@@ -131,15 +135,52 @@ func sweepSeconds(s *api.SweepSchedule) int64 {
 	return max(s.IntervalSeconds, 0)
 }
 
+// effectiveSweep is t's sweep schedule, folded with any pending configure
+// that has not failed, so back-to-back cadence and prompt edits compose
+// instead of overwriting one another.
+func effectiveSweep(t thread) *api.SweepSchedule {
+	s := t.View.Sweep
+	for _, p := range t.Pending {
+		if p.Err != nil {
+			continue
+		}
+		if c, ok := p.Body.(api.ThreadConfigure); ok && c.Sweep != nil {
+			s = c.Sweep
+		}
+	}
+	return s
+}
+
+// sweepBlocked is whether RunSweep would be refused right now: the Manager
+// is running or holding queued work waiting to resume.
+func sweepBlocked(t thread) bool {
+	return t.View.Live() || t.View.Resumable || t.View.Queued > 0
+}
+
+// threadNeedsYou reports whether t needs the user's attention, why, and
+// whether the reason is a failure. Remote placeholders expose RunWaiting
+// even when their local Requests slice is empty.
+func threadNeedsYou(t thread) (why string, isFail bool, ok bool) {
+	switch {
+	case len(t.View.Requests) > 0 || t.View.Run == api.RunWaiting:
+		return "Waits on you", false, true
+	case t.View.Run == api.RunUncertain:
+		return "Interrupted", false, true
+	case failedLast(t):
+		return "Failed", true, true
+	}
+	return "", false, false
+}
+
 // managerAttention is how many of the Manager t and its workers wait on
 // the user or failed, and how many workers work.
 func (a *app) managerAttention(t thread) (needs, active int) {
 	tree := a.shown(t)
-	if len(t.View.Requests) > 0 {
+	if _, _, ok := threadNeedsYou(t); ok {
 		needs++
 	}
 	for _, n := range tree {
-		if len(n.t.View.Requests) > 0 || failedLast(n.t) {
+		if _, _, ok := threadNeedsYou(n.t); ok {
 			needs++
 		}
 	}
@@ -177,6 +218,14 @@ func (a *app) managersSection(c *ui.Context) {
 			if len(items) > 0 && head.Clicked() {
 				a.mgr.closed = !a.mgr.closed
 			}
+			if lost := a.lostManagers(); len(lost) > 0 {
+				b := a.tip(c, ghost(c, "continue-all-managers", false).Padding(2, 8).Label("Continue all"),
+					"Continue "+plural(len(lost), "manager")+" whose agent was cut off, two at a time")
+				if b.Children(func() { ui.Text(c, "Continue all").FontSize(11.5) }).Clicked() {
+					a.continueAll(lost)
+					c.AddToast(ui.Toast{Title: "Continuing", Description: plural(len(lost), "manager"), Type: "info"})
+				}
+			}
 			if a.iconButton(c, "new-manager", icPlus, "New manager", false).Padding(5).Clicked() {
 				env, key := a.defaultManagerProject()
 				a.openManagerDialog(env, key)
@@ -211,11 +260,12 @@ func (a *app) managersSection(c *ui.Context) {
 const managerRowsHeight = 220
 
 // managersCount is the Managers' count: amber while one, or a worker under
-// one, waits on the user, the accent while one is unread.
+// one, waits on the user or failed, the accent while one is unread.
 func (a *app) managersCount(c *ui.Context, items []inboxItem) {
 	needs, unread := false, false
 	for _, it := range items {
-		needs = needs || len(it.t.View.Requests) > 0 || needsYou(a.shown(it.t))
+		n, _ := a.managerAttention(it.t)
+		needs = needs || n > 0
 		unread = unread || a.backend.Unread(it.t.Thread)
 	}
 	n := ui.Textf(c, "%d", len(items)).FontSize(11).FontWeight(600).Padding(1, 7).Radius(999)
@@ -250,6 +300,7 @@ func (a *app) managerRow(c *ui.Context, it inboxItem) {
 		if a.backend.Unread(t.Thread) {
 			name.FontWeight(600).TextColor(palette.text)
 		}
+		a.pluginSlot(c, "thread.row", t.id().String(), &t, false, true)
 		if len(a.backend.Envs()) > 1 {
 			a.machineBadge(c, t.env)
 		}
@@ -276,10 +327,15 @@ func (a *app) managerMark(c *ui.Context, t thread, tree []node, selected bool) {
 	if selected {
 		dim = palette.muted
 	}
+	_, _, selfNeeds := threadNeedsYou(t)
+	anyNeeds := selfNeeds || slices.ContainsFunc(tree, func(n node) bool {
+		_, _, ok := threadNeedsYou(n.t)
+		return ok
+	})
 	switch {
 	case failed(t):
 		a.tip(c, ui.Box(c).Size(7, 7).Radius(4).Background(palette.red).Label("A command failed"), "A command failed")
-	case len(t.View.Requests) > 0 || needsYou(tree):
+	case anyNeeds:
 		ui.Text(c, "Needs you").FontSize(10.5).FontWeight(600).TextColor(palette.amber).
 			Background(palette.amber.Alpha(0.16)).Padding(1, 5).Radius(999).Shrink(0)
 	case working(tree) > 0:
@@ -310,14 +366,15 @@ func (a *app) managerMenu(c *ui.Context, m *ui.Menu, t thread) {
 		}
 	}
 	m.Separator()
-	if m.Item("Run sweep now").Disabled(t.View.Live()).Chosen() {
+	if m.Item("Run sweep now").Disabled(sweepBlocked(t)).Chosen() {
 		a.backend.RunSweep(t.env, t.id(), "")
 	}
 	m.Submenu("Sweep schedule", func(m *ui.Menu) {
-		at := sweepSeconds(t.View.Sweep)
+		cur := effectiveSweep(t)
+		at := sweepSeconds(cur)
 		for _, s := range sweepChoices {
 			if m.Item(s.name()).Radio(at == s.secs).Chosen() {
-				a.backend.SetSweep(t.env, t.id(), sweepWithInterval(t.View.Sweep, s.secs))
+				a.backend.SetSweep(t.env, t.id(), sweepWithInterval(cur, s.secs))
 			}
 		}
 	})
@@ -489,20 +546,33 @@ func (a *app) managerDialog(c *ui.Context) {
 		})
 		ui.Column(c).Gap(6).Children(func() {
 			field("PROJECT")
-			ui.Row(c).Key("manager-projects").Wrap().Gap(6).Children(func() {
-				for _, p := range a.projects {
-					if p.noProject {
-						continue
+			chips := func() {
+				ui.Row(c).Key("manager-projects").Wrap().Gap(6).Children(func() {
+					for _, p := range a.projects {
+						if p.noProject {
+							continue
+						}
+						on := !d.scratch && d.env == p.env && d.project == p.key
+						if managerChip(c, "manager-project:"+p.key.String(), a.projectLabel(p), on).Label("Project " + a.projectLabel(p)).Clicked() {
+							a.pickManagerProject(p)
+						}
 					}
-					on := !d.scratch && d.env == p.env && d.project == p.key
-					if managerChip(c, "manager-project:"+p.key.String(), a.projectLabel(p), on).Label("Project " + a.projectLabel(p)).Clicked() {
-						a.pickManagerProject(p)
+					if a.localEnv() != nil && managerChip(c, "manager-project:none", "No project", d.scratch).Clicked() {
+						a.pickManagerProject(nil)
 					}
+				})
+			}
+			named := 0
+			for _, p := range a.projects {
+				if !p.noProject {
+					named++
 				}
-				if a.localEnv() != nil && managerChip(c, "manager-project:none", "No project", d.scratch).Clicked() {
-					a.pickManagerProject(nil)
-				}
-			})
+			}
+			if named > 6 {
+				ui.Scroll(c).Key("manager-projects-scroll").Height(110).Shrink(0).Children(chips)
+			} else {
+				chips()
+			}
 		})
 		ui.Column(c).Gap(6).Children(func() {
 			field("SWEEPS")
@@ -547,7 +617,7 @@ func managerChip(c *ui.Context, key, label string, on bool) ui.Element {
 // what it last did.
 func sweepTiming(t thread, now time.Time) string {
 	last := t.View.LastSweep
-	secs := sweepSeconds(t.View.Sweep)
+	secs := sweepSeconds(effectiveSweep(t))
 	var parts []string
 	if !last.IsZero() {
 		parts = append(parts, "Last sweep "+agoPhrase(last, now))
@@ -559,7 +629,13 @@ func sweepTiming(t thread, now time.Time) string {
 		parts = append(parts, "Sweeps paused")
 	case t.View.Live():
 		parts = append(parts, "Next after this run")
+	case t.View.Resumable || t.View.Queued > 0:
+		parts = append(parts, "Paused while queued work waits")
 	default:
+		if resets, ok := t.View.LimitResume(now); ok && resets.After(now) {
+			parts = append(parts, "Waiting on usage limit ("+span(resets.Sub(now))+")")
+			break
+		}
 		base := last
 		if t.View.UpdatedAt.After(base) {
 			base = t.View.UpdatedAt
@@ -568,6 +644,11 @@ func sweepTiming(t thread, now time.Time) string {
 			base = t.View.LastTurn.Ended
 		}
 		next := base.Add(time.Duration(secs) * time.Second)
+		if resets, ok := t.View.LimitResume(now); ok {
+			if after := resets.Add(api.LimitOverdue + time.Nanosecond); after.After(next) {
+				next = after
+			}
+		}
 		if next.After(now) {
 			parts = append(parts, "Next in "+span(next.Sub(now)))
 		} else {
@@ -607,7 +688,7 @@ func (a *app) syncSweepDraft(t thread, force bool) {
 		return
 	}
 	a.mgr.promptFor, a.mgr.promptDraft = t.id(), ""
-	if s := t.View.Sweep; s != nil {
+	if s := effectiveSweep(t); s != nil {
 		a.mgr.promptDraft = s.Prompt
 	}
 }
@@ -619,7 +700,7 @@ func (a *app) toggleSweepPopover(t thread) {
 		return
 	}
 	a.mgr.sweepPopover = t.id()
-	a.syncSweepDraft(t, true)
+	a.syncSweepDraft(t, false)
 }
 
 // sweepPopover is the header's sweep popover of t, under anchor while
@@ -650,17 +731,18 @@ func (a *app) sweepPopover(c *ui.Context, t thread, anchor ui.Element) {
 // sweep now, which in the popover closes it.
 func (a *app) sweepControls(c *ui.Context, t thread, inPanel bool) {
 	a.syncSweepDraft(t, false)
-	at := sweepSeconds(t.View.Sweep)
+	cur := effectiveSweep(t)
+	at := sweepSeconds(cur)
 	ui.Row(c).Key("sweep-cadence").Gap(6).Children(func() {
 		for _, s := range sweepChoices {
 			if managerChip(c, "cadence:"+s.label, s.label, at == s.secs).Label(s.name()).Clicked() && at != s.secs {
-				a.backend.SetSweep(t.env, t.id(), sweepWithInterval(t.View.Sweep, s.secs))
+				a.backend.SetSweep(t.env, t.id(), sweepWithInterval(cur, s.secs))
 			}
 		}
 	})
 	saved := ""
-	if t.View.Sweep != nil {
-		saved = t.View.Sweep.Prompt
+	if cur != nil {
+		saved = cur.Prompt
 	}
 	ui.TextArea(c.Key("sweep-prompt"), &a.mgr.promptDraft).Label("Standing sweep prompt").
 		Placeholder("Default: review workers, WORKERS.md and NOTES.md; stay quiet when all is on track.").
@@ -676,7 +758,7 @@ func (a *app) sweepControls(c *ui.Context, t thread, inPanel bool) {
 			a.mgr.promptDraft = ""
 		}
 		ui.Spacer(c)
-		if ui.PrimaryButton(c.Key("sweep-run"), "Run sweep now").Disabled(t.View.Live()).Clicked() {
+		if ui.PrimaryButton(c.Key("sweep-run"), "Run sweep now").Disabled(sweepBlocked(t)).Clicked() {
 			a.backend.RunSweep(t.env, t.id(), "")
 			if !inPanel {
 				a.mgr.sweepPopover = api.ID{}
@@ -700,7 +782,7 @@ func (a *app) openOverview(t thread) {
 	a.mgr.sweepPopover = api.ID{}
 	a.showDiff, a.showPreview, a.showPluginTab, a.panelsJump = false, false, false, false
 	delete(a.subagentStep, t.id())
-	a.syncSweepDraft(t, true)
+	a.syncSweepDraft(t, false)
 	if t.local() {
 		a.ensureManagerDocs(t.project(), true)
 	}
@@ -772,19 +854,17 @@ func overviewSection(c *ui.Context, heading, note string, body func()) {
 // failed; a click shows one. It shows only while there are some.
 func (a *app) needsYouCard(c *ui.Context, t thread, tree []node) {
 	type need struct {
-		t   thread
-		why string
+		t      thread
+		why    string
+		isFail bool
 	}
 	var needs []need
-	if len(t.View.Requests) > 0 {
-		needs = append(needs, need{t, "Waits on you"})
+	if why, isFail, ok := threadNeedsYou(t); ok {
+		needs = append(needs, need{t, why, isFail})
 	}
 	for _, n := range tree {
-		switch {
-		case len(n.t.View.Requests) > 0:
-			needs = append(needs, need{n.t, "Waits on you"})
-		case failedLast(n.t):
-			needs = append(needs, need{n.t, "Failed"})
+		if why, isFail, ok := threadNeedsYou(n.t); ok {
+			needs = append(needs, need{n.t, why, isFail})
 		}
 	}
 	if len(needs) == 0 {
@@ -798,7 +878,7 @@ func (a *app) needsYouCard(c *ui.Context, t thread, tree []node) {
 		})
 		for _, n := range needs {
 			col := palette.amber
-			if n.why == "Failed" {
+			if n.isFail {
 				col = palette.red
 			}
 			if row(c, "need:"+n.t.id().String(), false).Height(28).Padding(0, 6).Children(func() {
@@ -819,7 +899,7 @@ func (a *app) workersCard(c *ui.Context, t thread, tree []node) {
 	ws := slices.Clone(tree)
 	rank := func(k thread) int {
 		switch {
-		case len(k.View.Requests) > 0:
+		case len(k.View.Requests) > 0 || k.View.Run == api.RunWaiting || k.View.Run == api.RunUncertain:
 			return 0
 		case k.View.Live():
 			return 1
@@ -929,6 +1009,8 @@ func (a *app) docRow(c *ui.Context, root string, d *workspaceDocs, f managerDoc)
 				ui.Spacer(c)
 				status := "Not created"
 				switch {
+				case f.omitted:
+					status = "Over 32 KB cap"
 				case f.truncated:
 					status = "Truncated"
 				case f.exists:
@@ -1014,10 +1096,12 @@ func (a *app) ensureManagerDocs(root string, force bool) *workspaceDocs {
 	return d
 }
 
-// readManagerDocs reads root's docs, each as far as a Manager is given it.
+// readManagerDocs reads root's docs, each as far as a Manager is given it,
+// tracking the engine's 32 KiB combined injection cap across files.
 func readManagerDocs(root string) ([]managerDoc, error) {
 	var out []managerDoc
 	var errs []error
+	remaining := managerDocTotalLimit
 	for _, name := range managerDocNames {
 		f := managerDoc{name: name}
 		fi, err := os.Stat(filepath.Join(root, name))
@@ -1032,15 +1116,27 @@ func readManagerDocs(root string) ([]managerDoc, error) {
 				errs = append(errs, err)
 				break
 			}
-			data, err := io.ReadAll(io.LimitReader(file, managerDocLimit+1))
+			limit := managerDocLimit
+			if remaining > 0 {
+				limit = min(managerDocLimit, remaining)
+			} else {
+				f.omitted = true
+			}
+			data, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
 			file.Close()
 			if err != nil {
 				errs = append(errs, err)
 			}
-			if len(data) > managerDocLimit {
-				data, f.truncated = data[:managerDocLimit], true
+			if len(data) > limit {
+				data = data[:limit]
+				if !f.omitted {
+					f.truncated = true
+				}
 			}
 			f.text = string(data)
+			if !f.omitted && strings.TrimSpace(f.text) != "" {
+				remaining -= len(data)
+			}
 		}
 		out = append(out, f)
 	}
@@ -1087,7 +1183,8 @@ func (a *app) managerEmpty(c *ui.Context, t thread) {
 		}
 		ui.Text(c, about).FontSize(13).TextColor(palette.muted)
 		ui.Row(c).Key("manager-chips").Wrap().Gap(6).Justify(ui.Center).Children(func() {
-			emptyChip(c, sweepLabel(t.View.Sweep), sweepSeconds(t.View.Sweep) > 0)
+			sw := effectiveSweep(t)
+			emptyChip(c, sweepLabel(sw), sweepSeconds(sw) > 0)
 			var have map[string]bool
 			if t.local() {
 				have = map[string]bool{}

@@ -684,8 +684,8 @@ func (d *decision) dismissWake(b api.WakeDismiss) error {
 }
 
 // runSweep starts a sweep the user asked for now, under the command's ID,
-// whether or not sweeps are scheduled. A Manager a store kept settled from
-// before comes back to the inbox with it.
+// whether or not sweeps are scheduled. It refuses while the Manager is
+// busy or holds work waiting to run or resume.
 func (d *decision) runSweep(id api.ID, b api.SweepRun) error {
 	if d.t.Role != api.RoleManager || d.t.child() {
 		return rejected("only a manager thread can run a sweep")
@@ -693,13 +693,11 @@ func (d *decision) runSweep(id api.ID, b api.SweepRun) error {
 	if d.t.Live() != nil {
 		return rejected("the manager is already working")
 	}
+	if d.t.resumable() || d.t.next() != nil {
+		return rejected("the manager has work waiting; resume or send a message first")
+	}
 	if !d.runs() {
 		return rejected("the thread may run nothing now")
-	}
-	if d.t.settled() {
-		if err := d.emit(api.DispositionChanged{Disposition: api.Disposition{}}); err != nil {
-			return err
-		}
 	}
 	return d.startSweep(id, b.Prompt)
 }

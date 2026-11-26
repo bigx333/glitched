@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -392,4 +394,147 @@ func TestManagerOverviewShowsWorkersDocsAndWhatNeedsYou(t *testing.T) {
 	h.until("Needs you", func() bool { h.tt.Frame(); return h.tt.HasText("Needs you") && h.tt.HasText("Failed") })
 	h.click("Failed")
 	h.until("the worker", func() bool { h.tt.Frame(); return h.a.selected == k.id() })
+}
+
+func TestManagerSweepEditsComposeAndPreserveDraft(t *testing.T) {
+	ws := t.TempDir()
+	h, id := managerFixture(t, ws, nil)
+	mgr := thread{h.local(), h.local().Threads[id]}
+	h.a.select_(mgr)
+	h.a.openOverview(mgr)
+	h.tt.Frame()
+
+	// Simulate an in-flight cadence change (30m -> 1h) before the view updates.
+	mgr.Thread.Pending = append(mgr.Thread.Pending, client.Pending{
+		Command: api.NewID(),
+		Body:    api.ThreadConfigure{Sweep: &api.SweepSchedule{IntervalSeconds: 3600}},
+	})
+	if got := sweepSeconds(effectiveSweep(mgr)); got != 3600 {
+		t.Fatalf("effectiveSweep = %d, want 3600", got)
+	}
+
+	// Unsaved draft in Overview survives opening the header sweep popover.
+	const draft = "Check nightly failures first"
+	h.a.mgr.promptFor = id
+	h.a.mgr.promptDraft = draft
+	h.a.toggleSweepPopover(mgr)
+	if h.a.mgr.promptDraft != draft {
+		t.Fatalf("opening sweep popover wiped draft: got %q, want %q", h.a.mgr.promptDraft, draft)
+	}
+	h.tt.Frame()
+	if !h.tt.HasText("Sweep 1h") {
+		t.Fatalf("header pill did not reflect pending 1h cadence: %q", h.tt.Texts())
+	}
+
+	// Saving the prompt composes with the pending 1h cadence rather than reverting to 30m.
+	h.a.mgr.sweepPopover = api.ID{}
+	h.tt.Frame()
+	h.click("Save prompt")
+	h.until("composed sweep saved", func() bool {
+		s := h.local().Threads[id].View.Sweep
+		return s != nil && s.IntervalSeconds == 3600 && s.Prompt == draft
+	})
+}
+
+func TestManagerNeedsYouIncludesFailedManagerAndRemoteWaitingWorker(t *testing.T) {
+	ws := t.TempDir()
+	h, id := managerFixture(t, ws, nil, "Remote worker")
+	mgr := thread{h.local(), h.local().Threads[id]}
+	worker := h.thread("Remote worker")
+
+	mgr.View.LastTurn = &api.TurnResult{Outcome: api.OutcomeFailed, Ended: time.Now()}
+	worker.View.Run = api.RunWaiting
+	worker.View.Requests = nil
+	worker.View.Remote = &api.Placement{Engine: api.NewID(), Link: api.NewID()}
+
+	h.a.select_(mgr)
+	h.a.openOverview(mgr)
+	h.tt.Frame()
+
+	needs, active := h.a.managerAttention(mgr)
+	if needs != 2 || active != 1 {
+		t.Fatalf("managerAttention = (%d, %d), want (2, 1)", needs, active)
+	}
+	if !h.tt.HasText("Needs you") || !h.tt.HasText("Failed") || !h.tt.HasText("Waits on you") {
+		t.Fatalf("overview missing failed manager or remote waiting worker: %q", h.tt.Texts())
+	}
+}
+
+func TestManagerDialogKeepsActionsOnscreenWithManyProjects(t *testing.T) {
+	h := start(t, tempDir(t))
+	for i := range 48 {
+		ws := fmt.Sprintf("/work/project-%02d", i)
+		h.a.projects = append(h.a.projects, &project{env: h.local(), key: keyOf(h.local(), ws)})
+	}
+	h.tt.SetSize(1000, 700)
+	h.a.openManagerDialog(h.local(), projectKey{})
+	h.tt.Frame()
+	r, ok := h.tt.Find("Create manager")
+	if !ok {
+		t.Fatalf("Create manager button missing: %q", h.tt.Texts())
+	}
+	if r.Y < 0 || r.Y+r.H > 700 {
+		t.Fatalf("Create manager button pushed offscreen: rect=%+v winH=700", r)
+	}
+}
+
+func TestManagersSectionOffersContinueAllForInterruptedManager(t *testing.T) {
+	h, id := managerFixture(t, "/work/mygo", nil)
+	settlePlugins(t, h.a, h.tt, h.p)
+	mgr := h.local().Threads[id]
+	mgr.View.Run = api.RunUncertain
+	mgr.View.Turn = &api.Turn{Run: api.NewID(), Model: fakeModel}
+	h.tt.Frame()
+
+	if !h.tt.HasText("Continue all") {
+		t.Fatalf("Managers header missing Continue all for interrupted Manager: %q", h.tt.Texts())
+	}
+	h.click("Continue all")
+	h.tt.Frame()
+	if !h.a.continuingAlready(thread{h.local(), mgr}) {
+		t.Fatalf("clicking Continue all did not enqueue interrupted Manager")
+	}
+}
+
+func TestManagerSweepTimingAndDocsTotalCap(t *testing.T) {
+	now := time.Unix(20_000, 0).UTC()
+	resumable := thread{Thread: &client.Thread{View: api.Thread{
+		Role:      api.RoleManager,
+		Sweep:     &api.SweepSchedule{IntervalSeconds: 900},
+		Resumable: true,
+	}}}
+	if got := sweepTiming(resumable, now); !strings.Contains(got, "Paused while queued work waits") {
+		t.Fatalf("sweepTiming(resumable) = %q, want paused message", got)
+	}
+	if !sweepBlocked(resumable) {
+		t.Fatalf("sweepBlocked(resumable) = false, want true")
+	}
+
+	limited := thread{Thread: &client.Thread{View: api.Thread{
+		Role:  api.RoleManager,
+		Sweep: &api.SweepSchedule{IntervalSeconds: 900},
+		LastTurn: &api.TurnResult{
+			Outcome: api.OutcomeFailed,
+			Ended:   now.Add(-time.Minute),
+			Limit:   &api.UsageLimit{Resets: now.Add(20 * time.Minute)},
+		},
+	}}}
+	if got := sweepTiming(limited, now); !strings.Contains(got, "Waiting on usage limit") {
+		t.Fatalf("sweepTiming(limited) = %q, want usage limit message", got)
+	}
+
+	dir := t.TempDir()
+	chunk := strings.Repeat("a", managerDocLimit)
+	for _, name := range managerDocNames {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(chunk), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	docs, err := readManagerDocs(dir)
+	if err != nil {
+		t.Fatalf("readManagerDocs: %v", err)
+	}
+	if len(docs) != 3 || docs[0].omitted || docs[1].omitted || !docs[2].omitted {
+		t.Fatalf("docs omitted flags = [%v, %v, %v], want [false, false, true]", docs[0].omitted, docs[1].omitted, docs[2].omitted)
+	}
 }

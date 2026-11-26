@@ -403,12 +403,11 @@ func TestAManagerStaysInTheInbox(t *testing.T) {
 		{State: api.Snoozed, Until: time.Unix(20_000, 0).UTC()},
 		{State: api.Settled},
 	} {
-		t.Run("stored "+fmt.Sprint(d.State), func(t *testing.T) {
+		t.Run("replayed "+fmt.Sprint(d.State), func(t *testing.T) {
 			m := newManager(t, nil)
-			m.th.Disposition = d // as a store kept it from before Managers stayed open
-			m.must(api.InboxSet{Disposition: api.Disposition{}})
-			if m.th.Disposition.State != api.Open {
-				t.Fatalf("Open left a stored %v Manager %v", d.State, m.th.Disposition.State)
+			m.th = Apply(m.th, Event{At: m.at.Add(time.Second), Body: api.DispositionChanged{Disposition: d}})
+			if m.th.Disposition != (api.Disposition{}) {
+				t.Fatalf("replaying %v on a Manager left it %+v, want Open", d.State, m.th.Disposition)
 			}
 		})
 	}
@@ -475,16 +474,6 @@ func TestARunSweepStartsASweepWake(t *testing.T) {
 			}
 		})
 	}
-	t.Run("stored settled", func(t *testing.T) {
-		m := newManager(t, nil)
-		m.th.Disposition = api.Disposition{State: api.Settled}
-		if _, _, _, err := m.runSweep(""); err != nil {
-			t.Fatalf("SweepRun: %v", err)
-		}
-		if m.th.Disposition.State != api.Open || m.th.Live() == nil {
-			t.Fatalf("a sweep on a stored settled Manager left it %v, run %v", m.th.Disposition.State, m.th.Live())
-		}
-	})
 }
 
 func TestARunSweepIsRefused(t *testing.T) {
@@ -515,6 +504,32 @@ func TestARunSweepIsRefused(t *testing.T) {
 	t.Run("sweeping", func(t *testing.T) {
 		m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
 		m.sweep()
+		refused(t, m)
+	})
+	t.Run("stopped with held report", func(t *testing.T) {
+		m := newManager(t, nil)
+		m.must(api.MessageDispatch{Text: "go", Mode: api.StartNow})
+		m.must(api.TurnInterrupt{})
+		m.at = m.at.Add(time.Second)
+		evs, _, err := Observe(m.th, Ended{Run: m.th.Live().ID, Outcome: api.OutcomeInterrupted}, m.at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.fold(evs)
+		m.at = m.at.Add(time.Second)
+		evs, _, err = Observe(m.th, Reported{Report: api.ChildReported{Child: api.NewID(), Run: api.NewID(), Title: "Worker", Kind: api.ReportDone}}, m.at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.fold(evs)
+		if !View(m.th).Resumable {
+			t.Fatalf("expected stopped Manager with a worker report to be resumable")
+		}
+		refused(t, m)
+	})
+	t.Run("queued deferred message", func(t *testing.T) {
+		m := newManager(t, nil)
+		m.must(api.MessageDispatch{Text: "later", Mode: api.Defer})
 		refused(t, m)
 	})
 	t.Run("agent", func(t *testing.T) {

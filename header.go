@@ -54,7 +54,7 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 		if manager {
 			needs, active = a.managerAttention(t)
 			pills.manager = text("Manager", 11) + headerPillIcon + 2*pillPadX + 2 + headerGap
-			pills.sweep = text(sweepLabel(t.View.Sweep), 11) + 2*pillPadX + 2 + headerGap
+			pills.sweep = text(sweepLabel(effectiveSweep(t)), 11) + 2*pillPadX + 2 + headerGap
 			pills.overview = text("Overview", 11) + headerPillIcon + 2*pillPadX + 2 + headerGap
 			if n := cmp.Or(needs, active); n > 0 {
 				pills.overview += text(fmt.Sprint(n), 10.5) + 4
@@ -87,14 +87,15 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 		}
 		if manager && give < givePlan {
 			open := a.mgr.sweepPopover == t.id()
+			label := sweepLabel(effectiveSweep(t))
 			sweep := ui.ButtonBase(c.Key("header-sweep")).Padding(2, pillPadX).Radius(999).
-				Border(1, palette.border).Shrink(0).Cursor(ui.CursorPointer).Label(sweepLabel(t.View.Sweep))
+				Border(1, palette.border).Shrink(0).Cursor(ui.CursorPointer).Label(label)
 			if open || sweep.Hovered() {
 				sweep.Background(palette.active)
 			} else {
 				sweep.Background(palette.hover)
 			}
-			if sweep.Children(func() { ui.Text(c, sweepLabel(t.View.Sweep)).FontSize(11).TextColor(palette.muted).NoWrap() }).Clicked() {
+			if sweep.Children(func() { ui.Text(c, label).FontSize(11).TextColor(palette.muted).NoWrap() }).Clicked() {
 				a.toggleSweepPopover(t)
 			}
 			a.sweepPopover(c, t, sweep)
