@@ -31,6 +31,7 @@ import (
 	"glitched/internal/provider/codex"
 	"glitched/internal/provider/fake"
 	"glitched/internal/providerlog"
+	"glitched/internal/pty"
 	"glitched/internal/runtime"
 	"glitched/internal/secrets"
 	"glitched/internal/store"
@@ -167,6 +168,8 @@ type Config struct {
 	// RemoteSteps is called as a remote child's create reaches each step,
 	// as runtime.WithRemoteSteps says: where tests hold it.
 	RemoteSteps func(step string, placeholder api.ID) `json:"-"`
+	// Shell overrides the login shell command used for engine-owned PTYs.
+	Shell []string `json:"-"`
 }
 
 // CompactBeforeExpireEnabled reports whether automatic idle compaction is
@@ -275,6 +278,7 @@ func (cfg Config) Save() error {
 // backup.
 type Daemon struct {
 	host  *runtime.Host
+	ptys  *pty.Manager
 	awake *awake // nil where the engine can't keep the machine awake
 	clis  *clis
 	store *store.Store
@@ -551,16 +555,18 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	}
 	d.undo = append(d.undo, h.Close)
 	d.host = h
+	d.ptys = pty.New(pty.Options{Command: cfg.Shell})
+	d.undo = append(d.undo, d.ptys.Close)
 
 	svc := d.startPlugins(cfg)
 	d.undo = append(d.undo, func() error { svc.Close(); return nil })
 	d.clis = newCLIs(ctx, cfg.Dir, cfg.Providers, h, cliupdate.NewChecker(cfg.Versions, filepath.Join(cfg.Dir, "cli-versions.json")))
 	cmds := newCommandLists(ctx, cfg.Providers)
 	ls := &launches{dir: cfg.Dir, mux: cfg.Providers, commands: cmds}
-	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: cmds, Launches: ls, CLIs: d.clis, Asks: h, Secrets: h, Projects: endpoint{h, d, false}, Skills: h}}
+	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: cmds, Launches: ls, CLIs: d.clis, Asks: h, Secrets: h, Projects: endpoint{h, d, false}, Skills: h, Terminals: d.ptys}}
 	g := &grants{dir: cfg.Dir, base: ctx}
 	tailnetServer := func(tn transport.Transport) *transport.Server {
-		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Launches: ls, CLIs: d.clis, Secrets: h, Projects: endpoint{h, d, true}, Skills: h, Replies: h, Authorize: g.authorize}
+		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Launches: ls, CLIs: d.clis, Secrets: h, Projects: endpoint{h, d, true}, Skills: h, Replies: h, Terminals: d.ptys, Authorize: g.authorize}
 	}
 	for _, tn := range tns[1:] {
 		servers = append(servers, tailnetServer(tn))
@@ -701,6 +707,31 @@ func (d *Daemon) release() error {
 
 // Endpoint is the engine in this process, for a caller that embeds it.
 func (d *Daemon) Endpoint() api.Endpoint { return endpoint{d.host, d, false} }
+
+// OpenTerminal opens or reattaches to an engine-owned PTY for workspace.
+func (d *Daemon) OpenTerminal(ctx context.Context, req api.TerminalOpen) (api.TerminalStream, error) {
+	return d.ptys.OpenTerminal(ctx, req)
+}
+
+// TerminalInput sends input bytes to an engine-owned PTY.
+func (d *Daemon) TerminalInput(ctx context.Context, req api.TerminalInput) error {
+	return d.ptys.TerminalInput(ctx, req)
+}
+
+// TerminalResize resizes an engine-owned PTY.
+func (d *Daemon) TerminalResize(ctx context.Context, req api.TerminalResize) error {
+	return d.ptys.TerminalResize(ctx, req)
+}
+
+// TerminalClaim claims or transfers the terminal input lease.
+func (d *Daemon) TerminalClaim(ctx context.Context, req api.TerminalClaim) (api.TerminalLease, error) {
+	return d.ptys.TerminalClaim(ctx, req)
+}
+
+// ReleaseTerminalClient releases any active terminal input leases held by client.
+func (d *Daemon) ReleaseTerminalClient(client string) {
+	d.ptys.ReleaseTerminalClient(client)
+}
 
 // SetLimits applies new child limits at once, as engine.json's Children
 // does at the next start.

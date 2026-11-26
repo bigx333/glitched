@@ -141,6 +141,7 @@ var sentinels = []struct {
 	{"already_answered", api.ErrAlreadyAnswered},
 	{"overflow", api.ErrOverflow},
 	{"protocol", api.ErrProtocol},
+	{"lease_held", api.ErrLeaseHeld},
 	{"not_allowed", api.ErrNotAllowed},
 	{"foreign_log", hub.ErrForeignLog},
 	{"rewound", hub.ErrRewound},

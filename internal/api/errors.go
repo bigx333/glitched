@@ -24,6 +24,8 @@ var (
 	ErrOverflow = errors.New("api: stream overflow")
 	// ErrProtocol refuses a peer that speaks another Protocol.
 	ErrProtocol = errors.New("api: the peer speaks another protocol")
+	// ErrLeaseHeld refuses terminal input or resize while another client holds an active input lease.
+	ErrLeaseHeld = errors.New("api: terminal input lease is held by another client")
 )
 
 // ProtocolError refuses a peer that speaks protocol Theirs, not this
