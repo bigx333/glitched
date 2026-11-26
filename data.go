@@ -912,6 +912,9 @@ func given(c api.ThreadConfigure) string {
 	if c.Access != nil {
 		names = append(names, "access")
 	}
+	if c.Sweep != nil {
+		names = append(names, "sweep schedule")
+	}
 	switch n := len(names); n {
 	case 0:
 		return "model and access"

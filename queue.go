@@ -74,7 +74,7 @@ func canSteer(v api.Thread) bool {
 	if !v.Live() {
 		return v.Disposition.State != api.Settled
 	}
-	return !v.Silent() && (v.Run == api.RunStarting || v.Run == api.RunRunning || v.Run == api.RunWaiting)
+	return (!v.Silent() || v.Turn != nil && v.Turn.Dismissed) && (v.Run == api.RunStarting || v.Run == api.RunRunning || v.Run == api.RunWaiting)
 }
 
 // queueGap is the room between the queue and the composer card under it;

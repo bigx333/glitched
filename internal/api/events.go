@@ -48,6 +48,9 @@ type ThreadCreated struct {
 	// Origin is where a link's thread came from, its link stamped. Such a
 	// thread has no folder until its worktree is made (WorktreeReady).
 	Origin *Origin `json:"origin,omitempty"`
+	// Role and Sweep configure Manager thread behavior when created.
+	Role  ThreadRole     `json:"role,omitempty"`
+	Sweep *SweepSchedule `json:"sweep,omitempty"`
 }
 
 // WorktreeReady is a link's thread's worktree made: Workspace is the
@@ -153,6 +156,7 @@ type MessageQueued struct {
 	// engine sent it to continue a run a restart cut off.
 	Replaces ID   `json:"replaces,omitzero"`
 	Auto     bool `json:"auto,omitempty"`
+	Sweep    bool `json:"sweep,omitempty"`
 }
 
 // MessageClaimed binds a message to a live run it will be steered into.
@@ -212,6 +216,10 @@ type TurnAdmitted struct {
 	Run        ID     `json:"run"`
 	Generation uint64 `json:"generation"`
 	Silent     bool   `json:"silent,omitempty"`
+	// Wake is why the engine started the run on its own, and Prior the
+	// thread's UpdatedAt before the wake, which a dismissal restores.
+	Wake  WakeKind  `json:"wake,omitempty"`
+	Prior time.Time `json:"prior,omitzero"`
 }
 
 // TurnStarted: the agent accepted the run's message.
@@ -443,8 +451,10 @@ func (b *SessionBound) UnmarshalJSON(p []byte) error {
 // ThreadConfigured is the model and access the thread's turns run at from
 // its next on.
 type ThreadConfigured struct {
-	Model  ModelRef `json:"model"`
-	Access Access   `json:"access"`
+	Model    ModelRef       `json:"model"`
+	Access   Access         `json:"access"`
+	Sweep    *SweepSchedule `json:"sweep,omitempty"`
+	SweepSet bool           `json:"sweepSet,omitempty"`
 }
 
 // AccessGranted is the access the run's agent runs at, as its provider
@@ -594,6 +604,9 @@ func init() {
 	register[RemoteBound]()
 	register[RemoteSeen]()
 	register[RemoteLost]()
+	register[WakeDismissed]()
+	register[WakeRaised]()
+	register[SweepStarted]()
 }
 
 func register[B EventBody]() {

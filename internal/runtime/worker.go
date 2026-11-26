@@ -370,7 +370,7 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		Session: t.Session, ResumeOnly: b.ResumeOnly, CacheExpires: t.Context.CacheExpires, Tap: h.tap(thread),
 	}
 	if h.mcp != nil {
-		spec.MCP = append(spec.MCP, h.mcp.For(thread, b.Access))
+		spec.MCP = append(spec.MCP, h.mcp.ForRole(thread, b.Access, t.Role))
 	}
 	if h.vault != nil {
 		dir, err := h.vault.Prepare(thread)
@@ -433,6 +433,13 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		}
 	case session != t.Session:
 		err = h.observe(ctx, thread, engine.Bound{Run: b.Run, Session: session}, 0)
+	}
+	// A turn that failed before its agent took it gave the agent no docs.
+	delivered := slices.ContainsFunc(t.Queue, func(m engine.Message) bool { return m.State == engine.QueueDispatched })
+	if forked == nil && !delivered && !b.ResumeOnly && !slashCommand(text) {
+		if docs := loadCoordinatorDocs(b.Workspace, t.Project, t.Role, !t.Parent.IsZero() || t.Origin != nil); docs != "" {
+			text = docs + text
+		}
 	}
 	// What the user did while the agent opened, or the time it took,
 	// may have made a compaction due no longer.

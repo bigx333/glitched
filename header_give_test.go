@@ -25,6 +25,11 @@ const headerBranch = "glitched/header-fixture-3x1sdh"
 // directory before the app opens it; its agent's turn plays script.
 func narrowHeader(t *testing.T, title string, child bool, add func(dir string), script ...provider.Event) *harness {
 	t.Helper()
+	return headerFixture(t, title, child, nil, add, script...)
+}
+
+func headerFixture(t *testing.T, title string, child bool, as func(*api.ThreadCreate), add func(dir string), script ...provider.Event) *harness {
+	t.Helper()
 	work := githubBranch(t)
 	playGh(t)
 	dir := tempDir(t)
@@ -44,7 +49,11 @@ func narrowHeader(t *testing.T, title string, child bool, add func(dir string), 
 		submit(id, api.ThreadCreate{Workspace: work, Title: "The parent, with a title long enough to fill its crumb", Model: fakeModel, Project: work, Branch: headerBranch})
 		seedChild(t, d, id, title, "hello")
 	} else {
-		submit(id, api.ThreadCreate{Workspace: work, Title: title, Model: fakeModel, Project: work, Branch: headerBranch})
+		create := api.ThreadCreate{Workspace: work, Title: title, Model: fakeModel, Project: work, Branch: headerBranch}
+		if as != nil {
+			as(&create)
+		}
+		submit(id, create)
 		submit(id, api.MessageDispatch{Text: "hello", Mode: api.AfterActive})
 	}
 	installOwn(t, dir, "pull-requests")
@@ -149,6 +158,27 @@ func TestANarrowHeaderGivesWayAndKeepsEachControlClickable(t *testing.T) {
 	}
 	if _, ok := h.inHeader("#12"); !ok {
 		t.Errorf("wide again, the pull request's pill keeps to its icon: %q", h.tt.Texts())
+	}
+}
+
+func TestANarrowHeaderGivesWayForAManagersPills(t *testing.T) {
+	const title = "Header fixture for the narrow window"
+	h := headerFixture(t, title, false, func(c *api.ThreadCreate) {
+		c.Role, c.Sweep = api.RoleManager, &api.SweepSchedule{IntervalSeconds: 1800}
+	}, nil)
+	h.at(1320)
+	for _, s := range []string{"Manager", "Sweep 30m", "#12"} {
+		if _, ok := h.inHeader(s); !ok {
+			t.Errorf("at 1320 points the header gave %q way: %q", s, h.tt.Texts())
+		}
+	}
+	for _, w := range []int{760, 600} {
+		h.at(w)
+		controls := append([]string{title, "Pull request #12"}, headerControls...)
+		if _, ok := h.inHeader("Sweep 30m"); ok {
+			controls = append(controls, "Sweep 30m")
+		}
+		h.fitsHeader(w, controls...)
 	}
 }
 

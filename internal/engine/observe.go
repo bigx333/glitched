@@ -37,7 +37,7 @@ func ObserveWith(t Thread, o Observation, env Env, now time.Time) ([]Event, []Ef
 	d := &decision{t: t, thread: t.ID, at: now.UTC().Round(0), env: env}
 	err := d.observe(o)
 	if err == nil {
-		err = d.settle()
+		err = d.settle(d.t.UpdatedAt)
 	}
 	if te := (*TransitionError)(nil); errors.As(err, &te) {
 		return nil, nil, fmt.Errorf("%w: %T: %w", ErrRefused, o, err)
@@ -94,6 +94,11 @@ func (d *decision) observe(o Observation) error {
 			if err := d.emit(api.TurnEnded{Run: o.Run, Outcome: o.Outcome, Error: o.Error, Tokens: o.Tokens, Limit: limit, Head: o.Head}); err != nil {
 				return err
 			}
+			if live.Wake != api.NotWake && !live.Dismissed {
+				if err := d.unsnooze(); err != nil {
+					return err
+				}
+			}
 			// A run being stopped or a silent maintenance run reports nothing.
 			switch {
 			case stopped || silent:
@@ -143,6 +148,12 @@ func (d *decision) observe(o Observation) error {
 			return d.stop(*live)
 		}
 		if isLive(o.Run) && !dup {
+			if err := d.unsnooze(); err != nil {
+				return err
+			}
+			if err := d.raise(*live); err != nil {
+				return err
+			}
 			if err := d.emit(api.RequestOpened{
 				Request: o.Request, Run: o.Run, Generation: live.Generation, Dedup: o.Dedup, Kind: o.Kind, Body: o.Body,
 			}); err != nil {
@@ -216,6 +227,8 @@ func (d *decision) observe(o Observation) error {
 		return d.reported(o)
 	case IdleCompact:
 		return d.idleCompact(o)
+	case SweepDue:
+		return d.sweepDue(o)
 	case WorktreeReady:
 		return d.emit(api.WorktreeReady{Workspace: o.Workspace, Branch: o.Branch})
 	case WorktreeFailed:
@@ -327,6 +340,40 @@ func (d *decision) idleCompact(o IdleCompact) error {
 	return nil
 }
 
+func (d *decision) sweepDue(o SweepDue) error {
+	if at, ok := NextSweepAt(d.t, d.at); !ok || d.at.Before(at) {
+		return fmt.Errorf("%w: thread is not due for a sweep", ErrRefused)
+	}
+	if o.Run.IsZero() {
+		return fmt.Errorf("%w: sweep needs a run id", ErrRefused)
+	}
+	if !d.runs() {
+		return fmt.Errorf("%w: the thread may run nothing now", ErrRefused)
+	}
+	text := strings.TrimSpace(o.Text)
+	if text == "" && d.t.Sweep != nil {
+		text = strings.TrimSpace(d.t.Sweep.Prompt)
+	}
+	if text == "" {
+		text = api.DefaultSweepPrompt
+	}
+	prior := d.t.UpdatedAt
+	if err := d.emit(api.MessageQueued{Message: o.Run, Text: text, Mode: api.StartNow, Pos: d.t.pos(false), Auto: true, Sweep: true}); err != nil {
+		return err
+	}
+	gen := d.t.Generation + 1
+	if err := d.emit(api.TurnAdmitted{Run: o.Run, Generation: gen, Wake: api.WakeSweep, Prior: prior}); err != nil {
+		return err
+	}
+	if err := d.emit(api.SweepStarted{Run: o.Run}); err != nil {
+		return err
+	}
+	d.effects = append(d.effects, StartTurn{
+		Run: o.Run, Generation: gen, Text: text, Workspace: d.t.Workspace, Model: d.t.Model, Access: d.t.Access,
+	})
+	return nil
+}
+
 // reported logs a child's report. It brings a snoozed parent, and only its
 // parent, back to the inbox. A done or failed one queues a wake, which
 // gives the parent's agent the child's result with its next turn (see
@@ -345,20 +392,32 @@ func (d *decision) reported(o Reported) error {
 	if d.t.messageAt(id) >= 0 {
 		return nil
 	}
+	prior := d.t.UpdatedAt
 	if err := d.emit(o.Report); err != nil {
 		return err
 	}
-	if d.t.Disposition.State == api.Snoozed {
+	wakes := !(o.Report.Kind == api.ReportBlocked && o.Question.IsZero() || d.t.settled())
+	staysSnoozed := wakes && d.t.Role == api.RoleManager && d.snoozing()
+	if d.t.Disposition.State == api.Snoozed && !staysSnoozed {
 		if err := d.emit(api.DispositionChanged{Disposition: api.Disposition{}}); err != nil {
 			return err
 		}
 	}
-	if o.Report.Kind == api.ReportBlocked && o.Question.IsZero() || d.t.settled() {
+	if !wakes {
 		return nil
 	}
-	return d.emit(api.MessageQueued{
+	if err := d.emit(api.MessageQueued{
 		Message: id, Text: text, Mode: api.AfterActive, Pos: d.t.pos(false), Held: true, Report: o.Report.Child,
-	})
+	}); err != nil {
+		return err
+	}
+	if err := d.settle(prior); err != nil || !staysSnoozed {
+		return err
+	}
+	if live := d.t.Live(); live != nil && live.Wake != api.NotWake {
+		return nil
+	}
+	return d.emit(api.DispositionChanged{Disposition: api.Disposition{}})
 }
 
 // wakeID is the wake for a child's run, the same each time it reports, so

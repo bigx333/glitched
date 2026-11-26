@@ -66,6 +66,27 @@ func (m *Manager) Create(e *Env, workspace, title string, model api.ModelRef, ac
 	return id
 }
 
+// CreateManager creates a persistent Manager thread with an optional sweep schedule.
+func (m *Manager) CreateManager(e *Env, workspace, title string, model api.ModelRef, access api.Access, sweep *api.SweepSchedule) api.ID {
+	if m.ShownBy(e) != e {
+		return api.ID{}
+	}
+	id := api.NewID()
+	e.Threads[id] = &Thread{View: api.Thread{ID: id, Workspace: workspace, Title: title, Model: model, Access: access, Role: api.RoleManager, Sweep: sweep, UpdatedAt: time.Now()}}
+	e.Membership++
+	m.submit(e, id, api.ThreadCreate{Workspace: workspace, Title: title, Model: model, Access: access, Role: api.RoleManager, Sweep: sweep})
+	return id
+}
+
+// SetSweep updates or disables (when sweep is nil or IntervalSeconds <= 0)
+// a Manager thread's periodic sweep schedule.
+func (m *Manager) SetSweep(e *Env, thread api.ID, sweep *api.SweepSchedule) api.ID {
+	if sweep == nil {
+		sweep = &api.SweepSchedule{}
+	}
+	return m.submit(e, thread, api.ThreadConfigure{Sweep: sweep})
+}
+
 // Fork adds a thread that goes on from run of source, its last finished
 // turn when zero, on model: in source's folder, at its access, titled
 // title. It is shown at once, as Create shows one.
@@ -333,7 +354,8 @@ func replaces(p Pending, body api.Intent) bool {
 	case api.ThreadConfigure:
 		b, ok := p.Body.(api.ThreadConfigure)
 		return ok && (b.Model != nil && c.Model != nil || b.Effort != nil && c.Effort != nil ||
-			(b.Fast != nil || b.Ultrafast != nil) && (c.Fast != nil || c.Ultrafast != nil) || b.Access != nil && c.Access != nil)
+			(b.Fast != nil || b.Ultrafast != nil) && (c.Fast != nil || c.Ultrafast != nil) || b.Access != nil && c.Access != nil ||
+			b.Sweep != nil && c.Sweep != nil)
 	case api.InboxSet:
 		_, ok := p.Body.(api.InboxSet)
 		return ok

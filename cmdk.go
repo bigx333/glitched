@@ -10,6 +10,8 @@ import (
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/widget"
 )
@@ -101,6 +103,15 @@ func (a *app) actions() []command {
 		action("theme.toggle", "Toggle light / dark", "⇧⌘L", "pallete-2", a.toggleLightDark),
 		action("zen.toggle", "Toggle Zen mode", "", "tuning", func() { a.settings.zen = !a.settings.zen }),
 	)
+	if cur := a.current(); cur.env != nil {
+		root := cur.project()
+		scratch := root == "" || root == a.scratchRoot()
+		if !scratch || cur.local() {
+			mgr := action("manager.new", "New manager thread", "", "checklist", func() { a.newManager(cur.env, root, scratch) })
+			mgr.also = "manager workers sweep"
+			cmds = append(cmds, mgr)
+		}
+	}
 	for i, s := range settingsSections {
 		hint := ""
 		if i == 0 {
@@ -358,4 +369,27 @@ func alsoMatches(cmd command, query string) bool {
 		}
 	}
 	return true
+}
+
+const defaultSweepSeconds = 1800
+
+func (a *app) newManager(env *client.Env, root string, scratch bool) {
+	if scratch {
+		dir, err := a.scratchFolder("manager")
+		if err != nil {
+			a.pluginNotice(ui.Toast{Title: "Couldn't make the Manager's folder", Description: err.Error()})
+			return
+		}
+		root = dir
+	}
+	id := a.backend.CreateManager(env, root, "Manager", a.newThreadRef(thread{env, &client.Thread{}}), accessOf[a.access], &api.SweepSchedule{IntervalSeconds: defaultSweepSeconds})
+	if id.IsZero() {
+		return
+	}
+	a.selected = id
+	a.backend.OpenThread(env, id)
+	if a.router.Path() != "/" {
+		a.router.Push("/")
+	}
+	a.focusBack()
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"glitched/internal/api"
+	"glitched/internal/engine"
 )
 
 // RunReply is what a run's agent said last in the thread's log: its text
@@ -151,6 +152,30 @@ func (s *Store) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 	}
 	snap.Events, err = s.events(ctx, tx, q.Thread, after, head, 0)
 	return snap, err
+}
+
+// SweepManagers is each Manager thread a sweep is scheduled on, read
+// through an index of only those: what the sweep scheduler reads, however
+// many other threads there are.
+func (s *Store) SweepManagers(ctx context.Context) ([]engine.Thread, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	managers, err := ids(ctx, tx, `SELECT id FROM threads INDEXED BY threads_sweeping WHERE deleted = 0 AND role = 'manager' AND sweep IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	threads := make([]engine.Thread, 0, len(managers))
+	for _, id := range managers {
+		t, err := loadThread(ctx, tx, id)
+		if err != nil {
+			return nil, err
+		}
+		threads = append(threads, t)
+	}
+	return threads, nil
 }
 
 // IdleCompactCandidates returns top-level, non-deleted, non-settled idle

@@ -109,7 +109,7 @@ func DecideWith(t Thread, c api.Command, env Env, now time.Time) ([]Event, []Eff
 		err = d.local(c.ID, c.Body)
 	}
 	if err == nil {
-		err = d.settle()
+		err = d.settle(d.t.UpdatedAt)
 	}
 	if te := (*TransitionError)(nil); errors.As(err, &te) {
 		err = rejected(te.Error())
@@ -285,6 +285,8 @@ func (d *decision) local(id api.ID, b api.Intent) error {
 		err = d.steer(b)
 	case api.ResumeCancel:
 		err = d.cancelResume(b)
+	case api.WakeDismiss:
+		err = d.dismissWake(b)
 	default:
 		err = rejected("unknown intent")
 	}
@@ -400,6 +402,18 @@ func (d *decision) create(id api.ID, c api.ThreadCreate) error {
 	if c.Access > api.AccessFull {
 		return rejected("unknown access level")
 	}
+	if c.Role != api.RoleDefault && c.Role != api.RoleManager {
+		return rejected("unknown thread role")
+	}
+	if c.Role == api.RoleManager && (!c.Parent.IsZero() || c.Origin != nil || c.Remote != "") {
+		return rejected("only a top-level thread can be a manager")
+	}
+	if c.Sweep != nil && c.Sweep.IntervalSeconds < 0 {
+		return rejected("sweep interval must be non-negative")
+	}
+	if c.Sweep != nil && c.Sweep.IntervalSeconds > 0 && c.Role != api.RoleManager {
+		return rejected("only a manager thread can schedule sweeps")
+	}
 	if !c.Run.IsZero() && c.Parent.IsZero() {
 		return rejected("a run starts only a child thread")
 	}
@@ -418,7 +432,7 @@ func (d *decision) create(id api.ID, c api.ThreadCreate) error {
 	if c.Remote != "" {
 		return d.placeRemote(id, c)
 	}
-	if err := d.emit(api.ThreadCreated{Workspace: c.Workspace, Project: c.Project, Branch: c.Branch, Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent, Fork: c.Forked}); err != nil {
+	if err := d.emit(api.ThreadCreated{Workspace: c.Workspace, Project: c.Project, Branch: c.Branch, Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent, Fork: c.Forked, Role: c.Role, Sweep: normalizeSweep(c.Sweep)}); err != nil {
 		return err
 	}
 	if c.Text == "" {
@@ -427,7 +441,7 @@ func (d *decision) create(id api.ID, c api.ThreadCreate) error {
 	if err := d.emit(api.MessageQueued{Message: id, Text: c.Text, Mode: api.StartNow, By: c.Parent}); err != nil {
 		return err
 	}
-	return d.admit(id)
+	return d.admit(id, d.t.UpdatedAt)
 }
 
 // createFromLink creates a thread a link's create asked for, as the host
