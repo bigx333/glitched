@@ -173,3 +173,37 @@ func TestDismissWakeExposedOnlyToManagersAndSilencesRun(t *testing.T) {
 		t.Fatalf("non-manager MCP server unexpectedly has manager role/instructions: %+v", plain.Env)
 	}
 }
+
+// A Manager's MCP server tells it how to run its workers: what to delegate,
+// how to gatekeep, to verify before reporting, when to stay quiet and which
+// git and safety rails hold. A plain thread's server says none of it.
+func TestManagerInstructionsCoverTheRulesetOnlyForManagers(t *testing.T) {
+	l := mcp.Launcher{Command: "glitched", Engine: "/tmp/sock"}
+	thread := api.NewID()
+	plain := l.For(thread, api.AccessAutoEdits).Instructions
+	mgr := l.ForRole(thread, api.AccessAutoEdits, api.RoleManager).Instructions
+
+	if !strings.HasPrefix(mgr, plain) {
+		t.Fatalf("manager instructions drop the plain thread's:\nplain=%q\nmanager=%q", plain, mgr)
+	}
+	rules := map[string][]string{
+		"shared state":         {"WORKERS.md", "NOTES.md"},
+		"delegation boundary":  {`isolation "worktree"`, "one bounded unit of work per worker", "Keep the root checkout clean"},
+		"gatekeeping":          {"pass-through relay", "self-contained brief", "definition of done", "task_answer", "request_credentials", "never the values", "task_cancel", "task_send", "Escalate only legitimate approvals"},
+		"verify before ready":  {"completion summary is a claim", "branch, diff, commits and checks", "Never pass unverified output"},
+		"quiet by default":     {"dismiss_wake", "quiet by default", "unless the user must act", "unresolved blocker or failure", "verified deliverable ready for review", "Lead every update to the user with the verdict"},
+		"git and safety rails": {"Never merge, push, delete branches", "reset --hard", "Preserve uncommitted changes", "Never fabricate test or check results", "Never expose or commit secrets"},
+	}
+	for area, phrases := range rules {
+		for _, p := range phrases {
+			if !strings.Contains(mgr, p) {
+				t.Errorf("manager instructions miss %s rule %q", area, p)
+			}
+		}
+	}
+	for _, p := range []string{"Manager", "dismiss_wake", "WORKERS.md", "NOTES.md", "pass-through relay", "completion summary is a claim", "quiet by default", "Never merge"} {
+		if strings.Contains(plain, p) {
+			t.Errorf("plain thread instructions mention %q", p)
+		}
+	}
+}
