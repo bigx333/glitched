@@ -138,17 +138,19 @@ func TestAScheduleItCantRunIsRefused(t *testing.T) {
 	}
 }
 
-// A tick waits on its slow creates, past the 30 s of a call, inside its
-// timer's minute: two creates of 16 s each, as an engine answers one out
-// of its queue, start both, with no timer that didn't answer, and the
-// page's reads answer while they go.
+// A tick waits on its slow creates, past a single call's CallTimeout, inside
+// its timer's window: two creates whose sum exceeds CallTimeout start both,
+// with no timer that didn't answer, and the page's reads answer while they go.
 func TestATickWaitsOnItsSlowCreates(t *testing.T) {
 	state := t.TempDir()
-	const slow = 16 * time.Second
+	const callTimeout = 1500 * time.Millisecond
+	const slow = 900 * time.Millisecond
 	var mu sync.Mutex
 	var creates int
 	var late []string
-	call := schedulesService(t, state, plugins.ServiceOptions{TimerScale: 0.02,
+	call := schedulesService(t, state, plugins.ServiceOptions{
+		CallTimeout: callTimeout,
+		TimerScale:  0.05,
 		Logf: func(format string, args ...any) {
 			if line := fmt.Sprintf(format, args...); strings.Contains(line, "did not answer") {
 				mu.Lock()

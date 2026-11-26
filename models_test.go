@@ -160,11 +160,16 @@ func numbered(n int) []provider.Model {
 // many more; the effort stays under them, and the keyboard reaches every
 // one.
 func TestThePickersModelsScrollPastFiveAndAHalfRows(t *testing.T) {
+	h := startWith(t, tempDir(t), engineReports("claude", numbered(4)...))
+	allAnswered(h)
+	h.tt.SetSize(1320, 2000)
 	var pitch float32
 	height := func(n int) float32 {
-		h := startWith(t, tempDir(t), engineReports("claude", numbered(n)...))
-		allAnswered(h)
-		h.tt.SetSize(1320, 2000)
+		if h.a.pickerOpen {
+			h.tt.Key(0, ui.KeyEscape)
+			pickerSettle(t, h)
+		}
+		reportModels(h, "claude", numbered(n))
 		h.a.model = modelKey{"claude", "m-00"}
 		h.tt.Frame()
 		h.click("Model")
@@ -181,9 +186,11 @@ func TestThePickersModelsScrollPastFiveAndAHalfRows(t *testing.T) {
 		t.Fatalf("over its effort the popover is %v, %v, %v, %v and %v tall for 4, 5, 6, 7 and 30 models, a row %v; want a row more for the 5th, half a row more for the 6th, and no more after", four, five, six, seven, many, pitch)
 	}
 
-	h := startWith(t, tempDir(t), engineReports("claude", numbered(30)...))
-	allAnswered(h)
+	h.tt.Key(0, ui.KeyEscape)
+	pickerSettle(t, h)
+	h.tt.SetSize(1320, 860)
 	h.a.model = modelKey{"claude", "m-00"}
+	h.tt.Frame()
 	h.click("Model")
 	pickerSettle(t, h)
 	_, effort := pickerBox(t, h)
@@ -195,8 +202,9 @@ func TestThePickersModelsScrollPastFiveAndAHalfRows(t *testing.T) {
 			break
 		}
 		h.tt.Key(0, ui.KeyTab)
-		pickerSettle(t, h)
+		settlePlugins(t, h.a, h.tt, h.p)
 	}
+	pickerSettle(t, h)
 	if !h.tt.Focused("M 29") {
 		t.Fatal("Tab never reached the 30th model")
 	}
@@ -342,8 +350,9 @@ func TestThePickerKeepsInAShortWindow(t *testing.T) {
 			break
 		}
 		h.tt.Key(0, ui.KeyTab)
-		pickerSettle(t, h)
+		settlePlugins(t, h.a, h.tt, h.p)
 	}
+	pickerSettle(t, h)
 	if r, ok := h.tt.Find("M 29"); !h.tt.Focused("M 29") || !ok || r.Y < top.Y || r.Y+r.H > effort.Y {
 		t.Errorf("the 30th model, tabbed to, is at %v (focused %v), out of the models between %v and %v", r, h.tt.Focused("M 29"), top, effort)
 	}

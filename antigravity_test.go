@@ -28,12 +28,18 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
+	bundledCache, err := os.MkdirTemp("", "glitched-bundled")
+	if err != nil {
+		panic(err)
+	}
+	testBundledDir = bundledCache
 	ghBin = bin
 	writeGH("echo 'gh: stub' >&2\nexit 1")
 	userPath := guard.UserPath
 	guard.UserPath = func() string { return bin + string(os.PathListSeparator) + userPath() }
 	code := m.Run()
 	os.RemoveAll(bin)
+	os.RemoveAll(bundledCache)
 	os.Exit(code)
 }
 

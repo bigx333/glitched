@@ -448,20 +448,22 @@ const (
 func (a *app) modelListRow(list, key string, e ui.Element) {
 	switch list {
 	case "families":
-		i := slices.IndexFunc(a.shownFamilies(), func(f family) bool { return f.provider == key || f.name == key })
+		fams := a.shownFamilies()
+		i := slices.IndexFunc(fams, func(f family) bool { return f.provider == key || f.name == key })
 		if i < 0 {
 			return
 		}
 		if e.Hovered() || e.Clicked() {
-			a.pickerFamily = a.shownFamilies()[i].provider
+			a.pickerFamily = fams[i].provider
 		}
 	case "models":
-		i := slices.IndexFunc(a.offeredModels(), func(m modelInfo) bool { return m.key.String() == key || m.name == key })
-		if i < 0 || a.pickerLock != "" && a.offeredModels()[i].key.Provider != a.pickerLock {
+		offered := a.offeredModels()
+		i := slices.IndexFunc(offered, func(m modelInfo) bool { return m.key.String() == key || m.name == key })
+		if i < 0 || a.pickerLock != "" && offered[i].key.Provider != a.pickerLock {
 			return
 		}
 		if e.Clicked() {
-			a.chooseModel(a.offeredModels()[i].key)
+			a.chooseModel(offered[i].key)
 		}
 	}
 }

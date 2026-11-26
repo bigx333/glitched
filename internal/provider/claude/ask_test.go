@@ -229,62 +229,40 @@ func TestACancelledQuestionGoesVoid(t *testing.T) {
 }
 
 // Questions the card can't show get a deny that says why, so the turn
-// goes on, and open no card.
+// goes on, and open no card. Individual validation branches are covered
+// directly by TestQuestionRefusals in ask_unit_test.go.
 func TestQuestionsTheCardCantShowAreRefused(t *testing.T) {
-	options := func(labels ...string) []any {
-		var o []any
-		for _, l := range labels {
-			o = append(o, map[string]any{"label": l, "description": ""})
+	ab := []any{
+		map[string]any{"label": "A", "description": ""},
+		map[string]any{"label": "B", "description": ""},
+	}
+	q := func(text string) map[string]any {
+		return map[string]any{"question": text, "header": "H", "multiSelect": false, "options": ab}
+	}
+	tape := rewrite(t, dismissed.name, func(m map[string]any) []map[string]any {
+		if r := canUseTool(m); r != nil {
+			r["input"] = map[string]any{"questions": []any{q("1?"), q("2?"), q("3?"), q("4?"), q("5?")}}
 		}
-		return o
+		return []map[string]any{m}
+	})
+	t.Setenv(envFake, tape)
+	replies := stdin(t)
+	h := host(t, nil)
+	got := turn(t, h, newThread(t, h, api.AccessAsk), dismissed.prompt)
+	if len(got.requests) != 0 {
+		t.Errorf("requests %+v, want no card", got.requests)
 	}
-	q := func(text string, opts []any) map[string]any {
-		return map[string]any{"question": text, "header": "H", "multiSelect": false, "options": opts}
+	if got.ended.Outcome != api.OutcomeCompleted {
+		t.Errorf("turn ended %+v, want completed", got.ended)
 	}
-	ab := options("A", "B")
-	for _, c := range []struct {
-		name      string
-		questions []any
-		why       string
-	}{
-		{"five questions", []any{q("1?", ab), q("2?", ab), q("3?", ab), q("4?", ab), q("5?", ab)}, "5 questions, want 1 to 4"},
-		{"no questions", []any{}, "0 questions, want 1 to 4"},
-		{"one option", []any{q("1?", options("A"))}, "question 1 has 1 options, want 2 to 4"},
-		{"five options", []any{q("1?", options("A", "B", "C", "D", "E"))}, "question 1 has 5 options, want 2 to 4"},
-		{"no text", []any{q("", ab)}, "question 1 has no text"},
-		{"no label", []any{q("1?", []any{map[string]any{"description": "x"}, map[string]any{"label": "B"}})}, "question 1 has a blank or repeated option"},
-		{"a repeated label", []any{q("1?", options("A", "A"))}, "question 1 has a blank or repeated option"},
-		{"a repeated question", []any{q("1?", ab), q("1?", ab)}, "question 2 repeats an earlier question"},
-		{"a text question", []any{map[string]any{"question": "1?", "header": "H", "kind": "text"}}, "question 1 asks for text, not a choice"},
-		{"a comma in a multi-select label", []any{q("1?", ab), map[string]any{"question": "2?", "header": "H", "multiSelect": true, "options": options("A,B", "C")}},
-			`question 2 takes more than one answer, and Claude Code joins those with commas, so its label "A,B" can't have one`},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			tape := rewrite(t, dismissed.name, func(m map[string]any) []map[string]any {
-				if r := canUseTool(m); r != nil {
-					r["input"] = map[string]any{"questions": c.questions}
-				}
-				return []map[string]any{m}
-			})
-			t.Setenv(envFake, tape)
-			replies := stdin(t)
-			h := host(t, nil)
-			got := turn(t, h, newThread(t, h, api.AccessAsk), dismissed.prompt)
-			if len(got.requests) != 0 {
-				t.Errorf("requests %+v, want no card", got.requests)
-			}
-			if got.ended.Outcome != api.OutcomeCompleted {
-				t.Errorf("turn ended %+v, want completed", got.ended)
-			}
-			var all []reply
-			for _, r := range replies() {
-				all = append(all, r...)
-			}
-			if len(all) != 1 || all[0].subtype != "success" || all[0].Behavior != "deny" ||
-				!strings.HasPrefix(all[0].Message, "glitched cannot show these questions (") || !strings.Contains(all[0].Message, c.why) {
-				t.Errorf("Claude Code got %+v, want one deny that says %q", all, c.why)
-			}
-		})
+	var all []reply
+	for _, r := range replies() {
+		all = append(all, r...)
+	}
+	const wantWhy = "5 questions, want 1 to 4"
+	if len(all) != 1 || all[0].subtype != "success" || all[0].Behavior != "deny" ||
+		!strings.HasPrefix(all[0].Message, "glitched cannot show these questions (") || !strings.Contains(all[0].Message, wantWhy) {
+		t.Errorf("Claude Code got %+v, want one deny that says %q", all, wantWhy)
 	}
 }
 
