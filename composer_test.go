@@ -492,6 +492,98 @@ func TestComposerStaysFullARefreshAfterTheClick(t *testing.T) {
 	}
 }
 
+func TestComposerStaysOpenAsItSends(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		open func(t *testing.T, a *app, tt *ui.Tester)
+		send func(a *app, th thread)
+	}{
+		{"enter", openFully, func(a *app, th thread) { a.send(th) }},
+		{"send button", openFully, func(a *app, th thread) { a.sendOrStop(th, true) }},
+		{"enter mid-morph", func(t *testing.T, a *app, tt *ui.Tester) {
+			for range 60 {
+				if a.composerK > shownAt && a.composerK < 1 {
+					return
+				}
+				tt.Advance(16 * time.Millisecond)
+			}
+			t.Fatalf("opening: k %v; want mid-way", a.composerK)
+		}, func(a *app, th thread) { a.send(th) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var ks []float32
+			var line ui.Rect
+			// sending is the send, made at the start of the next frame a
+			// refresh runs, as a window takes input: the Tester's own
+			// input settles the frames it asks for at once, where a
+			// window shows the next a refresh later.
+			var sending func()
+			a, tt, th := longThread(t, func(a *app) func(*ui.Context) {
+				return func(c *ui.Context) {
+					if s := sending; s != nil {
+						sending = nil
+						s()
+						ks = ks[:0]
+					}
+					a.view(c)
+					ks = append(ks, a.composerK)
+					line = a.draftLine.Bounds(c)
+				}
+			})
+			l := a.listFor(th.id())
+			foldComposer(t, a, tt, th)
+			if line.W == 0 {
+				t.Fatal("the compact line isn't there to click")
+			}
+			tt.ClickAt(line.X+line.W/2, line.Y+line.H/2)
+			if active, _ := tt.TextInputActive(); !active || a.composerK != 0 {
+				t.Fatalf("clicked, the compact line has no focus: active %v, k %v", active, a.composerK)
+			}
+			tt.Type("Ship it")
+			tt.Frame()
+			tc.open(t, a, tt)
+			from := a.composerK
+			sending = func() { tc.send(a, a.current()) }
+			for i := 0; sending != nil; i++ {
+				if i == 200 {
+					t.Fatal("no frame came to send in")
+				}
+				tt.Advance(16 * time.Millisecond)
+			}
+			for range 60 {
+				tt.Advance(16 * time.Millisecond)
+			}
+			if a.draft != "" || !tt.HasText("Ship it") {
+				t.Fatalf("after sending, the draft is %q, the message shows %v; want it sent", a.draft, tt.HasText("Ship it"))
+			}
+			prev := from
+			for i, k := range ks {
+				if k < prev {
+					t.Fatalf("sent at k %v, k went %v → %v in frame %d of %v: it turned to fold", from, prev, k, i, ks)
+				}
+				prev = k
+			}
+			if a.composerK != 1 || !l.AtEnd() {
+				t.Fatalf("sent: k %v, at the end %v; want 1, true", a.composerK, l.AtEnd())
+			}
+			l.ScrollTo(0, ui.Start)
+			tt.Frame()
+			tt.Advance(time.Second)
+			if a.composerK != 0 {
+				t.Fatalf("scrolled up after sending: k %v; want 0", a.composerK)
+			}
+		})
+	}
+}
+
+func openFully(t *testing.T, a *app, tt *ui.Tester) {
+	t.Helper()
+	tt.Advance(time.Second)
+	if a.composerK != 1 {
+		t.Fatalf("opened: k %v; want 1", a.composerK)
+	}
+}
+
 // foldComposer scrolls th's chat up from its end, the composer folding,
 // and waits for it to be at rest, compact and measured.
 func foldComposer(t *testing.T, a *app, tt *ui.Tester, th thread) {
