@@ -29,6 +29,10 @@ func TestMain(m *testing.M) {
 		runWireFake(os.Args[2])
 		return
 	}
+	if len(os.Args) >= 2 && os.Args[1] == "legacy-fake" {
+		runLegacyFake()
+		return
+	}
 	if acptest.Main() {
 		return
 	}
