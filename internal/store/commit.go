@@ -697,25 +697,22 @@ func ids(ctx context.Context, q querier, query string, args ...any) ([]api.ID, e
 	return out, rows.Err()
 }
 
-func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error) {
-	t := engine.Thread{ID: id}
+const threadSelectCols = `id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
+	parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote, origin`
+
+func scanThreadRow(row interface{ Scan(...any) error }, t *engine.Thread) error {
 	var model []byte
 	var until, reported, cacheExpires sql.NullInt64
 	var report, granted, remote, origin sql.NullString
 	var updated int64
-	err := q.QueryRowContext(ctx, `SELECT workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
-			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote, origin
-		FROM threads WHERE id = ?`, id[:]).Scan(&t.Workspace, &t.Title, &model, &t.Access, &t.Revision, &t.OwnerEpoch,
+	err := row.Scan(idScan{&t.ID}, &t.Workspace, &t.Title, &model, &t.Access, &t.Revision, &t.OwnerEpoch,
 		&t.Generation, &t.Disposition.State, &until, &updated, &t.Deleted, idScan{&t.Parent}, &t.Tokens, &reported, &report, &t.Session,
 		&t.Project, &t.Branch, &t.Context.Used, &t.Context.Window, &t.Context.Stale, &t.Context.Model, &granted, &cacheExpires, &remote, &origin)
-	if errors.Is(err, sql.ErrNoRows) {
-		return engine.Thread{}, nil
-	}
 	if err != nil {
-		return t, err
+		return err
 	}
 	if err := json.Unmarshal(model, &t.Model); err != nil {
-		return t, err
+		return err
 	}
 	if until.Valid {
 		t.Disposition.Until = fromNanos(until.Int64)
@@ -730,54 +727,174 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 	if report.Valid {
 		var r storedReport
 		if err := json.Unmarshal([]byte(report.String), &r); err != nil {
-			return t, err
+			return err
 		}
 		t.LastReport = &api.Report{Child: r.Child, Kind: r.Kind, Cursor: api.Cursor{Seq: r.Seq}}
 	}
 	if granted.Valid {
 		if err := json.Unmarshal([]byte(granted.String), &t.Confirmed); err != nil {
-			return t, err
+			return err
 		}
 	}
 	if remote.Valid {
 		t.Remote = &engine.Remote{}
 		if err := json.Unmarshal([]byte(remote.String), t.Remote); err != nil {
-			return t, err
+			return err
 		}
 	}
 	if origin.Valid {
 		t.Origin = &engine.Origin{}
 		if err := json.Unmarshal([]byte(origin.String), t.Origin); err != nil {
-			return t, err
+			return err
 		}
 	}
+	return nil
+}
 
-	err = each(ctx, q, `SELECT id, generation, state, signalled, outcome, error, ended, model, access, silent, limit_resets, resume_cancelled, dropped FROM runs WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
-		var r engine.Run
-		var outcome, access sql.NullByte
-		var ended, resets sql.NullInt64
-		var model sql.NullString
-		if err := rows.Scan(idScan{&r.ID}, &r.Generation, &r.State, &r.Signalled, &outcome, &r.Error, &ended, &model, &access, &r.Silent, &resets, &r.ResumeCancelled, &r.Dropped); err != nil {
+func scanRunRow(rows *sql.Rows) (api.ID, engine.Run, bool, error) {
+	var thread api.ID
+	var r engine.Run
+	var outcome, access sql.NullByte
+	var ended, resets sql.NullInt64
+	var model sql.NullString
+	if err := rows.Scan(idScan{&thread}, idScan{&r.ID}, &r.Generation, &r.State, &r.Signalled, &outcome, &r.Error, &ended, &model, &access, &r.Silent, &resets, &r.ResumeCancelled, &r.Dropped); err != nil {
+		return thread, r, false, err
+	}
+	if resets.Valid {
+		r.Limit = &api.UsageLimit{}
+		if resets.Int64 != 0 {
+			r.Limit.Resets = fromNanos(resets.Int64)
+		}
+	}
+	r.Outcome = api.Outcome(outcome.Byte)
+	if ended.Valid {
+		r.Ended = fromNanos(ended.Int64)
+	}
+	// A run the upgrade to version 7 found no admission for has
+	// neither: it reads at Ask, the narrowest, so it starts no child
+	// wider than it's known to be, and at its thread's model.
+	r.Access = api.Access(access.Byte)
+	if model.Valid {
+		if err := json.Unmarshal([]byte(model.String), &r.Model); err != nil {
+			return thread, r, false, err
+		}
+	}
+	return thread, r, model.Valid, nil
+}
+
+func scanMessageRow(rows *sql.Rows) (api.ID, engine.Message, error) {
+	var thread api.ID
+	var m engine.Message
+	err := rows.Scan(idScan{&thread}, idScan{&m.ID}, &m.Text, &m.Mode, &m.Pos, &m.State, idScan{&m.Run})
+	return thread, m, err
+}
+
+func scanRequestRow(rows *sql.Rows) (api.ID, engine.Request, error) {
+	var thread api.ID
+	var r engine.Request
+	err := rows.Scan(idScan{&thread}, idScan{&r.ID}, idScan{&r.Run}, &r.Generation, &r.Dedup, &r.Kind,
+		(*[]byte)(&r.Body), (*[]byte)(&r.Answer), &r.State)
+	return thread, r, err
+}
+
+// liveViews is the view of every thread not deleted, in the order the
+// thread list shows them. It reads each thread as View does, in one query
+// per table: a message without its text, a request without its answer and,
+// unless pending, its body. So the list costs what it shows, not every
+// message its threads were sent.
+func (s *Store) liveViews(ctx context.Context, q querier) ([]api.Thread, error) {
+	rows, err := q.QueryContext(ctx, `SELECT `+threadSelectCols+` FROM threads WHERE deleted = 0 ORDER BY updated_at DESC, id`)
+	if err != nil {
+		return nil, err
+	}
+	var out []engine.Thread
+	index := map[api.ID]int{}
+	for rows.Next() {
+		var t engine.Thread
+		if err := scanThreadRow(rows, &t); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		index[t.ID] = len(out)
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(out) == 0 {
+		return nil, nil
+	}
+
+	if err := queryEach(ctx, q, `SELECT r.thread, r.id, r.generation, r.state, r.signalled, r.outcome, r.error, r.ended, r.model, r.access, r.silent, r.limit_resets, r.resume_cancelled, r.dropped
+		FROM runs r JOIN threads t ON t.id = r.thread WHERE t.deleted = 0 ORDER BY r.thread, r.ord`, func(rows *sql.Rows) error {
+		thread, r, hasModel, err := scanRunRow(rows)
+		if err != nil {
 			return err
 		}
-		if resets.Valid {
-			r.Limit = &api.UsageLimit{}
-			if resets.Int64 != 0 {
-				r.Limit.Resets = fromNanos(resets.Int64)
+		if idx, ok := index[thread]; ok {
+			if !hasModel {
+				r.Model = out[idx].Model
 			}
+			out[idx].Runs = append(out[idx].Runs, r)
 		}
-		r.Outcome = api.Outcome(outcome.Byte)
-		if ended.Valid {
-			r.Ended = fromNanos(ended.Int64)
-		}
-		// A run the upgrade to version 7 found no admission for has
-		// neither: it reads at Ask, the narrowest, so it starts no child
-		// wider than it's known to be, and at its thread's model.
-		r.Access = api.Access(access.Byte)
-		if !model.Valid {
-			r.Model = t.Model
-		} else if err := json.Unmarshal([]byte(model.String), &r.Model); err != nil {
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := queryEach(ctx, q, `SELECT m.thread, m.id, '', m.mode, m.pos, m.state, m.run
+		FROM messages m JOIN threads t ON t.id = m.thread WHERE t.deleted = 0 ORDER BY m.thread, m.ord`, func(rows *sql.Rows) error {
+		thread, m, err := scanMessageRow(rows)
+		if err != nil {
 			return err
+		}
+		if idx, ok := index[thread]; ok {
+			out[idx].Queue = append(out[idx].Queue, m)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := queryEach(ctx, q, `SELECT q.thread, q.id, q.run, q.generation, q.dedup, q.kind, CASE WHEN q.state = ? THEN q.body END, NULL, q.state
+		FROM requests q JOIN threads t ON t.id = q.thread WHERE t.deleted = 0 ORDER BY q.thread, q.ord`, func(rows *sql.Rows) error {
+		thread, r, err := scanRequestRow(rows)
+		if err != nil {
+			return err
+		}
+		if idx, ok := index[thread]; ok {
+			out[idx].Requests = append(out[idx].Requests, r)
+		}
+		return nil
+	}, int(api.RequestPending)); err != nil {
+		return nil, err
+	}
+	views := make([]api.Thread, len(out))
+	for i, t := range out {
+		views[i] = s.view(t)
+	}
+	return views, nil
+}
+
+func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error) {
+	var t engine.Thread
+	err := scanThreadRow(q.QueryRowContext(ctx, `SELECT `+threadSelectCols+` FROM threads WHERE id = ?`, id[:]), &t)
+	if errors.Is(err, sql.ErrNoRows) {
+		return engine.Thread{}, nil
+	}
+	if err != nil {
+		return t, err
+	}
+
+	err = each(ctx, q, `SELECT thread, id, generation, state, signalled, outcome, error, ended, model, access, silent, limit_resets, resume_cancelled, dropped FROM runs WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
+		_, r, hasModel, err := scanRunRow(rows)
+		if err != nil {
+			return err
+		}
+		if !hasModel {
+			r.Model = t.Model
 		}
 		t.Runs = append(t.Runs, r)
 		return nil
@@ -785,9 +902,9 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 	if err != nil {
 		return t, err
 	}
-	err = each(ctx, q, `SELECT id, text, mode, pos, state, run FROM messages WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
-		var m engine.Message
-		if err := rows.Scan(idScan{&m.ID}, &m.Text, &m.Mode, &m.Pos, &m.State, idScan{&m.Run}); err != nil {
+	err = each(ctx, q, `SELECT thread, id, text, mode, pos, state, run FROM messages WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
+		_, m, err := scanMessageRow(rows)
+		if err != nil {
 			return err
 		}
 		t.Queue = append(t.Queue, m)
@@ -796,10 +913,9 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 	if err != nil {
 		return t, err
 	}
-	err = each(ctx, q, `SELECT id, run, generation, dedup, kind, body, answer, state FROM requests WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
-		var r engine.Request
-		if err := rows.Scan(idScan{&r.ID}, idScan{&r.Run}, &r.Generation, &r.Dedup, &r.Kind,
-			(*[]byte)(&r.Body), (*[]byte)(&r.Answer), &r.State); err != nil {
+	err = each(ctx, q, `SELECT thread, id, run, generation, dedup, kind, body, answer, state FROM requests WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
+		_, r, err := scanRequestRow(rows)
+		if err != nil {
 			return err
 		}
 		t.Requests = append(t.Requests, r)
@@ -808,8 +924,8 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 	return t, err
 }
 
-func each(ctx context.Context, q querier, query string, id api.ID, scan func(*sql.Rows) error) error {
-	rows, err := q.QueryContext(ctx, query, id[:])
+func queryEach(ctx context.Context, q querier, query string, scan func(*sql.Rows) error, args ...any) error {
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -820,6 +936,10 @@ func each(ctx context.Context, q querier, query string, id api.ID, scan func(*sq
 		}
 	}
 	return rows.Err()
+}
+
+func each(ctx context.Context, q querier, query string, id api.ID, scan func(*sql.Rows) error) error {
+	return queryEach(ctx, q, query, scan, id[:])
 }
 
 // writeThread writes the rows that differ between old and t. Elements never

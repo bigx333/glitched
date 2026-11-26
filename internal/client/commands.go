@@ -379,6 +379,7 @@ func (m *Manager) Dismiss(e *Env, thread, command api.ID) {
 	_, create := th.Pending[i].Body.(api.ThreadCreate)
 	th.Pending = slices.Delete(th.Pending, i, i+1)
 	if create && !th.known {
+		m.cacheDrop(e, thread)
 		delete(e.Threads, thread)
 		e.Membership++
 	}

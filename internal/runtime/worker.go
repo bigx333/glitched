@@ -381,6 +381,12 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 	}
 	for _, s := range h.servers {
 		s.Args, s.Env = slices.Clone(s.Args), maps.Clone(s.Env)
+		if s.Name == "glitched-browser" {
+			if s.Env == nil {
+				s.Env = map[string]string{}
+			}
+			s.Env["GLITCHED_THREAD"] = thread.String()
+		}
 		spec.MCP = append(spec.MCP, s)
 	}
 	// A fork that first sent a slash command already has a session.

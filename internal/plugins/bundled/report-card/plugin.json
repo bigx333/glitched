@@ -3,7 +3,7 @@
   "name": "Report card",
   "description": "A child thread's report card in the timeline, around Glitched's native report rows. Built into Glitched; make a copy in Settings › Plugins to change its chrome.",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "main.ts",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": ["ui.place", "ui.replace", "messages:read"],

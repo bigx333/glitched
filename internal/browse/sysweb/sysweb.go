@@ -6,6 +6,7 @@
 package sysweb
 
 import (
+	"context"
 	"runtime"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/browse"
+	"glitched/internal/webtarget"
 )
 
 // Background fills a page until it paints: the app's dark surface.
@@ -40,6 +42,25 @@ func (p page) Show(c *ui.Context) ui.Element { return ui.WebView(c, p.view) }
 func (p page) Close() {
 	*p.closed = true
 	p.view.Destroy()
+}
+
+// CapturePage captures a PNG screenshot of the web view's visible page.
+func (p page) CapturePage(ctx context.Context) ([]byte, error) {
+	type res struct {
+		png []byte
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		png, err := p.view.CapturePage()
+		ch <- res{png, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.png, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // Opener makes pages as web views of win, delivering their events through
@@ -105,12 +126,17 @@ func (c *crashes) gone(reason, url string) (reload, fail bool) {
 }
 
 func open(win *mygo.Window, url string, ev browse.Events) (browse.Page, error) {
-	v, err := win.NewWebView(mygo.WebViewOptions{URL: url, BackgroundColor: Background})
+	v, err := win.NewWebView(mygo.WebViewOptions{
+		URL:             url,
+		BackgroundColor: Background,
+		Page:            mygo.PageOptions{PreloadScript: webtarget.PreloadScript()},
+	})
 	if err != nil {
 		return nil, err
 	}
 	p := v.Page()
 	closed, crash := new(bool), &crashes{}
+	var lastURL string
 	// The page's events come from the engine; the tab hears them where
 	// the view builds, until the page closes.
 	on := func(fn func()) {
@@ -122,14 +148,36 @@ func open(win *mygo.Window, url string, ev browse.Events) (browse.Page, error) {
 			})
 		}
 	}
+	syncSPAURL := func() {
+		u := p.URL()
+		if u == "" || u == lastURL || strings.HasPrefix(u, "about:") || strings.HasPrefix(u, "data:") {
+			return
+		}
+		if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+			return
+		}
+		lastURL = u
+		crash.committed(u)
+		if ev.Navigated != nil {
+			ev.Navigated(u)
+		}
+	}
 	p.OnWillNavigate(func(*mygo.NavigateEvent) { on(ev.Changed) })
-	p.OnDidFinishLoad(func() { on(ev.Changed) })
+	p.OnDidFinishLoad(func() {
+		on(func() {
+			syncSPAURL()
+			if ev.Changed != nil {
+				ev.Changed()
+			}
+		})
+	})
 	p.OnDidNavigate(func(url string) {
 		// LoadHTML's pages, as the one saying a load failed, are at none.
 		if strings.HasPrefix(url, "about:") || strings.HasPrefix(url, "data:") {
 			return
 		}
 		on(func() {
+			lastURL = url
 			crash.committed(url)
 			if ev.Navigated != nil {
 				ev.Navigated(url)
@@ -137,9 +185,13 @@ func open(win *mygo.Window, url string, ev browse.Events) (browse.Page, error) {
 		})
 	})
 	p.OnPageTitleUpdated(func(e *mygo.TitleEvent) {
-		if title := e.Title; ev.Titled != nil {
-			on(func() { ev.Titled(title) })
-		}
+		title := e.Title
+		on(func() {
+			syncSPAURL()
+			if ev.Titled != nil {
+				ev.Titled(title)
+			}
+		})
 	})
 	p.OnDidFailLoad(func(e *mygo.LoadError) {
 		if cancelled(e.Code) || ev.Failed == nil {

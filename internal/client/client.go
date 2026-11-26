@@ -42,11 +42,23 @@ type Config struct {
 	// engine.json: the GUI has it run the real Claude Code. Left nil, as a
 	// test leaves it, the engine plays every provider with the fake.
 	Engine func(*daemon.Config)
+	// Served, when set, says whether a background service runs, or is
+	// about to run, the engine for Dir. The local env then waits up to
+	// serviceWait for that engine to answer before it embeds one, so the
+	// service, which waits for the lock, keeps the directory. Nil never
+	// waits.
+	Served func(context.Context) bool
 	// Detect reads an installed Tailscale's status for This machine while
 	// no engine answers, as the engine's own Config.Detect would; nil
 	// reads this machine's.
 	Detect func(context.Context) (api.Tailnet, error)
+	// TranscriptCacheSize caps how many closed threads keep their folded
+	// Transcript in memory. Zero defaults to defaultClosedTranscriptCache;
+	// a negative value keeps none.
+	TranscriptCacheSize int
 }
+
+const defaultClosedTranscriptCache = 20
 
 const (
 	probeTimeout   = 750 * time.Millisecond
@@ -95,7 +107,13 @@ type Manager struct {
 	// reported in; again, whether Restart was called meanwhile.
 	restarting, again bool
 	// embedded is the engine embedded here, once it reported in.
-	embedded *daemon.Daemon
+	embedded    *daemon.Daemon
+	closedCache []cacheKey
+}
+
+type cacheKey struct {
+	env    *Env
+	thread api.ID
 }
 
 func New(cfg Config) *Manager {
@@ -422,6 +440,7 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 		for id, th := range e.Threads {
 			if th.known && !live[id] {
 				th.unfollow()
+				m.cacheDrop(e, id)
 				delete(e.Threads, id)
 				e.Membership++
 			}
@@ -482,6 +501,7 @@ func (m *Manager) view(e *Env, v api.Thread) bool {
 	if v.Deleted {
 		if th != nil {
 			th.unfollow()
+			m.cacheDrop(e, v.ID)
 			delete(e.Threads, v.ID)
 			e.Membership++
 		}
@@ -548,6 +568,7 @@ func (m *Manager) down(e *Env, s Status) {
 		th.sub = nil
 	}
 	if _, dup := s.(Duplicate); dup {
+		m.cacheDropEnv(e)
 		clear(e.Threads)
 		e.Membership++
 		e.log = api.ID{}
@@ -561,6 +582,7 @@ func (m *Manager) OpenThread(e *Env, thread api.ID) {
 	if th == nil || th.open {
 		return
 	}
+	m.cacheDrop(e, thread)
 	if th.Transcript == nil {
 		th.Transcript = &Transcript{}
 	}
@@ -568,9 +590,10 @@ func (m *Manager) OpenThread(e *Env, thread api.ID) {
 	m.follow(e, th)
 }
 
-// CloseThread stops following a thread. Its transcript stays cached for
-// the next OpenThread, but no longer keeps the answers, failed or taken,
-// to requests only it showed waiting.
+// CloseThread stops following a thread. Its transcript stays cached (up to
+// Config.TranscriptCacheSize closed threads in LRU order) for the next
+// OpenThread, but no longer keeps the answers, failed or taken, to requests
+// only it showed waiting.
 func (m *Manager) CloseThread(e *Env, thread api.ID) {
 	th := e.Threads[thread]
 	if th == nil || !th.open {
@@ -583,6 +606,50 @@ func (m *Manager) CloseThread(e *Env, thread api.ID) {
 		return message && p.sent
 	})
 	th.dropUnasked()
+	if th.Transcript != nil {
+		m.cacheTouch(e, thread)
+	}
+}
+
+func (m *Manager) cacheLimit() int {
+	if m.cfg.TranscriptCacheSize == 0 {
+		return defaultClosedTranscriptCache
+	}
+	if m.cfg.TranscriptCacheSize < 0 {
+		return 0
+	}
+	return m.cfg.TranscriptCacheSize
+}
+
+func (m *Manager) cacheDrop(e *Env, thread api.ID) {
+	m.closedCache = slices.DeleteFunc(m.closedCache, func(k cacheKey) bool {
+		return k.env == e && k.thread == thread
+	})
+}
+
+func (m *Manager) cacheDropEnv(e *Env) {
+	m.closedCache = slices.DeleteFunc(m.closedCache, func(k cacheKey) bool {
+		return k.env == e
+	})
+}
+
+func (m *Manager) cacheTouch(e *Env, thread api.ID) {
+	m.cacheDrop(e, thread)
+	limit := m.cacheLimit()
+	if limit <= 0 {
+		if th := e.Threads[thread]; th != nil && !th.open {
+			th.Transcript = nil
+		}
+		return
+	}
+	m.closedCache = append(m.closedCache, cacheKey{env: e, thread: thread})
+	for len(m.closedCache) > limit {
+		ev := m.closedCache[0]
+		m.closedCache = m.closedCache[1:]
+		if old := ev.env.Threads[ev.thread]; old != nil && !old.open {
+			old.Transcript = nil
+		}
+	}
 }
 
 func (th *Thread) unfollow() {
@@ -701,9 +768,14 @@ type local struct {
 	engine   func(*daemon.Config)          // Config.Engine
 	attached *transport.EndpointClient
 	embedded *daemon.Daemon
-	err      error         // from closing the embedded engine
-	done     chan struct{} // closed once close returns
+	err      error                      // from closing the embedded engine
+	done     chan struct{}              // closed once close returns
+	served   func(context.Context) bool // Config.Served
 }
+
+// serviceWait is how long the local env waits for the background
+// service's engine, as it starts or restarts, before it embeds one.
+var serviceWait = 15 * time.Second
 
 func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 	switch {
@@ -714,7 +786,8 @@ func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 	}
 	// An engine holds the lock while it starts, and answers once it serves.
 	deadline := time.Now().Add(connectTimeout)
-	for {
+	var attachUntil time.Time
+	for asked := false; ; {
 		c := transport.NewEndpointClient(daemon.Socket(l.dir), api.ID{})
 		probe, cancel := context.WithTimeout(ctx, probeTimeout)
 		_, err := c.Info(probe)
@@ -725,6 +798,21 @@ func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 			return c, nil
 		}
 		c.Close()
+		if !asked && l.served != nil {
+			asked = true
+			if l.served(ctx) {
+				attachUntil = time.Now().Add(serviceWait)
+				deadline = attachUntil.Add(connectTimeout)
+			}
+		}
+		if time.Now().Before(attachUntil) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(probeInterval):
+			}
+			continue
+		}
 		cfg, err := daemon.Defaults(l.dir)
 		if err != nil {
 			return nil, err

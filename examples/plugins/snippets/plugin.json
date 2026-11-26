@@ -3,7 +3,7 @@
   "name": "Snippets",
   "description": "Prompts you reuse: saved here, drafted in the composer or started as threads.",
   "version": "0.1.0",
-  "main": "index.js",
+  "main": "index.ts",
   "contract": "glitched",
   "contractVersion": 1,
   "capabilities": ["composer", "clipboard", "threads:read", "threads:write"],

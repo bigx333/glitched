@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -142,4 +144,122 @@ func refusal(err error) error {
 		return fmt.Errorf("%w: %w", ErrNotTheServer, err)
 	}
 	return fmt.Errorf("transport: handshake: %w", err)
+}
+
+const (
+	defaultMaxHandshakes  = 64
+	defaultAuthBurst      = 8
+	defaultAuthBackoff    = 500 * time.Millisecond
+	defaultMaxAuthBackoff = 30 * time.Second
+	maxTrackedAuthPeers   = 1024
+)
+
+type peerAuth struct {
+	failures     int
+	lastFailure  time.Time
+	blockedUntil time.Time
+}
+
+type handshakeLimiter struct {
+	sem         chan struct{}
+	burst       int
+	baseBackoff time.Duration
+	maxBackoff  time.Duration
+
+	mu    sync.Mutex
+	peers map[string]*peerAuth
+}
+
+func (s *Server) newHandshakeLimiter() *handshakeLimiter {
+	maxConcurrent := s.maxHandshakes
+	if maxConcurrent <= 0 {
+		maxConcurrent = defaultMaxHandshakes
+	}
+	burst := s.authBurst
+	if burst <= 0 {
+		burst = defaultAuthBurst
+	}
+	backoff := s.authBackoff
+	if backoff <= 0 {
+		backoff = defaultAuthBackoff
+	}
+	maxBackoff := s.maxAuthBackoff
+	if maxBackoff <= 0 {
+		maxBackoff = defaultMaxAuthBackoff
+	}
+	if maxBackoff < backoff {
+		maxBackoff = backoff
+	}
+	return &handshakeLimiter{
+		sem:         make(chan struct{}, maxConcurrent),
+		burst:       burst,
+		baseBackoff: backoff,
+		maxBackoff:  maxBackoff,
+		peers:       map[string]*peerAuth{},
+	}
+}
+
+func peerKey(remoteAddr string) string {
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil && host != "" {
+		return host
+	}
+	return remoteAddr
+}
+
+func (l *handshakeLimiter) acquire() bool {
+	select {
+	case l.sem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (l *handshakeLimiter) release() {
+	<-l.sem
+}
+
+func (l *handshakeLimiter) checkPeer(remoteAddr string, now time.Time) (time.Duration, bool) {
+	key := peerKey(remoteAddr)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	p := l.peers[key]
+	if p == nil || !now.Before(p.blockedUntil) {
+		return 0, true
+	}
+	return p.blockedUntil.Sub(now), false
+}
+
+func (l *handshakeLimiter) recordSuccess(remoteAddr string) {
+	key := peerKey(remoteAddr)
+	l.mu.Lock()
+	delete(l.peers, key)
+	l.mu.Unlock()
+}
+
+func (l *handshakeLimiter) recordFailure(remoteAddr string, now time.Time) {
+	key := peerKey(remoteAddr)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.peers) > maxTrackedAuthPeers {
+		for k, v := range l.peers {
+			if now.Sub(v.lastFailure) > 2*l.maxBackoff && !now.Before(v.blockedUntil) {
+				delete(l.peers, k)
+			}
+		}
+	}
+	p := l.peers[key]
+	if p == nil {
+		p = &peerAuth{}
+		l.peers[key] = p
+	} else if now.Sub(p.lastFailure) > 2*l.maxBackoff {
+		p.failures = 0
+	}
+	p.failures++
+	p.lastFailure = now
+	if p.failures >= l.burst {
+		shift := min(p.failures-l.burst, 10)
+		delay := min(l.baseBackoff<<shift, l.maxBackoff)
+		p.blockedUntil = now.Add(delay)
+	}
 }

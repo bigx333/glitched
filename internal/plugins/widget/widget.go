@@ -377,6 +377,12 @@ type ListItem struct {
 	Height  float32 `json:"height,omitempty"`
 	Header  bool    `json:"header,omitempty"`
 	Thread  string  `json:"thread,omitempty"`
+	// Section is the section the item folds with as Glitched opens and
+	// closes it: its row shows only the part the section has uncovered.
+	// An item, header or not, that names a section folds with it; a
+	// section's own title names none. Only a sidebar.body copy's items
+	// fold.
+	Section string `json:"section,omitempty"`
 }
 
 // ItemHeight is the height of the list's item i: its own, else the list's
@@ -1077,6 +1083,8 @@ func (c *checker) list(n *Node) error {
 			return fmt.Errorf("items[%d]: a height is %d to %d", i, MinRowHeight, MaxRowHeight)
 		case it.Header && it.Thread != "":
 			return fmt.Errorf("items[%d]: a header has no thread", i)
+		case len(it.Section) > MaxItemKey:
+			return fmt.Errorf("items[%d]: a section is up to %d bytes", i, MaxItemKey)
 		}
 		keys[it.Key] = true
 	}

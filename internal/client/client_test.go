@@ -767,9 +767,14 @@ func TestDismissingAFailedCreateDropsItsThread(t *testing.T) {
 	if len(p) != 1 || p[0].Err == nil || p[0].Terminal() {
 		t.Fatalf("with no engine the create is %s, want failed and worth a retry", describePending(p))
 	}
+	m.OpenThread(env, id)
+	m.CloseThread(env, id)
 	m.Dismiss(env, id, p[0].Command)
 	if env.Threads[id] != nil {
 		t.Fatal("the thread whose create was dismissed is still shown")
+	}
+	if len(m.closedCache) != 0 {
+		t.Fatalf("the dismissed thread still holds a place among the cached transcripts: %v", m.closedCache)
 	}
 }
 
@@ -835,4 +840,67 @@ func TestADeletedThreadsStreamIsNotReopened(t *testing.T) {
 	if n := eng.opens.Load(); n != 1 {
 		t.Fatalf("the deleted thread's stream was opened %d times, want once", n)
 	}
+}
+
+func TestClosedTranscriptCacheEvictsLRU(t *testing.T) {
+	dir := stateDir(t)
+	g := &gui{wake: make(chan struct{}, 1)}
+	m := New(Config{Dir: dir, Post: g.post, TranscriptCacheSize: 2})
+	if err := m.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close() })
+	env := m.Envs()[0]
+	online(t, g, env)
+
+	openAndSync := func(title string) api.ID {
+		t.Helper()
+		id := m.Create(env, "/work", title, fakeModel, api.AccessAsk, nil)
+		m.OpenThread(env, id)
+		g.until(t, title+" transcript synced", func() bool {
+			th := env.Threads[id]
+			return th != nil && th.Transcript != nil && th.Transcript.Cursor.Seq > 0
+		})
+		return id
+	}
+
+	t1 := openAndSync("t1")
+	t2 := openAndSync("t2")
+	t3 := openAndSync("t3")
+	t4 := openAndSync("t4")
+	t5 := openAndSync("t5") // stays open throughout
+
+	m.CloseThread(env, t1)
+	m.CloseThread(env, t2)
+	m.CloseThread(env, t3) // cache holds [t2, t3]; t1 evicted
+	if env.Threads[t1].Transcript != nil {
+		t.Fatal("t1 transcript was not evicted")
+	}
+	if env.Threads[t2].Transcript == nil || env.Threads[t3].Transcript == nil {
+		t.Fatal("t2 and t3 transcripts should still be cached")
+	}
+	if env.Threads[t5].Transcript == nil {
+		t.Fatal("open thread t5 transcript should never be evicted")
+	}
+
+	// Reopen and close t2 to make it MRU, then close t4 -> t3 should be evicted.
+	m.OpenThread(env, t2)
+	m.CloseThread(env, t2)
+	m.CloseThread(env, t4) // cache holds [t2, t4]; t3 evicted
+	if env.Threads[t3].Transcript != nil {
+		t.Fatal("t3 transcript was not evicted after t2 was refreshed")
+	}
+	if env.Threads[t2].Transcript == nil || env.Threads[t4].Transcript == nil {
+		t.Fatal("t2 and t4 transcripts should remain cached")
+	}
+	if env.Threads[t5].Transcript == nil {
+		t.Fatal("open thread t5 transcript should remain open and un-evicted")
+	}
+
+	// Reopen evicted t1 -> resyncs from the engine.
+	m.OpenThread(env, t1)
+	g.until(t, "evicted t1 resynced", func() bool {
+		th := env.Threads[t1]
+		return th.Transcript != nil && th.Transcript.Cursor.Seq > 0
+	})
 }

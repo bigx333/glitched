@@ -288,7 +288,7 @@ func TestInstallingSomeoneElsesPluginAsksForConsent(t *testing.T) {
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"plugin.json", "index.js"} {
+	for _, f := range []string{"plugin.json", "index.ts"} {
 		b, _ := os.ReadFile(filepath.Join("examples/plugins/hello", f))
 		os.WriteFile(filepath.Join(src, f), []byte(strings.Replace(string(b), `"permissions": {}`, `"capabilities": ["clipboard"], "permissions": {}`, 1)), 0o644)
 	}

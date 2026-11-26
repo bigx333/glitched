@@ -12,7 +12,7 @@ import (
 	"glitched/internal/plugins/bundled"
 )
 
-// The built-in's main.js and its native copy draw the same meter, node
+// The built-in's main.ts and its native copy draw the same meter, node
 // for node, whatever the agent said.
 func TestTheBuiltInMeterIsItsNativeCopy(t *testing.T) {
 	q := make(chan func(), 1024)
@@ -56,7 +56,7 @@ func TestTheBuiltInMeterIsItsNativeCopy(t *testing.T) {
 		if got, want := s.PlaceView("usage", key), usageBadge(u); !reflect.DeepEqual(got, want) {
 			g, _ := json.Marshal(got)
 			w, _ := json.Marshal(want)
-			t.Errorf("for %+v (%d, %d) main.js drew %s, its native copy %s", u.Context, u.Tokens, u.Total, g, w)
+			t.Errorf("for %+v (%d, %d) main.ts drew %s, its native copy %s", u.Context, u.Tokens, u.Total, g, w)
 		}
 	}
 }
