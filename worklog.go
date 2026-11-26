@@ -109,7 +109,7 @@ func (a *app) workLog(c *ui.Context, t thread, rs rows, i int, key string, e ent
 			ws.scroll.Y = math.MaxFloat32
 		}
 		ws.opened = true
-		filtering := len(lg.tabs) > 2
+		filtering := len(lg.tabs) > 1
 		if !filtering || !slices.ContainsFunc(lg.tabs, func(tb workTab) bool { return tb.filter == ws.filter }) {
 			ws.filter = workFilterAll
 		}
@@ -426,8 +426,9 @@ type workLedger struct {
 // quick commands does not draw them all full.
 const minLedgerDur = 1500 * time.Millisecond
 
-// workLedgerStats is the ledger of the steps: tabs for all, each kind in
-// the order it first came, and the failed, when any.
+// workLedgerStats is the ledger of the steps: tabs for all, each strict
+// subset kind in the order it first came, and the failed when some (not
+// all) steps failed.
 func workLedgerStats(ws []client.WorkStep) workLedger {
 	lg := workLedger{maxDur: minLedgerDur, tabs: []workTab{{workFilterAll, len(ws)}}}
 	failed := 0
@@ -448,6 +449,8 @@ func workLedgerStats(ws []client.WorkStep) workLedger {
 	if failed > 0 {
 		lg.tabs = append(lg.tabs, workTab{workFilterFailed, failed})
 	}
+	// A filter tab matching every step duplicates All and adds no choice.
+	lg.tabs = append(lg.tabs[:1], slices.DeleteFunc(lg.tabs[1:], func(tb workTab) bool { return tb.n == len(ws) })...)
 	return lg
 }
 

@@ -575,9 +575,19 @@ func TestWorkLedgerStats(t *testing.T) {
 	if got := durationFill(300*time.Millisecond, quick.maxDur); got >= durationBarWidth/2 {
 		t.Errorf("a 300ms command among quick ones fills %v of %v", got, durationBarWidth)
 	}
-	// One kind of step has no tabs to choose between.
-	if got := tabs(quick); !slices.Equal(got, []string{"All 2", "Cmd 2"}) {
+	// One kind of step with no subset to filter has only All (no bar).
+	if got := tabs(quick); !slices.Equal(got, []string{"All 2"}) {
 		t.Errorf("the tabs of one kind are %q", got)
+	}
+	// One kind with a partial failure shows All and Failed without a
+	// duplicate Cmd tab; when every step fails, Failed duplicates All too.
+	partial := workLedgerStats([]client.WorkStep{timedStep("a", "command", time.Second, &exit0), timedStep("b", "command", time.Second, &exit1)})
+	if got := tabs(partial); !slices.Equal(got, []string{"All 2", "Failed 1"}) {
+		t.Errorf("the tabs of one kind with one failure are %q", got)
+	}
+	allFailed := workLedgerStats([]client.WorkStep{timedStep("a", "command", time.Second, &exit1), timedStep("b", "command", time.Second, &exit1)})
+	if got := tabs(allFailed); !slices.Equal(got, []string{"All 2"}) {
+		t.Errorf("the tabs when every step failed are %q", got)
 	}
 
 	// Mixed steps: kinds in the order each first came, then the failed.
