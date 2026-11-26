@@ -1145,6 +1145,9 @@ func TestPaletteScrollsToChoice(t *testing.T) {
 	h := start(t, dir)
 	h.thread("Thread J")
 	a, tt := h.a, h.tt
+	// Hide the sidebar so tt.Find locates the palette's row rather than
+	// the sidebar's own row for the same thread.
+	a.toggleSidebar(true)
 	a.openCommandPalette()
 	tt.Frame()
 	cmds := a.commands()
