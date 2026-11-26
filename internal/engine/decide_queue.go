@@ -554,12 +554,16 @@ func fits(r Request, answer json.RawMessage) error {
 // inbox sets the user's disposition. Settled is done with, as archived
 // was: in the same commit, what waits its turn is cancelled and the live
 // run is stopped, and settle starts nothing on the thread until it's back
-// in the inbox.
+// in the inbox. A Manager stays in the inbox: only Open is set on one,
+// which brings back one a store kept snoozed or settled from before.
 func (d *decision) inbox(b api.InboxSet) error {
 	v := b.Disposition
 	v.Until = v.Until.UTC().Round(0)
 	if v.State > api.Settled || (v.State == api.Snoozed) == v.Until.IsZero() {
 		return rejected("only a snoozed thread has an until, and it must")
+	}
+	if d.t.Role == api.RoleManager && v.State != api.Open {
+		return rejected("a manager thread cannot be snoozed or settled")
 	}
 	if v.State == d.t.Disposition.State && v.Until.Equal(d.t.Disposition.Until) {
 		// A link's settle of a thread settled already still fences what
@@ -679,26 +683,31 @@ func (d *decision) dismissWake(b api.WakeDismiss) error {
 	return d.emit(e)
 }
 
+// runSweep starts a sweep the user asked for now, under the command's ID,
+// whether or not sweeps are scheduled. It refuses while the Manager is
+// busy or holds work waiting to run or resume.
+func (d *decision) runSweep(id api.ID, b api.SweepRun) error {
+	if d.t.Role != api.RoleManager || d.t.child() {
+		return rejected("only a manager thread can run a sweep")
+	}
+	if d.t.Live() != nil {
+		return rejected("the manager is already working")
+	}
+	if d.t.resumable() || d.t.next() != nil {
+		return rejected("the manager has work waiting; resume or send a message first")
+	}
+	if !d.runs() {
+		return rejected("the thread may run nothing now")
+	}
+	return d.startSweep(id, b.Prompt)
+}
+
 // raise makes a wake the user's turn: something in it now needs them.
 func (d *decision) raise(r Run) error {
 	if r.Wake == api.NotWake {
 		return nil
 	}
-	if err := d.emit(api.WakeRaised{Run: r.ID}); err != nil {
-		return err
-	}
-	return d.unsnooze()
-}
-
-func (d *decision) snoozing() bool {
-	return d.t.Disposition.State == api.Snoozed && d.at.Before(d.t.Disposition.Until)
-}
-
-func (d *decision) unsnooze() error {
-	if d.t.Role != api.RoleManager || !d.snoozing() {
-		return nil
-	}
-	return d.emit(api.DispositionChanged{Disposition: api.Disposition{}})
+	return d.emit(api.WakeRaised{Run: r.ID})
 }
 
 func holds[T comparable](held *T, v T) bool { return held != nil && *held == v }

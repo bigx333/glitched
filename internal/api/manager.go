@@ -60,7 +60,15 @@ type WakeRaised struct {
 
 func (WakeRaised) eventType() string { return "wake.raised" }
 
-// SweepStarted records when a scheduled Manager sweep was admitted.
+// SweepRun starts a sweep on an idle Manager thread now, whether or not
+// its sweeps are scheduled. A non-empty Prompt takes the place of the
+// configured one for this run.
+type SweepRun struct {
+	Prompt string `json:"prompt,omitempty"`
+}
+
+// SweepStarted records when a Manager sweep, scheduled or run by hand,
+// was admitted.
 type SweepStarted struct {
 	Run ID `json:"run"`
 }

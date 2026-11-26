@@ -197,6 +197,8 @@ func (a *app) makeRoomForSidebar() {
 			a.showPreview = false
 		case a.showPluginTab:
 			a.showPluginTab = false
+		case a.managerPanelShown(a.current()):
+			a.mgr.showPanel = false
 		default:
 			delete(a.subagentStep, a.current().id())
 		}
@@ -229,7 +231,7 @@ func (a *app) sidePanelMin() float32 {
 		return diffMin
 	case a.showPreview:
 		return minPreviewWidth
-	case a.showPluginTab:
+	case a.showPluginTab, a.managerPanelShown(a.current()):
 		return diffMin
 	}
 	if _, _, ok := a.subagentShown(a.current()); ok {

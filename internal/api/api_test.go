@@ -64,6 +64,9 @@ func TestCommandJSON(t *testing.T) {
 		ThreadConfigure{Fast: new(false), Access: new(AccessAsk)},
 		ThreadConfigure{Effort: new("")},
 		ThreadConfigure{},
+		WakeDismiss{Run: NewID(), Reason: "all on track"},
+		SweepRun{},
+		SweepRun{Prompt: "Check the release blockers"},
 	} {
 		in := Command{ID: NewID(), Target: NewID(), Revision: 3, Body: body}
 		b, err := json.Marshal(in)

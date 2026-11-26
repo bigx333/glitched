@@ -427,8 +427,7 @@ func (SweepDue) observed()        {}
 
 // SweepDue triggers a scheduled sweep turn on a Manager thread when due.
 type SweepDue struct {
-	Run  api.ID
-	Text string
+	Run api.ID
 }
 
 // RemoteAttempted is a placeholder's create, Create, about to reach its

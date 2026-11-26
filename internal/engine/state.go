@@ -448,8 +448,8 @@ func sweepEqual(a, b *api.SweepSchedule) bool {
 
 // NextSweepAt is when a Manager's next scheduled sweep is due as of now,
 // or false when none is: not a manager, sweeps off, busy, settled,
-// deleted, or holding queued work. A snooze, a usage limit's continue, and
-// a limit a dismissed wake hit each hold the sweep until they pass.
+// deleted, or holding queued work. A usage limit's continue, and a limit a
+// dismissed wake hit, each hold the sweep until they pass.
 func NextSweepAt(t Thread, now time.Time) (time.Time, bool) {
 	if t.Role != api.RoleManager || t.Sweep == nil || t.Sweep.IntervalSeconds <= 0 ||
 		t.Deleted || t.settled() || t.Remote != nil || t.Origin != nil {
@@ -466,9 +466,6 @@ func NextSweepAt(t Thread, now time.Time) (time.Time, bool) {
 		base = lt.Ended
 	}
 	due := base.Add(time.Duration(t.Sweep.IntervalSeconds) * time.Second)
-	if t.Disposition.State == api.Snoozed && t.Disposition.Until.After(due) {
-		due = t.Disposition.Until
-	}
 	if resets, ok := View(t).LimitResume(now); ok {
 		if after := resets.Add(api.LimitOverdue + time.Nanosecond); after.After(due) {
 			due = after

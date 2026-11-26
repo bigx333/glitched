@@ -87,6 +87,12 @@ func (m *Manager) SetSweep(e *Env, thread api.ID, sweep *api.SweepSchedule) api.
 	return m.submit(e, thread, api.ThreadConfigure{Sweep: sweep})
 }
 
+// RunSweep starts a sweep on an idle Manager thread now, on prompt, or its
+// sweep prompt when prompt is empty.
+func (m *Manager) RunSweep(e *Env, thread api.ID, prompt string) api.ID {
+	return m.submit(e, thread, api.SweepRun{Prompt: prompt})
+}
+
 // Fork adds a thread that goes on from run of source, its last finished
 // turn when zero, on model: in source's folder, at its access, titled
 // title. It is shown at once, as Create shows one.

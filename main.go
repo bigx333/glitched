@@ -617,7 +617,10 @@ type app struct {
 	// of, by thread id, with each one's last edit.
 	pluginFiles map[string]*toldFiles
 	// showPluginTab shows pluginTabShown in the panel beside the chat.
-	showPluginTab  bool
+	showPluginTab bool
+	// mgr is the Managers' UI: their sidebar section, overview panel,
+	// sweep popover and New manager dialog.
+	mgr            managerUI
 	pluginTabShown pluginTab
 	pluginDark     *bool
 	// pluginFocused is whether the window was in front, as plugins last
@@ -833,6 +836,7 @@ func (a *app) view(c *ui.Context) {
 	a.sortThreads()
 	a.pruneDiffs()
 	a.pruneThreadState()
+	a.yieldOverview()
 	a.paceContinues()
 	a.handOverWhenIdle()
 	// A steer to a server removed since never lands.
@@ -913,6 +917,7 @@ func (a *app) view(c *ui.Context) {
 	a.deleteAlert(c)
 	a.removeAlert(c)
 	a.wizardDialog(c)
+	a.managerDialog(c)
 	for _, fn := range a.pluginLater {
 		fn(c)
 	}

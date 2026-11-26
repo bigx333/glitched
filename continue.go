@@ -64,8 +64,18 @@ func (a *app) lostIn(cat category) []thread {
 	if cat != catInbox {
 		return nil
 	}
+	return a.lostAmong(a.itemsIn(catInbox))
+}
+
+// lostManagers are the Managers a Continue all in the Managers header
+// would continue, on engines online.
+func (a *app) lostManagers() []thread {
+	return a.lostAmong(a.managerItems())
+}
+
+func (a *app) lostAmong(items []inboxItem) []thread {
 	var ts []thread
-	for _, it := range a.itemsIn(catInbox) {
+	for _, it := range items {
 		if _, online := it.t.env.Status.(client.Online); online && it.t.View.Parent.IsZero() && continuable(it.t) && !a.continuingAlready(it.t) {
 			ts = append(ts, it.t)
 		}

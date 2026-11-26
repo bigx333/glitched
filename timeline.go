@@ -79,6 +79,8 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) (laid bool) {
 		// The hero has its own greeting, over its composer.
 		if len(es) == 0 && remote(t) != nil {
 			ui.Row(c).Justify(ui.Center).Children(func() { a.remoteNotice(c, t) })
+		} else if len(es) == 0 && !hero(t) && isManager(t) {
+			ui.Row(c).Justify(ui.Center).Children(func() { a.managerEmpty(c, t) })
 		} else if len(es) == 0 && !hero(t) {
 			ui.Row(c).Justify(ui.Center).Children(func() {
 				// What it says is a plugin's: the built-in Empty thread, or

@@ -348,13 +348,14 @@ func (QueueMove) intentType() string       { return "queue.move" }
 func (QueueSteer) intentType() string      { return "queue.steer" }
 func (ResumeCancel) intentType() string    { return "resume.cancel" }
 func (WakeDismiss) intentType() string     { return "wake.dismiss" }
+func (SweepRun) intentType() string        { return "sweep.run" }
 
 // StartsTurn is whether i may start a turn of its thread's agent: a
 // message, the go-ahead for what a stop held, a queued message sent now,
-// or a create with a first message.
+// a sweep run by hand, or a create with a first message.
 func StartsTurn(i Intent) bool {
 	switch b := i.(type) {
-	case MessageDispatch, QueueResume, QueueSteer:
+	case MessageDispatch, QueueResume, QueueSteer, SweepRun:
 		return true
 	case ThreadCreate:
 		return b.Text != ""
@@ -378,6 +379,7 @@ var intents = map[string]func() Intent{
 	"queue.steer":      func() Intent { return new(QueueSteer) },
 	"resume.cancel":    func() Intent { return new(ResumeCancel) },
 	"wake.dismiss":     func() Intent { return new(WakeDismiss) },
+	"sweep.run":        func() Intent { return new(SweepRun) },
 }
 
 func IntentType(i Intent) string { return i.intentType() }
@@ -447,6 +449,8 @@ func (c *Command) UnmarshalJSON(b []byte) error {
 	case *ResumeCancel:
 		c.Body = *v
 	case *WakeDismiss:
+		c.Body = *v
+	case *SweepRun:
 		c.Body = *v
 	}
 	c.ID, c.Target, c.Revision, c.Expires, c.Caller = w.ID, w.Target, w.Revision, w.Expires, w.Caller
