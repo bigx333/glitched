@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"glitched/internal/daemon"
 	eng "glitched/internal/engine"
 	"glitched/internal/providerlog"
+	"glitched/internal/service"
 )
 
 // pairing is a token the This machine page minted, shown until dismissed:
@@ -107,7 +109,157 @@ func (a *app) engineCard(c *ui.Context, m client.Machine) {
 		settingRow(c, "State directory", "", func() {
 			ui.Text(c, cfg.Dir).FontSize(12).Font("monospace").TextColor(palette.muted).Selectable()
 		})
+		a.serviceRow(c)
 	})
+}
+
+// svcSwitch is what the Background service switch is doing.
+type svcSwitch int
+
+const (
+	svcIdle svcSwitch = iota
+	svcInstalling
+	svcRemoving
+)
+
+func (a *app) refreshService() {
+	if a.svcLoading || a.svcDoing != svcIdle {
+		return
+	}
+	a.svcLoading = true
+	dir, sets := a.dir, a.svcSets
+	go func() {
+		st := service.Inspect(context.Background(), service.Options{Dir: dir})
+		a.post(func() {
+			a.svcLoading = false
+			// A switch since the read began makes what it read stale.
+			if a.svcSets != sets {
+				return
+			}
+			a.svcStatus = st
+			a.svcRead = time.Now()
+		})
+	}()
+}
+
+// servedByService is whether the background service runs dir's engine,
+// or is about to, as it restarts: the app then waits for that engine
+// rather than embed one, which would keep the directory from the service.
+func servedByService(dir string) func(context.Context) bool {
+	return func(ctx context.Context) bool {
+		st := service.Inspect(ctx, service.Options{Dir: dir})
+		return st.Installed && !st.Foreign && (st.Running || st.Starting)
+	}
+}
+
+// handOverWhenIdle hands an engine embedded here to the service installed
+// for it once no agent runs here, as a restart would end their turns.
+func (a *app) handOverWhenIdle() {
+	if !a.svcHandOver || a.localRuns() > 0 {
+		return
+	}
+	a.svcHandOver = false
+	if a.backend.Machine().Embedded {
+		a.backend.Restart()
+	}
+}
+
+// setServiceInstalled installs or uninstalls the background service. The
+// service waits for the engine lock, so once it is installed an engine
+// embedded here hands the directory over to it when no agent runs here.
+func (a *app) setServiceInstalled(install bool) {
+	if a.svcDoing != svcIdle {
+		return
+	}
+	a.svcDoing, a.svcErr = svcRemoving, ""
+	if install {
+		a.svcDoing = svcInstalling
+	}
+	a.svcSets++
+	dir := a.dir
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		opts := service.Options{Dir: dir}
+		var st service.Status
+		var err error
+		if install {
+			st, err = service.Install(ctx, opts)
+		} else {
+			st, err = service.Uninstall(ctx, opts)
+		}
+		a.post(func() {
+			a.svcDoing = svcIdle
+			a.svcStatus = st
+			a.svcRead = time.Now()
+			if err != nil {
+				a.svcErr = err.Error()
+			}
+			// An agent may have started while it installed.
+			a.svcHandOver = install && err == nil
+			a.handOverWhenIdle()
+			a.backend.Inspect()
+		})
+	}()
+}
+
+func (a *app) serviceRow(c *ui.Context) {
+	if time.Since(a.svcRead) >= inspectEvery {
+		a.refreshService()
+	}
+	st, read := a.svcStatus, !a.svcRead.IsZero()
+	// Another state directory's service is that directory's to switch.
+	on := st.Installed && !st.Foreign
+	desc := "Keep the engine running as a user background service so agents survive closing Glitched."
+	switch {
+	case a.svcDoing == svcInstalling:
+		on, desc = true, "Installing background service…"
+	case a.svcDoing == svcRemoving:
+		on, desc = false, "Removing background service…"
+	case !read:
+		desc = "Checking the background service…"
+	case !st.Supported:
+		desc = st.Detail
+	case st.Foreign:
+		desc = fmt.Sprintf("Installed for another state directory, %s. Manage it from there.", st.Dir)
+	case st.Installed && a.svcHandOver:
+		desc = "Installed. The service takes the engine over once the agents running here finish."
+	case st.Installed && (st.Running || st.Starting) && a.backend.Machine().Embedded:
+		desc = "Installed, but the engine runs inside this app, so quitting it ends its agents' turns. Restart the engine to hand it to the service."
+	case st.Installed:
+		desc = serviceHealth(st)
+	}
+	busy := a.localRuns() > 0
+	settingRow(c, "Background service", desc, func() {
+		sw := ui.Switch(c.Key("bg-service"), &on).Label("Enable background service").
+			Disabled(a.svcDoing != svcIdle || busy || !read || !st.Supported || st.Foreign)
+		if busy {
+			a.tip(c, sw, stopFirst)
+		}
+		if sw.Changed() {
+			a.setServiceInstalled(on)
+		}
+	})
+	if a.svcErr != "" {
+		ui.Text(c, a.svcErr).Key("bg-service-err").FontSize(12).TextColor(palette.red).Padding(0, 16, 12)
+	}
+}
+
+// serviceHealth says whether the installed service runs.
+func serviceHealth(st service.Status) string {
+	switch {
+	case st.Running && st.PID > 0:
+		return fmt.Sprintf("Installed and running (PID %d).", st.PID)
+	case st.Running:
+		return "Installed and running."
+	case st.Starting && st.LastExit != "":
+		return "Installed, restarting: it last exited " + st.LastExit + "."
+	case st.Starting:
+		return "Installed and starting."
+	case st.LastExit != "":
+		return "Installed (stopped): it last exited " + st.LastExit + ". " + st.UnitPath
+	}
+	return "Installed (stopped). " + st.UnitPath
 }
 
 // limitRows are the Agents card's rows, in a.limits' order.

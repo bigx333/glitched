@@ -55,7 +55,7 @@ type queueRow struct {
 }
 
 // queueRowNode is the built-in Queue's drawing of the row r, as its
-// main.js draws it: the message, then its actions.
+// main.ts draws it: the message, then its actions.
 func queueRowNode(queueRow) *widget.Node {
 	return &widget.Node{Type: "row", Gap: queueActionGap, Align: "center", Grow: true, Children: []*widget.Node{
 		{Type: "native", ID: "text", Name: "queue.text", Grow: true},

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -40,6 +41,23 @@ func ticking(t *testing.T, h *harness) {
 			}
 		}
 	}()
+}
+
+// reveal scrolls the page till text shows above the window's bottom, as
+// the This machine page runs taller than the test's window.
+func (h *harness) reveal(text string) {
+	h.t.Helper()
+	h.until(fmt.Sprintf("%q to show", text), func() bool { _, ok := h.tt.Find(text); return ok })
+	for range 20 {
+		r, _ := h.tt.Find(text)
+		if r.Y+r.H <= 800 {
+			return
+		}
+		h.tt.Scroll(r.X+r.W/2, 400, 0, 200)
+		h.tt.Frame()
+	}
+	r, _ := h.tt.Find(text)
+	h.t.Fatalf("%q stays at %v, below the window", text, r)
 }
 
 // The This machine page serves the app's own engine to the tailnet and
@@ -112,6 +130,7 @@ func TestThisMachineServesAndPairs(t *testing.T) {
 	if h.tt.HasText("Copy CLI command") {
 		t.Errorf("the page offers a command for %s, which another machine can't reach", addr)
 	}
+	h.reveal("Copy token")
 	h.click("Copy token")
 	h.tt.Frame()
 	if h.tt.Clipboard() != token {
@@ -168,6 +187,7 @@ func TestTheAgentsCardAppliesALimitAtOnce(t *testing.T) {
 	h.click("Settings")
 	h.click("This machine")
 	h.until("the Agents card", func() bool { return h.tt.HasText("At work at once") && h.a.backend.Machine().Embedded })
+	h.reveal("Decrease")
 	for range 4 { // the first Decrease is At work at once's, from 5
 		h.click("Decrease")
 	}

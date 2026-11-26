@@ -15,7 +15,7 @@ func TestTheHostRunsAReadOnlySnapshotNotTheFolder(t *testing.T) {
 	folder := filepath.Join(t.TempDir(), "hello")
 	writePlugin(t, folder, map[string][]byte{
 		ManifestFile: must(os.ReadFile("../../../examples/plugins/hello/plugin.json")),
-		"index.js":   must(os.ReadFile("../../../examples/plugins/hello/index.js")),
+		"index.ts":   must(os.ReadFile("../../../examples/plugins/hello/index.ts")),
 	})
 	writePlugin(t, folder, map[string][]byte{".git/HEAD": []byte("x"), "node_modules/x.js": []byte("x")})
 	if err := Sign(folder, key); err != nil {
@@ -29,7 +29,7 @@ func TestTheHostRunsAReadOnlySnapshotNotTheFolder(t *testing.T) {
 	if filepath.Dir(filepath.Dir(snap)) != into || filepath.Base(filepath.Dir(snap)) != "hello" {
 		t.Fatalf("snapshot at %s", snap)
 	}
-	for _, rel := range []string{ManifestFile, "index.js", SignatureFile} {
+	for _, rel := range []string{ManifestFile, "index.ts", SignatureFile} {
 		fi, err := os.Stat(filepath.Join(snap, rel))
 		if err != nil || fi.Mode().Perm() != 0o444 {
 			t.Fatalf("%s: %v, %v", rel, fi, err)
@@ -43,7 +43,7 @@ func TestTheHostRunsAReadOnlySnapshotNotTheFolder(t *testing.T) {
 	// Anything running as the user can make a snapshot's file writable
 	// again, and root writes it as it is: the next Snapshot makes a
 	// snapshot so edited again.
-	edited := filepath.Join(snap, "index.js")
+	edited := filepath.Join(snap, "index.ts")
 	if err := os.Chmod(edited, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -69,20 +69,20 @@ func TestTheHostRunsAReadOnlySnapshotNotTheFolder(t *testing.T) {
 	}
 
 	// An edit to the folder is caught, and never reaches the snapshot.
-	writePlugin(t, folder, map[string][]byte{"index.js": []byte("evil()")})
-	if st := Check(folder); st.State != Tampered || st.File != "index.js" {
+	writePlugin(t, folder, map[string][]byte{"index.ts": []byte("evil()")})
+	if st := Check(folder); st.State != Tampered || st.File != "index.ts" {
 		t.Fatalf("Check = %+v", st)
 	}
 	var te *TamperError
 	if _, err := Snapshot(folder, into); !errors.As(err, &te) {
 		t.Fatalf("Snapshot of a tampered folder = %v", err)
 	}
-	if readFile(t, filepath.Join(snap, "index.js")) == "evil()" {
+	if readFile(t, filepath.Join(snap, "index.ts")) == "evil()" {
 		t.Fatal("the edit reached the snapshot")
 	}
 
 	// A snapshot that changed is made again.
-	writePlugin(t, folder, map[string][]byte{"index.js": must(os.ReadFile("../../../examples/plugins/hello/index.js"))})
+	writePlugin(t, folder, map[string][]byte{"index.ts": must(os.ReadFile("../../../examples/plugins/hello/index.ts"))})
 	writePlugin(t, snap, map[string][]byte{"extra.js": []byte("x")})
 	if _, err := Snapshot(folder, into); err != nil {
 		t.Fatal(err)

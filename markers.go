@@ -80,20 +80,28 @@ func markersShown(n int, h float32) int {
 }
 
 // turnMarkers draws the thread's markers over the chat's left edge, for
-// its list l. With fewer than two turns, there's nothing to navigate.
+// its list l of what v lists. With fewer than two turns, there's nothing
+// to navigate.
 // Only the ticks the window can show are built, and, past them, where
 // they would be, below the window, the tick that held the focus and its
 // neighbours, and the last tick: Tab and Shift-Tab walk every tick, as
 // with all of them built.
-func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState) {
+func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState, v timelineView) {
 	es, turns := rs.es, rs.turns
 	if len(turns) < 2 {
 		return
 	}
 	// The turn being read: the last that starts at or above the top of
 	// what shows, or the last when the end shows.
-	first, _ := l.Visible()
-	active, found := slices.BinarySearchFunc(turns, first, func(tr turnInfo, row int) int { return cmp.Compare(tr.entry, row) })
+	// Past the items, as the rows shrink while scrolled up, it's the last.
+	top, _ := l.Visible()
+	switch {
+	case top >= v.len():
+		top = len(es)
+	case top >= 0:
+		top = v.anchor(top)
+	}
+	active, found := slices.BinarySearchFunc(turns, top, func(tr turnInfo, row int) int { return cmp.Compare(tr.entry, row) })
 	if !found {
 		active = max(0, active-1)
 	}
@@ -181,7 +189,9 @@ func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState) {
 				}
 			})
 			if b.Clicked() {
-				l.ScrollTo(tr.entry, ui.Start)
+				if j := v.pos(tr.entry); j >= 0 {
+					l.ScrollTo(j, ui.Start)
+				}
 			}
 		}
 		k := 0

@@ -57,7 +57,7 @@ var partTitles = map[string]string{
 	"composer.queue":            "Queue",
 	"thread.header.breadcrumb":  "Breadcrumb",
 	"thread.header.usage":       "Token usage",
-	"thread.header.plan":        "Plan",
+	"thread.header.plan":        "Checklist",
 	"palette":                   "Command palette",
 	"sidebar.body":              "Sidebar threads",
 	"agents.body":               "Agents panel",
@@ -154,7 +154,7 @@ func (a *app) pluginRuns(p plugins.Plugin) bool {
 // While it doesn't, the built-in draws in its place.
 func (a *app) copyRuns(p plugins.Plugin) bool {
 	for _, q := range a.plugins.Installed() {
-		if q.ShadowedBy == "" && q.ID == strings.TrimSuffix(p.ID, plugins.FallbackSuffix) {
+		if q.Folder == p.ShadowedBy {
 			return a.pluginRuns(q)
 		}
 	}

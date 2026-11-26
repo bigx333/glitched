@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -209,5 +210,110 @@ func TestActionsActAsTheSnapshotNamed(t *testing.T) {
 	// A page answering for the script, without it, fails.
 	if err := Click(ctx, &recorder{answer: map[string]any{}}, s, "s9e1"); err == nil {
 		t.Error("an answer not the script's passed")
+	}
+}
+
+func TestPreloadScriptAndSecret(t *testing.T) {
+	pre := PreloadScript()
+	if !strings.Contains(pre, `"op":"install"`) || !strings.Contains(pre, key) || !strings.Contains(pre, secret) {
+		t.Errorf("PreloadScript missing expected install/key/secret")
+	}
+	call := Script(map[string]any{"op": "snapshot"})
+	args := argsOf(t, call)
+	if args["key"] != key || !strings.Contains(call, secret) {
+		t.Errorf("Script missing key/secret: %v", args)
+	}
+	if _, ok := args["secret"]; ok {
+		t.Errorf("Script's args carry the secret: %v", args)
+	}
+}
+
+// A page's getter on Object.prototype never sees the script's args, as
+// the script reads an argument a call left out.
+func TestScriptArgsReachNoPrototype(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node")
+	}
+	body, _ := json.Marshal(Script(map[string]any{"op": "scroll", "direction": "down"}))
+	k, _ := json.Marshal(key)
+	prog := `globalThis.window = globalThis;
+const seen = [];
+for (const k of ["ref", "hasLabel"]) Object.defineProperty(Object.prototype, k, {get() { seen.push(this.secret); }, configurable: true});
+window[` + string(k) + `] = (s, a) => { a.ref; a.hasLabel; return true; };
+const AsyncFunction = (async () => {}).constructor;
+new AsyncFunction(` + string(body) + `)().finally(() => {
+	delete Object.prototype.ref;
+	delete Object.prototype.hasLabel;
+	console.log(JSON.stringify(seen));
+});
+`
+	out, err := exec.Command(node, "-e", prog).CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+	if got := strings.TrimSpace(string(out)); got != "[]" {
+		t.Errorf("a prototype getter saw the args: %s", got)
+	}
+}
+
+func TestSelectScrollAndWaitCondition(t *testing.T) {
+	s := Snapshot{Epoch: 12, Elements: []Named{
+		{Ref: "s12e1", Role: "combobox", Name: "Size"},
+		{Ref: "s12e2", Role: "generic", Name: "Panel"},
+	}}
+	r := &recorder{answer: map[string]any{"done": true}}
+	ctx := context.Background()
+
+	if err := Select(ctx, r, s, "s12e1", SelectOptions{}); err == nil {
+		t.Error("Select without value or label succeeded")
+	}
+	val := ""
+	if err := Select(ctx, r, s, "s12e1", SelectOptions{Value: &val}); err != nil {
+		t.Fatal(err)
+	}
+	lbl := "Large"
+	if err := Select(ctx, r, s, "s12e1", SelectOptions{Label: &lbl}); err != nil {
+		t.Fatal(err)
+	}
+	a0, a1 := argsOf(t, r.scripts[0]), argsOf(t, r.scripts[1])
+	if a0["action"] != "select" || a0["hasValue"] != true || a0["value"] != "" {
+		t.Errorf("select by empty value args: %v", a0)
+	}
+	if a1["action"] != "select" || a1["hasLabel"] != true || a1["label"] != "Large" {
+		t.Errorf("select by label args: %v", a1)
+	}
+
+	if err := Scroll(ctx, r, ScrollOptions{}); err == nil {
+		t.Error("Scroll without direction or ref succeeded")
+	}
+	if err := Scroll(ctx, r, ScrollOptions{Direction: "diagonal"}); err == nil {
+		t.Error("Scroll with invalid direction succeeded")
+	}
+	if err := Scroll(ctx, r, ScrollOptions{Ref: "s12e2", Snapshot: &s}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Scroll(ctx, r, ScrollOptions{Direction: "down", Amount: 250}); err != nil {
+		t.Fatal(err)
+	}
+	sc0, sc1 := argsOf(t, r.scripts[2]), argsOf(t, r.scripts[3])
+	if sc0["op"] != "scroll" || sc0["ref"] != "s12e2" || sc0["role"] != "generic" {
+		t.Errorf("scroll-into-view ref args: %v", sc0)
+	}
+	if sc1["op"] != "scroll" || sc1["direction"] != "down" || sc1["amount"].(float64) != 250 {
+		t.Errorf("scroll page args: %v", sc1)
+	}
+
+	if _, err := CheckCondition(ctx, r, WaitCondition{}); err == nil {
+		t.Error("CheckCondition with empty condition succeeded")
+	}
+	r.answer = map[string]any{"matched": true}
+	ok, err := CheckCondition(ctx, r, WaitCondition{Text: "Loaded", Selector: "#app", URL: "/done", Gone: true})
+	if err != nil || !ok {
+		t.Fatalf("CheckCondition: ok=%v err=%v", ok, err)
+	}
+	wc := argsOf(t, r.scripts[4])
+	if wc["op"] != "wait_check" || wc["text"] != "Loaded" || wc["selector"] != "#app" || wc["url"] != "/done" || wc["gone"] != true {
+		t.Errorf("wait_check args: %v", wc)
 	}
 }

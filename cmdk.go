@@ -119,6 +119,7 @@ func (a *app) actions() []command {
 		action("browser.newTab", "New browser tab", "⌘T", "plus", func() { a.newTab("") }),
 		action("sidebar.toggle", "Toggle sidebar", "⌘B", "sidebar-minimalistic", func() { a.toggleSidebar(false) }),
 		action("theme.toggle", "Toggle light / dark", "⇧⌘L", "pallete-2", a.toggleLightDark),
+		action("zen.toggle", "Toggle Zen mode", "", "tuning", func() { a.settings.zen = !a.settings.zen }),
 	)
 	for i, s := range settingsSections {
 		hint := ""

@@ -154,6 +154,7 @@ CREATE TABLE events (
 	payload BLOB NOT NULL
 ) STRICT;
 CREATE INDEX events_by_thread ON events (thread, seq);
+CREATE INDEX events_by_thread_type ON events (thread, type, seq);
 
 CREATE TABLE commands (
 	id       BLOB PRIMARY KEY,
@@ -195,6 +196,8 @@ CREATE TABLE threads (
 	last_sweep  INTEGER,
 	CHECK ((disposition = 1) = (until IS NOT NULL))
 ) STRICT;
+CREATE INDEX threads_live_updated ON threads (deleted, updated_at DESC, id);
+CREATE INDEX threads_by_parent ON threads (parent, deleted, id) WHERE parent IS NOT NULL;
 
 CREATE TABLE runs (
 	thread     BLOB NOT NULL REFERENCES threads (id),
@@ -259,7 +262,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 18
+const schemaVersion = 20
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -388,8 +391,20 @@ ALTER TABLE threads ADD COLUMN origin TEXT;
 `,
 	// Retire old outbox work without replaying changes to the worktree.
 	16: `UPDATE effects SET state = 'done' WHERE kind IN ('checkpoint.capture', 'checkpoint.drop', 'thread.revert') AND state <> 'done';`,
-	// Persistent Manager role and sweep schedule fields.
+	// Add covering indexes for snapshot batch reads and event-type queries.
 	17: `
+CREATE INDEX IF NOT EXISTS events_by_thread_type ON events (thread, type, seq);
+CREATE INDEX IF NOT EXISTS threads_live_updated ON threads (deleted, updated_at DESC, id);
+CREATE INDEX IF NOT EXISTS threads_by_parent ON threads (parent, deleted, id) WHERE parent IS NOT NULL;
+`,
+	// Drop what earlier builds that pruned receipts left: an index on
+	// commands.seq and the watermark that refused commands below it.
+	18: `
+DROP INDEX IF EXISTS commands_by_seq;
+DELETE FROM meta WHERE key = 'commands_pruned';
+`,
+	// Persistent Manager role and sweep schedule fields.
+	19: `
 ALTER TABLE threads ADD COLUMN role TEXT NOT NULL DEFAULT '';
 ALTER TABLE threads ADD COLUMN sweep TEXT;
 ALTER TABLE threads ADD COLUMN last_sweep INTEGER;
@@ -454,10 +469,15 @@ func (s *Store) upgrade(ctx context.Context) error {
 		return err
 	}
 	defer conn.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+	// An upgrade that rebuilds a table or an index reads the whole
+	// database, which on a large one takes a while.
+	slog.Info("store: upgrading the database; a large one takes a while", "from", version, "to", schemaVersion)
 	for ; version < schemaVersion; version++ {
+		began := time.Now()
 		if err := upgradeOnce(ctx, conn, version); err != nil {
 			return fmt.Errorf("store: upgrade from version %d: %w", version, err)
 		}
+		slog.Info("store: upgraded", "to", version+1, "took", time.Since(began).Round(time.Millisecond))
 	}
 	return nil
 }

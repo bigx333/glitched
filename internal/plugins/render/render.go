@@ -75,6 +75,11 @@ type Style struct {
 	// Reveal says which item of a list scrolls into view, where one
 	// does; nil is none.
 	Reveal func(list *widget.Node, it widget.ListItem) bool
+	// Fold says how far open the section an item names (its Section) is,
+	// 0 shut to 1 open, and whether it opens or shuts now: while it does,
+	// its items' rows show only what it uncovered, from the top, and the
+	// list is as tall as what shows. Nil: nothing folds.
+	Fold func(list *widget.Node, section string) (p float32, folding bool)
 	// Modal is told of each dialog the view draws open, which holds the
 	// window's keys. Nil is told nothing.
 	Modal func()

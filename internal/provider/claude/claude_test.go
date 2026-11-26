@@ -885,20 +885,27 @@ func TestClaudeRunsAsGlitched(t *testing.T) {
 }
 
 // browser is an engine's own MCP server, as the app's browser: untrusted,
-// with no env of its own.
+// with no env of its own till a run names its thread.
 var browser = provider.MCPServer{Name: "glitched-browser", Command: "/glitched", Args: []string{"browser-mcp", "-dir", "/state"}}
 
-// browserConfig is browser as Claude Code reads it, as the engine wrote it
-// to browser-mcp.json before runs got it inline.
-const browserConfig = `{"mcpServers":{"glitched-browser":{"args":["browser-mcp","-dir","/state"],"command":"/glitched","type":"stdio"}}}`
+// browserConfig is browser as Claude Code reads it for a run of thread,
+// which the engine names so the app can lease that thread its tabs.
+func browserConfig(thread fmt.Stringer) string {
+	return `{"mcpServers":{"glitched-browser":{"args":["browser-mcp","-dir","/state"],"command":"/glitched","env":{"GLITCHED_THREAD":"` + thread.String() + `"},"type":"stdio"}}}`
+}
 
 // A run gets the engine's own MCP servers, the app's browser, beside the
 // user's own, when the engine has one; none otherwise. Their tools ask.
 func TestARunGetsTheEnginesMCPServers(t *testing.T) {
 	argv := replay(t, "hi", "")
+	var first fmt.Stringer
 	for _, opts := range [][]runtime.Option{{runtime.WithMCPServers(browser)}, nil} {
 		h := host(t, nil, opts...)
-		turn(t, h, newThread(t, h, api.AccessAsk), "Say hi in three words.")
+		thread := newThread(t, h, api.AccessAsk)
+		if first == nil {
+			first = thread
+		}
+		turn(t, h, thread, "Say hi in three words.")
 	}
 	lines := strings.Split(strings.TrimSpace(string(must(os.ReadFile(argv)))), "\n")
 	if len(lines) != 2 {
@@ -911,8 +918,8 @@ func TestARunGetsTheEnginesMCPServers(t *testing.T) {
 		t.Errorf("claude ran with %q, want no MCP config without one", without)
 	}
 	i := slices.Index(with, "--mcp-config")
-	if i < 0 || i+2 >= len(with) || with[i+1] != browserConfig {
-		t.Fatalf("claude ran with %q, want --mcp-config %s", with, browserConfig)
+	if i < 0 || i+2 >= len(with) || with[i+1] != browserConfig(first) {
+		t.Fatalf("claude ran with %q, want --mcp-config %s", with, browserConfig(first))
 	}
 	// --mcp-config takes every value up to the next flag.
 	if !strings.HasPrefix(with[i+2], "--") {
@@ -957,8 +964,8 @@ func TestARunGetsGlitchedMCPAndTheEnginesMCPServers(t *testing.T) {
 	if s.Type != "stdio" || s.Command != l.Command || !slices.Equal(s.Args, []string{"mcp"}) || s.Env[mcp.EnvThread] != thread.String() || s.Env[mcp.EnvEngine] != l.Engine {
 		t.Errorf("--mcp-config's first value %q, want glitched mcp for the thread on %s", args[i+1], l.Engine)
 	}
-	if args[i+2] != browserConfig {
-		t.Errorf("--mcp-config's second value %q, want %s", args[i+2], browserConfig)
+	if args[i+2] != browserConfig(thread) {
+		t.Errorf("--mcp-config's second value %q, want %s", args[i+2], browserConfig(thread))
 	}
 	want := []string{"--allowedTools", "mcp__glitched__*", "--append-system-prompt", l.For(thread, api.AccessAsk).Instructions}
 	if got := args[i+3 : i+7]; !slices.Equal(got, want) {

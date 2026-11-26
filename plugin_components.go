@@ -54,6 +54,9 @@ type componentCopy struct {
 	// reveal says which item its lists scroll into view
 	// (render.Style.Reveal).
 	reveal func(list *widget.Node, it widget.ListItem) bool
+	// fold says how far open the section a list item names shows
+	// (render.Style.Fold); nil, none folds.
+	fold func(list *widget.Node, section string) (float32, bool)
 	// current waits for the plugin to draw each new context of the copy,
 	// as for its first drawing, so that what it shows keeps up with the
 	// app's own state, as the sidebar's threads moving between sections.
@@ -233,7 +236,7 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 			a.drawNative(c, name, t, row, n, fire, cp)
 		}, cp.absent, func(c *ui.Context, list *widget.Node, i int, e ui.Element) bool {
 			return cp.listRow != nil && cp.listRow(c, list, i, e, d.app.Builtin)
-		}, cp.reveal, func() {
+		}, cp.reveal, cp.fold, func() {
 			if cp.over != nil {
 				cp.over(box)
 			}

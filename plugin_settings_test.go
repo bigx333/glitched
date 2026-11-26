@@ -411,6 +411,33 @@ func TestThePluginsPageSaysWhoDrawsAndWhatFailed(t *testing.T) {
 	}
 }
 
+func TestACopyMadeBeforeChecklistsRenameRunsAsItsCopy(t *testing.T) {
+	a := offline(t)
+	writeOwnPlugin(t, a, "plan", replacing("plan", "thread.header.plan"), mineModule)
+	for _, capability := range []string{"ui.replace", "messages:read"} {
+		if err := a.plugins.SetGranted("plan", capability, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var built plugins.Plugin
+	for _, p := range a.plugins.Installed() {
+		if p.Builtin && p.ShadowedBy != "" && p.ID == "checklist"+plugins.FallbackSuffix {
+			built = p
+		}
+	}
+	if built.ID == "" {
+		t.Fatalf("no shadowed Checklist built-in: %+v", a.plugins.Installed())
+	}
+	if !a.copyRuns(built) {
+		t.Error("the copy made before the rename doesn't run as Checklist's copy")
+	}
+	rs := a.plugins.Replacers("thread.header.plan")
+	if len(rs) != 2 || rs[0].Plugin != "plan" || rs[1].Plugin != "checklist"+plugins.FallbackSuffix {
+		t.Fatalf("the header's checklist draws by %+v", rs)
+	}
+}
+
 // A manifest may name a component or a program twice, and an error may be
 // one long word: the page draws them.
 func TestThePluginsPageDrawsOddManifests(t *testing.T) {

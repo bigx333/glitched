@@ -3,6 +3,7 @@ package store_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -691,14 +693,23 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 		sqlText = threadsV15 + sqlText
 	}
 	if version < 18 {
-		sqlText = managersV17 + sqlText
+		sqlText += indexesV17
+	}
+	if version < 20 {
+		sqlText = managersV19 + sqlText
 	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
 	}
 }
 
-const managersV17 = `
+const indexesV17 = `
+	DROP INDEX IF EXISTS events_by_thread_type;
+	DROP INDEX IF EXISTS threads_live_updated;
+	DROP INDEX IF EXISTS threads_by_parent;
+`
+
+const managersV19 = `
 	ALTER TABLE threads DROP COLUMN role;
 	ALTER TABLE threads DROP COLUMN sweep;
 	ALTER TABLE threads DROP COLUMN last_sweep;
@@ -1634,7 +1645,15 @@ func TestACancelledWriteStops(t *testing.T) {
 	}
 }
 
-func TestAVersion17DatabaseUpgradesForManagers(t *testing.T) {
+// A database at version 18 or 19, from before Managers, upgrades to keep
+// its threads and to persist a Manager's role, schedule and wake runs.
+func TestAPreManagerDatabaseUpgradesForManagers(t *testing.T) {
+	for _, version := range []int{18, 19} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) { upgradesForManagers(t, version) })
+	}
+}
+
+func upgradesForManagers(t *testing.T, version int) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "host.db")
 	s := open(t, path)
@@ -1644,9 +1663,12 @@ func TestAVersion17DatabaseUpgradesForManagers(t *testing.T) {
 	}
 	s.Close()
 
-	downgrade(t, path, "", 17)
+	downgrade(t, path, "", version)
 	s = open(t, path)
 	defer s.Close()
+	if kept, err := s.Thread(ctx, plain); err != nil || kept.ID != plain || kept.Role != "" {
+		t.Fatalf("the thread from version %d after the upgrade: %+v, %v", version, kept, err)
+	}
 
 	mgr := api.NewID()
 	now := time.Now().UTC().Truncate(time.Millisecond)
@@ -1684,5 +1706,361 @@ func TestAVersion17DatabaseUpgradesForManagers(t *testing.T) {
 	}
 	if live := got.Live(); live == nil || !live.Silent {
 		t.Fatalf("expected live run Silent=true persisted in runs table, got %+v", live)
+	}
+}
+
+func TestAVersion17DatabaseUpgradesWithIndexes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	if _, err := s.Submit(context.Background(), create(api.NewID()), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	downgrade(t, path, "", 17)
+
+	s = open(t, path)
+	s.Close()
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 20 {
+		t.Fatalf("user_version = %d (%v), want 20", version, err)
+	}
+	for _, idx := range []string{"events_by_thread_type", "threads_live_updated", "threads_by_parent"} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?`, idx).Scan(&count); err != nil || count != 1 {
+			t.Errorf("index %s missing after upgrade (count=%d, err=%v)", idx, count, err)
+		}
+	}
+}
+
+func TestReadBulkMatchesSingleThreadLoad(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, filepath.Join(t.TempDir(), "host.db"))
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	// Thread 1: live run with queued message and pending request.
+	t1 := api.NewID()
+	if _, err := s.Submit(ctx, create(t1), now); err != nil {
+		t.Fatal(err)
+	}
+	r1 := api.NewID()
+	if _, err := s.Submit(ctx, api.Command{ID: r1, Target: t1, Body: api.MessageDispatch{Text: "first", Mode: api.StartNow}}, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: t1, Body: api.MessageDispatch{Text: "queued", Mode: api.AfterActive}}, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, t1, engine.Started{Run: r1}, now.Add(2*time.Second), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, t1, engine.Surfaced{Run: r1, Request: api.NewID(), Dedup: "d1", Kind: api.KindApproval, Body: []byte(`{"tool":"edit"}`)}, now.Add(3*time.Second), 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// Thread 2: child of t1, finished run.
+	t2 := api.NewID()
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: t2, Body: api.ThreadCreate{
+		Workspace: "w", Title: "child", Model: api.ModelRef{Provider: "fake"}, Parent: t1, Run: r1, Text: "sub",
+	}}, now.Add(4*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, t2, engine.Started{Run: t2}, now.Add(5*time.Second), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, t2, engine.Ended{Run: t2, Outcome: api.OutcomeCompleted}, now.Add(6*time.Second), 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// Thread 3: deleted thread (must be excluded from bulk Read).
+	t3 := api.NewID()
+	if _, err := s.Submit(ctx, create(t3), now.Add(7*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: t3, Body: api.ThreadDelete{}}, now.Add(8*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	bulk, err := s.Read(ctx, api.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bulk.Threads) != 2 {
+		t.Fatalf("bulk returned %d threads, want 2", len(bulk.Threads))
+	}
+	for i, th := range bulk.Threads {
+		single, err := s.Read(ctx, api.Query{Thread: th.ID})
+		if err != nil || len(single.Threads) != 1 {
+			t.Fatalf("single read %s: %v", th.ID, err)
+		}
+		if !reflect.DeepEqual(th, single.Threads[0]) {
+			t.Errorf("thread %d mismatch:\nbulk:   %+v\nsingle: %+v", i, th, single.Threads[0])
+		}
+	}
+}
+
+func TestMaintainPrunesDoneEffectsAndCheckpointsWAL(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+
+	for i := range 6 {
+		th := api.NewID()
+		if _, err := s.Submit(ctx, create(th), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		msg := api.NewID()
+		if _, err := s.Submit(ctx, api.Command{ID: msg, Target: th, Body: api.MessageDispatch{Text: fmt.Sprintf("m%d", i), Mode: api.StartNow}}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		e, ok, err := s.Lease(ctx, nil)
+		if err != nil || !ok {
+			t.Fatalf("lease %d: %v %v", i, ok, err)
+		}
+		if i < 4 {
+			if err := s.Complete(ctx, e.ID); err != nil {
+				t.Fatal(err)
+			}
+		} else if i == 4 {
+			if err := s.Release(ctx, e.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// i == 5 stays leased.
+	}
+
+	res, err := s.Maintain(ctx, store.MaintainOptions{Batch: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.PrunedEffects != 4 {
+		t.Fatalf("first Maintain = %+v, want PrunedEffects=4, in batches of 2", res)
+	}
+
+	res2, err := s.Maintain(ctx, store.MaintainOptions{Batch: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.PrunedEffects != 0 {
+		t.Fatalf("second Maintain = %+v, want nothing left to prune", res2)
+	}
+
+	// Pending and leased effects remain untouched.
+	leased, err := s.Leased(ctx)
+	if err != nil || len(leased) != 1 {
+		t.Fatalf("leased after Maintain: %+v (%v), want 1", leased, err)
+	}
+	if _, ok, err := s.Lease(ctx, nil); err != nil || !ok {
+		t.Fatalf("pending effect after Maintain: ok=%v err=%v", ok, err)
+	}
+}
+
+// seedReceipts writes n receipts, under the IDs id gives, straight into the
+// commands table: the receipts a long-lived engine holds.
+func seedReceipts(t *testing.T, path string, n int, id func(i int) api.ID) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	for i := range n {
+		c := id(i)
+		if _, err := tx.Exec(`INSERT INTO commands (id, hash, seq, revision) VALUES (?, zeroblob(32), 1, NULL)`, c[:]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// hashID is an ID as MCP delegation and linked machines derive one: a hash,
+// whose order says nothing about when it was made.
+func hashID(i int) api.ID {
+	sum := sha256.Sum256(fmt.Appendf(nil, "parent/delegate/child/%d", i))
+	return api.ID(sum[:16])
+}
+
+// renamed renames thread to title under id, and fails t unless the rename
+// was applied: it wrote an event.
+func renamed(t *testing.T, s *store.Store, thread, id api.ID, title string) {
+	t.Helper()
+	ctx := context.Background()
+	_, before, err := s.Since(ctx, thread, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Submit(ctx, api.Command{ID: id, Target: thread, Body: api.ThreadRename{Title: title}}, time.Now()); err != nil {
+		t.Fatalf("rename to %q: %v", title, err)
+	}
+	if _, after, err := s.Since(ctx, thread, 0, 1000); err != nil || after <= before {
+		t.Fatalf("rename to %q wrote no event: head %d, was %d (%v)", title, after, before, err)
+	}
+}
+
+// Receipts under hash-derived IDs outnumber what any retention would keep:
+// after Maintain, a GUI's fresh command and a fresh hash-derived one both
+// run, and every receipt still answers its retry.
+func TestMaintainLetsAFreshCommandRunAmongHashOrderedReceipts(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	const seeded = 10200
+	seedReceipts(t, path, seeded, hashID)
+	if _, err := s.Maintain(ctx, store.MaintainOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	renamed(t, s, thread, api.NewID(), "from the GUI")
+	renamed(t, s, thread, api.ID{15: 1}, "a hash below every other")
+	for _, i := range []int{0, seeded / 2, seeded - 1} {
+		if done, err := s.Committed(ctx, hashID(i)); err != nil || !done {
+			t.Errorf("receipt %d after Maintain: Committed = %v, %v; want true", i, done, err)
+		}
+	}
+}
+
+// A command minted long before it reaches the engine, as a sleeping GUI's
+// or a plugin's with an older At, runs the first time it arrives.
+func TestMaintainLetsALateFirstSubmissionRun(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	seedReceipts(t, path, 10200, func(i int) api.ID {
+		id, err := api.IDAt(now.Add(time.Duration(i)*time.Millisecond), [10]byte{byte(i), byte(i >> 8)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	})
+	if _, err := s.Maintain(ctx, store.MaintainOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	late, err := api.IDAt(now.Add(-time.Hour), [10]byte{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed(t, s, thread, late, "minted an hour ago")
+}
+
+// A retried command gets its receipt back after Maintain and is not
+// applied again.
+func TestMaintainKeepsARecentCommandsReceipt(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	seedReceipts(t, path, 10200, hashID)
+	msg := api.Command{ID: api.NewID(), Target: thread, Body: api.MessageDispatch{Text: "once", Mode: api.AfterActive}}
+	first, err := s.Submit(ctx, msg, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, before, err := s.Since(ctx, thread, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Maintain(ctx, store.MaintainOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.Submit(ctx, msg, time.Now())
+	if err != nil || !reflect.DeepEqual(again, first) {
+		t.Fatalf("the retry after Maintain: %+v, %v; want %+v", again, err, first)
+	}
+	if _, after, err := s.Since(ctx, thread, 0, 1000); err != nil || after != before {
+		t.Fatalf("the retry wrote events: head %d, want %d (%v)", after, before, err)
+	}
+	if done, err := s.Committed(ctx, msg.ID); err != nil || !done {
+		t.Fatalf("Committed after Maintain = %v, %v; want true", done, err)
+	}
+}
+
+// A database an earlier build of this change left at version 18, with an
+// index on commands.seq and a pruned-receipt watermark, loses both, and a
+// command the watermark covered runs.
+func TestAVersion18DatabaseLosesTheReceiptPruningLeftovers(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	downgrade(t, path, `
+		CREATE INDEX commands_by_seq ON commands (seq);
+		INSERT INTO meta (key, value) VALUES ('commands_pruned', x'ffffffffffffffffffffffffffffffff');
+	`, 18)
+
+	s = open(t, path)
+	renamed(t, s, thread, api.NewID(), "after the upgrade")
+	s.Close()
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version, index, mark int
+	if err := db.QueryRow(`SELECT (SELECT user_version FROM pragma_user_version),
+		(SELECT COUNT(*) FROM sqlite_master WHERE name = 'commands_by_seq'),
+		(SELECT COUNT(*) FROM meta WHERE key = 'commands_pruned')`).Scan(&version, &index, &mark); err != nil {
+		t.Fatal(err)
+	}
+	if version != 20 || index != 0 || mark != 0 {
+		t.Fatalf("after the upgrade: user_version %d, commands_by_seq %d, watermark %d; want 20, 0, 0", version, index, mark)
+	}
+}
+
+// The list of threads reads what each thread's view shows, not the text
+// of every message its threads were ever sent.
+func TestReadingTheThreadListSkipsMessageText(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, filepath.Join(t.TempDir(), "host.db"))
+	text := strings.Repeat("x", 1<<20)
+	const threads, messages = 20, 2
+	for range threads {
+		th := api.NewID()
+		if _, err := s.Submit(ctx, create(th), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		for range messages {
+			if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: th, Body: api.MessageDispatch{Text: text, Mode: api.AfterActive}}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	snap, err := s.Read(ctx, api.Query{})
+	runtime.ReadMemStats(&after)
+	if err != nil || len(snap.Threads) != threads {
+		t.Fatalf("Read: %d threads, %v", len(snap.Threads), err)
+	}
+	const sent = threads * messages << 20
+	if got := after.TotalAlloc - before.TotalAlloc; got > sent/8 {
+		t.Fatalf("reading the thread list allocated %d MiB, with %d MiB of message text stored", got>>20, sent>>20)
 	}
 }
