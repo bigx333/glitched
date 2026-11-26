@@ -229,3 +229,21 @@ func TestChromeClearOnNativeGlass(t *testing.T) {
 		t.Fatal("the bars are not tinted over the older material")
 	}
 }
+
+// A theme settings.json chose that wasn't known as the settings loaded, as
+// a plugin's, is taken by readThemes as soon as it is; one still unknown
+// waits. (The window's start calls readThemes too, in main, which no test
+// reaches.)
+func TestPendingThemeTakenOnceKnown(t *testing.T) {
+	a := offline(t)
+	a.pendingTheme = "Dark"
+	a.readThemes()
+	if a.settings.theme != "Dark" || a.pendingTheme != "" {
+		t.Fatalf("theme %q, pending %q; want Dark, none", a.settings.theme, a.pendingTheme)
+	}
+	a.pendingTheme = "Dracula"
+	a.readThemes()
+	if a.settings.theme != "Dark" || a.pendingTheme != "Dracula" {
+		t.Fatalf("theme %q, pending %q; want Dark, Dracula", a.settings.theme, a.pendingTheme)
+	}
+}

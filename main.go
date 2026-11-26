@@ -1118,6 +1118,9 @@ func main() {
 		if a.nativeGlass = systemHasLiquidGlass(); a.nativeGlass {
 			material = mygo.VibrancyGlass
 			a.setAppearance = mygo.Theme.SetSource
+			// A plugin's theme settings.json chose, as the first frame
+			// would take it.
+			a.readThemes()
 			a.syncAppearance()
 			palette = a.themeFor(a.settings.theme, mygo.Theme.IsDark()).colors
 			if a.settings.glass {

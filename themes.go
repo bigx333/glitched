@@ -129,13 +129,19 @@ var (
 	palette = darkColors
 )
 
-// applyTheme sets the theme the settings ask for: the system's appearance,
-// which the default choice follows, or a theme of the app's or a plugin's.
-func (a *app) applyTheme(c *ui.Context) {
+// readThemes reads the plugins' themes, and takes the theme settings.json
+// chose once it is one of them.
+func (a *app) readThemes() {
 	a.pluginThemes = a.readPluginThemes()
 	if a.pendingTheme != "" && slices.Contains(a.themeNames(), a.pendingTheme) {
 		a.settings.theme, a.pendingTheme = a.pendingTheme, ""
 	}
+}
+
+// applyTheme sets the theme the settings ask for: the system's appearance,
+// which the default choice follows, or a theme of the app's or a plugin's.
+func (a *app) applyTheme(c *ui.Context) {
+	a.readThemes()
 	a.theme = a.themeFor(a.settings.theme, c.Theme().Dark)
 	a.syncAppearance()
 	palette = a.theme.colors
