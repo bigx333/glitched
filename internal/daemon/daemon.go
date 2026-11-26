@@ -168,6 +168,8 @@ type Config struct {
 	// RemoteSteps is called as a remote child's create reaches each step,
 	// as runtime.WithRemoteSteps says: where tests hold it.
 	RemoteSteps func(step string, placeholder api.ID) `json:"-"`
+	// Clock overrides the runtime's wall clock, for deterministic tests.
+	Clock func() time.Time `json:"-"`
 	// Shell overrides the login shell command used for engine-owned PTYs.
 	Shell []string `json:"-"`
 }
@@ -506,6 +508,9 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	}
 	if cfg.RemoteBackoff != nil {
 		opts = append(opts, runtime.WithRemoteBackoff(cfg.RemoteBackoff))
+	}
+	if cfg.Clock != nil {
+		opts = append(opts, runtime.WithClock(cfg.Clock))
 	}
 	// The agent's glitched mcp runs in the agent's workspace, not ours, so it
 	// gets the socket's absolute path.

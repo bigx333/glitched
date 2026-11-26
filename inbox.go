@@ -117,9 +117,11 @@ func (a *app) sortThreads() {
 	}
 	s := &a.sorted
 	if s.items != nil && s.at == at && (s.until.IsZero() || a.now.Before(s.until)) {
+		a.syncMarks()
 		return
 	}
 	a.projects = a.gather()
+	a.settleShownMarks()
 	a.kids = a.kidsOf()
 	// A project gone, as with its server, leaves the filter, lest it hide
 	// every thread left.

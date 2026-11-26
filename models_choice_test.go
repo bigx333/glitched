@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/ui"
+
 	"glitched/internal/api"
 	"glitched/internal/daemon"
 	"glitched/internal/provider"
@@ -238,5 +240,76 @@ func TestModelsNamedAlikeAreChosenApart(t *testing.T) {
 	}
 	if h.a.model != (modelKey{"claude", "b"}) {
 		t.Errorf("choosing %q made the default %+v, want claude's b", second, h.a.model)
+	}
+}
+
+func TestOfferedModelsDedupesAndCachesPerFrame(t *testing.T) {
+	a := &app{
+		models: modelLists{
+			reported: map[string][]provider.Model{
+				"claude": {
+					{ID: "m1", Name: "Same", Default: true},
+					{ID: "m1", Name: "Duplicate ID", Default: true},
+					{ID: "m2", Name: "Same", Default: true},
+				},
+				"codex": {
+					{ID: "c1", Name: "C1", Default: true},
+				},
+			},
+		},
+	}
+
+	a.models.inFrame = true
+	defer func() { a.models.inFrame, a.models.frameOffered = false, nil }()
+
+	got := a.offeredModels()
+	if len(got) != 3 {
+		t.Fatalf("offeredModels returned %d models (%+v), want 3", len(got), got)
+	}
+	if got[0].key != (modelKey{"claude", "m1"}) || got[0].name != "Claude Same" || !got[0].cliDefault {
+		t.Errorf("first model = %+v, want claude:m1 named Claude Same as cliDefault", got[0])
+	}
+	if got[1].key != (modelKey{"claude", "m2"}) || got[1].name != "claude:m2" || got[1].cliDefault {
+		t.Errorf("second model = %+v, want claude:m2 disambiguated and not cliDefault", got[1])
+	}
+	if got[2].key != (modelKey{"codex", "c1"}) || !got[2].cliDefault {
+		t.Errorf("third model = %+v, want codex:c1 as cliDefault", got[2])
+	}
+
+	// familyModels must not mutate the frame-cached slice.
+	claudeOnly := a.familyModels(familyOf("claude"))
+	if len(claudeOnly) != 2 {
+		t.Fatalf("familyModels(claude) = %d, want 2", len(claudeOnly))
+	}
+	if again := a.offeredModels(); len(again) != 3 || again[2].key != (modelKey{"codex", "c1"}) {
+		t.Fatalf("familyModels mutated cached offeredModels: %+v", again)
+	}
+
+	// While inFrame is true, offeredModels serves the cached slice even if reported changes.
+	a.models.reported["codex"] = append(a.models.reported["codex"], provider.Model{ID: "c2", Name: "C2"})
+	if cached := a.offeredModels(); len(cached) != 3 {
+		t.Fatalf("offeredModels during frame returned %d models, want cached 3", len(cached))
+	}
+
+	// Ending the frame invalidates the cache so the next call sees the updated models.
+	a.models.inFrame = false
+	a.models.frameOffered = nil
+	if fresh := a.offeredModels(); len(fresh) != 4 {
+		t.Fatalf("offeredModels after frame reset returned %d models, want 4", len(fresh))
+	}
+
+	// app.view brackets the frame and clears inFrame and frameOffered on return.
+	off := offline(t)
+	off.models.reported = map[string][]provider.Model{
+		"claude": {{ID: "m1", Name: "M1", Default: true}},
+	}
+	tt := ui.NewTester(off.view, 960, 600)
+	tt.Frame()
+	if off.models.inFrame || off.models.frameOffered != nil {
+		t.Fatalf("after app.view: inFrame=%v frameOffered=%v, want false and nil", off.models.inFrame, off.models.frameOffered)
+	}
+	off.models.reported["claude"] = append(off.models.reported["claude"], provider.Model{ID: "m2", Name: "M2"})
+	if fresh := off.offeredModels(); len(fresh) != 2 {
+		t.Fatalf("offeredModels after app.view returned %d models, want 2", len(fresh))
 	}
 }

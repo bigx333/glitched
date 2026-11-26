@@ -47,9 +47,10 @@ type ServiceOptions struct {
 	// Do runs a service's effect, as the GUI's Options.Do does a page's.
 	Do  func(plugin string, e Effect) (any, error)
 	Run func(ctx context.Context, id string, allowed, denied []string, args json.RawMessage) (any, error)
-	// Idle and TimerScale shorten the idle stop and timers, in tests.
-	Idle       time.Duration
-	TimerScale float64
+	// Idle, CallTimeout and TimerScale shorten the idle stop, call timeout and timers, in tests.
+	Idle        time.Duration
+	CallTimeout time.Duration
+	TimerScale  float64
 	// Bundled and ReleaseKeys are the built-in plugins, as Options has
 	// them: those with a service run it here.
 	Bundled     fs.FS
@@ -73,6 +74,7 @@ func StartServices(stateDir string, o ServiceOptions) *Services {
 			Do:          o.Do,
 			Run:         o.Run,
 			MemoryLimit: ServiceMemory,
+			CallTimeout: o.CallTimeout,
 			IdleTimeout: idle,
 			TimerScale:  o.TimerScale,
 			Bundled:     o.Bundled,

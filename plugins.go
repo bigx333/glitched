@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,6 +77,11 @@ var pluginIcons = map[string]*ui.SVG{
 // releaseKeys are the keys that sign the built-in plugins.
 var releaseKeys = []string{bundled.ReleaseKey}
 
+// testBundledDir, when set by TestMain, shares the extracted read-only
+// built-in plugin files across tests so each test doesn't rewrite 29
+// plugin directories to disk.
+var testBundledDir string
+
 // openPlugins loads the plugins installed in the state directory, whose
 // pages and effects run through the app.
 func (a *app) openPlugins(dir string) {
@@ -83,6 +89,12 @@ func (a *app) openPlugins(dir string) {
 	a.pluginMD.OnLink = func(u string) {
 		if strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "http://") {
 			mygo.Shell.OpenExternal(u)
+		}
+	}
+	var bundledDir string
+	if testBundledDir != "" {
+		if _, ok := bundled.FS.(embed.FS); ok {
+			bundledDir = testBundledDir
 		}
 	}
 	a.plugins = plugins.Open(dir, plugins.Options{
@@ -93,6 +105,7 @@ func (a *app) openPlugins(dir string) {
 		// The built-in plugins: Header actions draws the thread header's
 		// buttons till one of the user's replaces it.
 		Bundled:     bundled.FS,
+		BundledDir:  bundledDir,
 		ReleaseKeys: releaseKeys,
 		SignOwn:     true,
 		// Plugins with timers wait for Start, once the window runs and the

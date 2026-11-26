@@ -55,10 +55,12 @@ type modelLists struct {
 	reported map[string][]provider.Model // by provider
 	// served is what each provider the engine serves last said of
 	// itself, or why it couldn't: none before the engine first answers.
-	served map[string]transport.ProviderInfo
-	asking bool
-	fresh  bool      // the next ask has each provider ask its program again
-	next   time.Time // when to ask again
+	served       map[string]transport.ProviderInfo
+	asking       bool
+	fresh        bool        // the next ask has each provider ask its program again
+	inFrame      bool        // true while app.view builds one frame
+	frameOffered []modelInfo // cached offeredModels for the current frame
+	next         time.Time   // when to ask again
 	// changed is set as an answer comes, till the draft's default takes
 	// it (saveComposer).
 	changed bool
@@ -193,14 +195,20 @@ func (a *app) providerFamilies() []family {
 // it, else as its engine words it. Each has a name of its own, as the
 // settings choose the default by it: a name another took is its key.
 func (a *app) offeredModels() []modelInfo {
-	var out []modelInfo
+	if a.models.inFrame && a.models.frameOffered != nil {
+		return a.models.frameOffered
+	}
+	out := []modelInfo{}
+	seen := map[modelKey]bool{}
 	taken := map[string]bool{}
 	for _, f := range a.providerFamilies() {
+		hasDefault := false
 		for _, r := range a.models.reported[f.provider] {
 			key := modelKey{f.provider, r.ID}
-			if slices.ContainsFunc(out, func(m modelInfo) bool { return m.key == key }) {
+			if seen[key] {
 				continue
 			}
+			seen[key] = true
 			m, known := knownModel(key)
 			if !known {
 				short := cmp.Or(r.Name, r.ID)
@@ -214,19 +222,31 @@ func (a *app) offeredModels() []modelInfo {
 			for _, e := range r.Efforts {
 				m.efforts = append(m.efforts, effortOf(e))
 			}
-			m.cliDefault = r.Default && !slices.ContainsFunc(out, func(o modelInfo) bool { return o.key.Provider == f.provider && o.cliDefault })
+			m.cliDefault = r.Default && !hasDefault
+			if m.cliDefault {
+				hasDefault = true
+			}
 			m.defaultEffort = r.DefaultEffort
 			m.speeds = append([]api.Speed(nil), r.Speeds...)
 			m.speedsKnown = r.SpeedsKnown
 			out = append(out, m)
 		}
 	}
+	if a.models.inFrame {
+		a.models.frameOffered = out
+	}
 	return out
 }
 
 // familyModels are the models offered of family f.
 func (a *app) familyModels(f family) []modelInfo {
-	return slices.DeleteFunc(a.offeredModels(), func(m modelInfo) bool { return m.key.Provider != f.provider })
+	var out []modelInfo
+	for _, m := range a.offeredModels() {
+		if m.key.Provider == f.provider {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 func knownModel(k modelKey) (modelInfo, bool) {
@@ -248,11 +268,12 @@ func knownNamed(name string) (modelInfo, bool) {
 // modelNamed is the offered model named name: the settings' default model
 // is chosen by name.
 func (a *app) modelNamed(name string) (modelInfo, bool) {
-	i := slices.IndexFunc(a.offeredModels(), func(m modelInfo) bool { return m.name == name })
+	offered := a.offeredModels()
+	i := slices.IndexFunc(offered, func(m modelInfo) bool { return m.name == name })
 	if i < 0 {
 		return modelInfo{}, false
 	}
-	return a.offeredModels()[i], true
+	return offered[i], true
 }
 
 // modelNames is every offered model's name, and the default's where none
@@ -275,8 +296,9 @@ func (a *app) modelNames() []string {
 // the one Glitched knew by k; else one shown by its id alone, of k's
 // family.
 func (a *app) modelOf(k modelKey) (modelInfo, bool) {
-	if i := slices.IndexFunc(a.offeredModels(), func(m modelInfo) bool { return m.key == k }); i >= 0 {
-		return a.offeredModels()[i], true
+	offered := a.offeredModels()
+	if i := slices.IndexFunc(offered, func(m modelInfo) bool { return m.key == k }); i >= 0 {
+		return offered[i], true
 	}
 	if m, ok := knownModel(k); ok {
 		return m, false
@@ -391,11 +413,12 @@ func (a *app) cliDefault(p string) (modelInfo, bool) {
 		m.cliDefault = true
 		return m, true
 	}
-	i := slices.IndexFunc(a.offeredModels(), func(m modelInfo) bool { return m.key.Provider == p && m.cliDefault })
+	offered := a.offeredModels()
+	i := slices.IndexFunc(offered, func(m modelInfo) bool { return m.key.Provider == p && m.cliDefault })
 	if i < 0 {
 		return modelInfo{}, false
 	}
-	return a.offeredModels()[i], true
+	return offered[i], true
 }
 
 // draftDefaults has the default a new thread in the draft t takes follow

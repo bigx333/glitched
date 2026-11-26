@@ -166,9 +166,26 @@ type run struct {
 // but where a test waits less.
 var callTimeout = 30 * time.Second
 
-func signedCopy(t *testing.T, id string) (fs.FS, string) {
+func signedCopy(t *testing.T, id string) (fs.FS, string, string) {
 	t.Helper()
-	root := t.TempDir()
+	signedCacheMu.Lock()
+	defer signedCacheMu.Unlock()
+	if c, ok := signedCache[id]; ok {
+		return c.fsys, c.bundledDir, c.pub
+	}
+	base := filepath.Join(filepath.Dir(sharedBundledDir), "signed-"+id)
+	tmp, err := os.MkdirTemp(filepath.Dir(sharedBundledDir), "signed-"+id+"-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			os.RemoveAll(tmp)
+		}
+	}()
+	root := filepath.Join(tmp, "src")
+	keyDir := filepath.Join(tmp, "key")
 	sub, err := fs.Sub(bundled.FS, id)
 	if err != nil {
 		t.Fatal(err)
@@ -188,25 +205,38 @@ func signedCopy(t *testing.T, id string) (fs.FS, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, err := pack.LoadKey(t.TempDir())
+	if err := os.MkdirAll(keyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	key, err := pack.LoadKey(keyDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := pack.Sign(dst, key); err != nil {
 		t.Fatal(err)
 	}
-	return os.DirFS(root), key.Public()
+	if err := os.RemoveAll(base); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, base); err != nil {
+		t.Fatal(err)
+	}
+	committed = true
+	c := cachedSigned{fsys: os.DirFS(filepath.Join(base, "src")), bundledDir: filepath.Join(base, "out"), pub: key.Public()}
+	signedCache[id] = c
+	return c.fsys, c.bundledDir, c.pub
 }
 
 // openPullRequests shows the plugin a thread in work, as the header does.
 func openPullRequests(t *testing.T, work string, gh *github) *pullRequests {
 	t.Helper()
 	p := &pullRequests{t: t, q: make(chan func(), 1024), gh: gh}
-	fsys, release := signedCopy(t, "pull-requests")
+	fsys, bundledDir, release := signedCopy(t, "pull-requests")
 	p.h = plugins.Open(t.TempDir(), plugins.Options{
 		Post:        func(fn func()) { p.q <- fn },
 		Logf:        t.Logf,
 		Bundled:     fsys,
+		BundledDir:  bundledDir,
 		ReleaseKeys: []string{release},
 		CallTimeout: callTimeout,
 		Do:          p.do,
