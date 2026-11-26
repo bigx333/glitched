@@ -315,9 +315,18 @@ func writtenMark(e json.RawMessage) bool {
 	return true
 }
 
+func appendMissingMarks(dst, src []projectMark) []projectMark {
+	for _, m := range src {
+		if !slices.ContainsFunc(dst, func(o projectMark) bool { return o.Name == m.Name }) {
+			dst = append(dst, m)
+		}
+	}
+	return dst
+}
+
 // loadMarks takes the projects' marks as marks.json holds them. One this
 // version doesn't write is never written here, till it changes.
-func (a *app) loadMarks() (corrupt bool) {
+func (a *app) loadMarks() (rewrite bool) {
 	a.marksRead, a.marksShown = a.statMarks(), ""
 	var raw json.RawMessage
 	if err := jsonfile.Load(a.marksPath(), &raw); err != nil {
@@ -327,14 +336,21 @@ func (a *app) loadMarks() (corrupt bool) {
 			syntax, kind := (*json.SyntaxError)(nil), (*json.UnmarshalTypeError)(nil)
 			return errors.As(err, &syntax) || errors.As(err, &kind)
 		}
-	} else {
-		a.marksUnsaved = false
 	}
 	ms, ours := decodeMarks(raw)
+	if a.marksUnsaved {
+		disk := len(ms)
+		ms = appendMissingMarks(ms, a.marks)
+		if len(ms) == disk {
+			a.marksUnsaved = false
+		} else {
+			rewrite = ours
+		}
+	}
 	a.heldMarks(!ours)
 	a.marks = ms
 	a.drawnMarks = marksByName(a.marks)
-	return false
+	return rewrite
 }
 
 // heldMarks is whether marks.json is one this version doesn't write, and
@@ -416,13 +432,20 @@ func (a *app) settleShownMarks() {
 				// A file gone, or made anew, leaves the marks here to keep.
 				disk := len(from)
 				if disk == 0 || a.marksUnsaved {
-					for _, m := range before {
-						if !slices.ContainsFunc(from, func(o projectMark) bool { return o.Name == m.Name }) {
-							from = append(from, m)
+					from = appendMissingMarks(from, before)
+				}
+				out, changed := settleMarks(from, names)
+				for i, m := range out {
+					if m.Icon == "" || m.Color == "" {
+						icon, color := drawn(m)
+						if m.Icon == "" {
+							out[i].Icon = projectIcons[icon]
+						}
+						if m.Color == "" {
+							out[i].Color = projectColors[color]
 						}
 					}
 				}
-				out, changed := settleMarks(from, names)
 				if ms = out; !changed && len(from) == disk {
 					return errMarksSettled
 				}

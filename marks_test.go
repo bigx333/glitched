@@ -1733,3 +1733,61 @@ func TestProjectsListedByAnIdleWindowHaveTheMarksAnotherWrote(t *testing.T) {
 		}
 	}
 }
+
+func TestUnsavedMarksKeepTheirOrderWhenAnotherWindowWritesFirst(t *testing.T) {
+	dir := t.TempDir()
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	a, b := marksApp(dir, "mygo"), marksApp(dir, "mygo")
+	lock := filepath.Join(dir, "marks.json.lock")
+	os.Remove(lock)
+	if err := os.Mkdir(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	showMarks(a, "mygo", "pstack-t3")
+	showMarks(a, "mygo", "pstack-t3", "glitched")
+	before := marksDrawn(a)
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	showMarks(b, "mygo", "b")
+	showMarks(a, "mygo", "b", "glitched", "pstack-t3")
+	after := marksDrawn(a)
+	for _, n := range []string{"mygo", "pstack-t3", "glitched"} {
+		if after[n] != before[n] {
+			t.Errorf("%s moved from %v to %v", n, before[n], after[n])
+		}
+	}
+	ms, _ := readMarks(t, dir)
+	p := slices.IndexFunc(ms, func(m projectMark) bool { return m.Name == "pstack-t3" })
+	g := slices.IndexFunc(ms, func(m projectMark) bool { return m.Name == "glitched" })
+	if p < 0 || g < 0 || p >= g {
+		t.Errorf("marks.json holds %v; want pstack-t3 before glitched", ms)
+	}
+}
+
+func TestDeletingAForeignFileWritesMarksThisVersionCanReadAgain(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "marks.json")
+	src := `[{"name":"mygo","color":"#14b8a6"}]`
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	a := marksApp(dir, "mygo")
+	before := marksDrawn(a)["mygo"]
+	keptAsIs(t, dir, src)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	showMarks(a, "mygo")
+	showMarks(a, "mygo", "glitched")
+	if got := marksDrawn(a)["mygo"]; got != before {
+		t.Errorf("mygo moved from %v to %v", before, got)
+	}
+	ms, _ := readMarks(t, dir)
+	if !slices.ContainsFunc(ms, func(m projectMark) bool { return m.Name == "glitched" }) {
+		t.Errorf("marks.json holds %v; want glitched saved after foreign file deletion", ms)
+	}
+}
