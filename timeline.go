@@ -55,13 +55,17 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) (laid bool) {
 	at := v.thinkingPos(thinkingAt(t, rs))
 	var matchSet map[int]bool
 	activeMatch := -1
-	if a.findOpen {
+	if !leaving && a.findOpen {
 		if ms := a.findMatches(t, rs); len(ms) > 0 {
 			matchSet = make(map[int]bool, len(ms))
-			for _, idx := range ms {
-				matchSet[v.pos(idx)] = true
+			for _, h := range ms {
+				if h.row >= 0 {
+					matchSet[v.pos(h.row)] = true
+				}
 			}
-			activeMatch = v.pos(ms[max(0, min(a.findIndex, len(ms)-1))])
+			if h := ms[max(0, min(a.findIndex, len(ms)-1))]; h.row >= 0 {
+				activeMatch = v.pos(h.row)
+			}
 		}
 	}
 	list := ui.List(c.Key(t.id()), l, v.len(), func(j int) {

@@ -23,8 +23,8 @@ type searcher interface {
 const searchTimeout = 5 * time.Second
 
 // Search queries all online environments' full-text transcript indexes in
-// parallel and posts the merged results (newest thread updatedAt first)
-// back onto the UI thread via done.
+// parallel and posts the merged results (best relevance score first,
+// newest thread updatedAt as tiebreaker) back onto the UI thread via done.
 func (m *Manager) Search(query string, limit int, done func([]SearchMatch)) {
 	if m.closed {
 		return
@@ -76,12 +76,17 @@ func (m *Manager) Search(query string, limit int, done func([]SearchMatch)) {
 			}(tg)
 		}
 		wg.Wait()
-		slices.SortFunc(merged, func(a, b SearchMatch) int {
-			if c := b.Hit.UpdatedAt.Compare(a.Hit.UpdatedAt); c != 0 {
-				return c
-			}
-			return cmp.Compare(b.Hit.Seq, a.Hit.Seq)
-		})
+		if len(targets) > 1 {
+			slices.SortStableFunc(merged, func(a, b SearchMatch) int {
+				if c := cmp.Compare(a.Hit.Score, b.Hit.Score); c != 0 {
+					return c
+				}
+				if c := b.Hit.UpdatedAt.Compare(a.Hit.UpdatedAt); c != 0 {
+					return c
+				}
+				return cmp.Compare(b.Hit.Seq, a.Hit.Seq)
+			})
+		}
 		if limit > 0 && len(merged) > limit {
 			merged = merged[:limit]
 		}

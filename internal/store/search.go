@@ -300,7 +300,7 @@ func (s *Store) Search(ctx context.Context, q api.SearchQuery) (api.SearchResult
 		), best AS (
 			SELECT id, score, seq, ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY score, seq DESC) AS rn FROM matched
 		)
-		SELECT t.id, t.title, t.workspace, t.project, t.updated_at, f.seq, f.role, snippet(transcript_fts, 4, '', '', '…', 18)
+		SELECT t.id, t.title, t.workspace, t.project, t.updated_at, f.seq, f.role, snippet(transcript_fts, 4, '', '', '…', 18), b.score
 		FROM best b
 		JOIN transcript_fts f ON f.rowid = b.id
 		JOIN threads t ON hex(t.id) = f.thread_id
@@ -314,7 +314,7 @@ func (s *Store) Search(ctx context.Context, q api.SearchQuery) (api.SearchResult
 	for rows.Next() {
 		var h api.SearchHit
 		var updated int64
-		if err := rows.Scan(idScan{&h.Thread}, &h.Title, &h.Workspace, &h.Project, &updated, &h.Seq, &h.Role, &h.Snippet); err != nil {
+		if err := rows.Scan(idScan{&h.Thread}, &h.Title, &h.Workspace, &h.Project, &updated, &h.Seq, &h.Role, &h.Snippet, &h.Score); err != nil {
 			return api.SearchResult{}, err
 		}
 		h.UpdatedAt = fromNanos(updated)

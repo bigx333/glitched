@@ -385,3 +385,91 @@ func TestThePalettesBuiltInFindsMessages(t *testing.T) {
 	}
 	h.wantFound("3 of 3")
 }
+
+// Opening a punctuation-delimited FTS5 hit ("rate-limit" matching "rate limit")
+// finds the message in the find bar.
+func TestFindMatchesPunctuationDelimitedFTSHit(t *testing.T) {
+	h, dir := fakeTurns(t)
+	h.answered(dir, "Haystack", "rate limit")
+	h.tt.Key(ui.Cmd, ui.KeyK)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Type("rate-limit")
+	settlePlugins(t, h.a, h.tt, h.p)
+	if !h.tt.HasText("Messages") || !h.tt.HasText("rate limit") {
+		t.Fatalf("missing rate limit hit: %q", h.tt.Texts())
+	}
+	h.tt.Key(0, ui.KeyEnter)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.wantFound("1 of 1")
+}
+
+// Switching threads while the find bar is open searches the newly chosen thread.
+func TestFindFollowsThreadSwitchWhileOpen(t *testing.T) {
+	h, dir := fakeTurns(t)
+	a := h.answered(dir, "First", "needle one", "needle two")
+	b := h.answered(dir, "Second", "needle three")
+	h.findIn(a, "needle")
+	h.tt.Key(ui.Cmd, ui.KeyG)
+	h.tt.Frame()
+	h.wantFound("2 of 2")
+	h.a.choose(b)
+	h.tt.Frame()
+	h.wantFound("1 of 1")
+}
+
+// Opening a newer hit in a thread whose cached transcript hasn't caught up yet
+// waits for the transcript to pass the hit's seq before selecting the match.
+func TestFindWaitsForCachedTranscriptCatchup(t *testing.T) {
+	h, dir := fakeTurns(t)
+	a := h.answered(dir, "First", "needle")
+	h.answered(dir, "Second", "unrelated")
+	h.a.backend.Send(h.local(), a.id(), "needle needle", api.StartNow)
+	h.until("second turn done", func() bool { return !a.View.Live() && a.View.Queued == 0 && len(a.Pending) == 0 })
+
+	h.tt.Key(ui.Cmd, ui.KeyK)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Type("needle")
+	settlePlugins(t, h.a, h.tt, h.p)
+	if !h.tt.HasText("needle needle") {
+		t.Fatalf("missing newer hit: %q", h.tt.Texts())
+	}
+	h.tt.Key(0, ui.KeyEnter)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.until("caught up", func() bool { return len(findMatches(h.a.rowsOf(a).es, "needle", false)) == 2 })
+	h.tt.Frame()
+	h.wantFound("2 of 2")
+}
+
+// Opening a held/queued message hit from ⌘K matches it in the find bar.
+func TestFindMatchesHeldQueuedMessageHit(t *testing.T) {
+	h, dir := fakeTurns(t)
+	th := h.answered(dir, "Haystack", "unrelated")
+	h.a.backend.Send(h.local(), th.id(), "queuedneedle", api.Defer)
+	h.until("queued", func() bool { return th.Transcript != nil && len(th.Transcript.Queue) > 0 && len(th.Pending) == 0 })
+
+	h.tt.Key(ui.Cmd, ui.KeyK)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Type("queuedneedle")
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Key(0, ui.KeyEnter)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.wantFound("1 of 1")
+}
+
+// Client search preserves the store's BM25 relevance ranking instead of
+// overriding it with thread UpdatedAt.
+func TestCmdKPreservesRelevanceOrder(t *testing.T) {
+	h, dir := fakeTurns(t)
+	h.answered(dir, "Strong", "needle needle needle needle")
+	h.answered(dir, "Weak", "needle among many unrelated words and far less relevant material in this much longer prompt")
+
+	h.tt.Key(ui.Cmd, ui.KeyK)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Type("needle")
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Key(0, ui.KeyEnter)
+	settlePlugins(t, h.a, h.tt, h.p)
+	if h.a.current().View.Title != "Strong" {
+		t.Fatalf("palette Enter opened %q, want Strong (higher relevance)", h.a.current().View.Title)
+	}
+}

@@ -580,7 +580,7 @@ type app struct {
 	findWords  bool
 	findTarget uint64
 	findKey    findKey
-	findRows   []int
+	findRows   []findHit
 
 	glassOffset ui.Point
 	checkUntil  time.Time

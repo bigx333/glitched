@@ -20,6 +20,7 @@ type SearchHit struct {
 	Seq       uint64    `json:"seq"`
 	Role      string    `json:"role"`
 	Snippet   string    `json:"snippet"`
+	Score     float64   `json:"score,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 

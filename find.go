@@ -39,32 +39,65 @@ func (a *app) closeFind() {
 
 // findKey is what the find bar's matches are of.
 type findKey struct {
-	thread api.ID
-	query  string
-	words  bool
-	change uint64
-	first  *entry
-	n      int
+	thread    api.ID
+	query     string
+	words     bool
+	change    uint64
+	cursorSeq uint64
+	first     *entry
+	n         int
 }
 
-// findMatches are the rows of t the find bar matches, found once for the
-// frame's timeline and bar. A hit's row, once the rows show it, is the
-// one chosen.
-func (a *app) findMatches(t thread, rs rows) []int {
-	if !a.findOpen || t.id() != a.findThread {
+// findHit is one match in the current thread: row >= 0 indexes rs.es;
+// row == -1 is a waiting or held message in the queue strip.
+type findHit struct {
+	row int
+	seq uint64
+}
+
+// findMatches are the rows (and waiting queued messages) of t the find bar
+// matches, found once for the frame's timeline and bar. A hit's row, once
+// the transcript catches up to its seq, is the one chosen.
+func (a *app) findMatches(t thread, rs rows) []findHit {
+	if !a.findOpen {
 		return nil
 	}
-	k := findKey{thread: t.id(), query: a.findQuery, words: a.findWords, change: rs.change, n: len(rs.es)}
+	if t.id() != a.findThread {
+		if t.id() != a.current().id() {
+			return nil
+		}
+		a.findThread, a.findIndex = t.id(), 0
+		a.findWords, a.findTarget = false, 0
+		a.findJump = strings.TrimSpace(a.findQuery) != ""
+	}
+	var cursorSeq uint64
+	if t.Transcript != nil {
+		cursorSeq = t.Transcript.Cursor.Seq
+	}
+	k := findKey{thread: t.id(), query: a.findQuery, words: a.findWords, change: rs.change, cursorSeq: cursorSeq, n: len(rs.es)}
 	if len(rs.es) > 0 {
 		k.first = &rs.es[0]
 	}
 	if a.findKey != k {
-		a.findKey, a.findRows = k, findMatches(rs.es, a.findQuery, a.findWords)
+		var hits []findHit
+		for _, idx := range findMatches(rs.es, a.findQuery, a.findWords) {
+			hits = append(hits, findHit{row: idx, seq: rs.es[idx].seq})
+		}
+		if t.Transcript != nil {
+			if want := findTerms(a.findQuery, a.findWords); len(want) > 0 {
+				for _, u := range t.Transcript.Queue {
+					if waits(u) && textMatchesTerms(u.Text, want) {
+						hits = append(hits, findHit{row: -1, seq: u.Seq})
+					}
+				}
+			}
+		}
+		a.findKey, a.findRows = k, hits
 	}
 	ms := a.findRows
-	if a.findTarget != 0 && t.Transcript != nil && len(rs.es) > 0 {
-		for i, m := range ms {
-			if rs.es[m].seq == a.findTarget {
+	if a.findTarget != 0 && t.Transcript != nil && t.Transcript.Cursor.Seq >= a.findTarget {
+		for i, h := range ms {
+			if h.seq == a.findTarget {
 				a.findIndex, a.findJump = i, true
 				break
 			}
@@ -74,28 +107,46 @@ func (a *app) findMatches(t thread, rs rows) []int {
 	return ms
 }
 
-// findMatches returns the indices of the rows of es that show query, past
-// case and accents: query whole, or with words, each of its words.
-func findMatches(es []entry, query string, words bool) []int {
+func findTerms(query string, words bool) []string {
 	q := foldForFind(strings.TrimSpace(query))
 	if q == "" {
 		return nil
 	}
-	want := []string{q}
-	if words {
-		want = strings.Fields(q)
+	if !words {
+		return []string{q}
+	}
+	toks := strings.FieldsFunc(q, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	})
+	if len(toks) == 0 {
+		return strings.Fields(q)
+	}
+	return toks
+}
+
+func textMatchesTerms(s string, want []string) bool {
+	if len(want) == 0 {
+		return false
+	}
+	text := foldForFind(s)
+	for _, w := range want {
+		if !strings.Contains(text, w) {
+			return false
+		}
+	}
+	return true
+}
+
+// findMatches returns the indices of the rows of es that show query, past
+// case and accents: query whole, or with words, each FTS5 token of it.
+func findMatches(es []entry, query string, words bool) []int {
+	want := findTerms(query, words)
+	if len(want) == 0 {
+		return nil
 	}
 	var out []int
 	for i, e := range es {
-		text := foldForFind(findText(e))
-		if !strings.Contains(text, want[0]) {
-			continue
-		}
-		all := true
-		for _, w := range want[1:] {
-			all = all && strings.Contains(text, w)
-		}
-		if all {
+		if textMatchesTerms(findText(e), want) {
 			out = append(out, i)
 		}
 	}
@@ -167,7 +218,11 @@ func (a *app) findBar(c *ui.Context, t thread, rs rows) {
 	v := a.viewFor(t.id(), rs)
 	show := func() {
 		if len(matches) > 0 {
-			a.listFor(t.id()).ScrollIntoView(v.pos(matches[a.findIndex]))
+			if h := matches[a.findIndex]; h.row >= 0 {
+				a.listFor(t.id()).ScrollIntoView(v.pos(h.row))
+			} else if v.len() > 0 {
+				a.listFor(t.id()).ScrollIntoView(v.len() - 1)
+			}
 		}
 	}
 	step := func(delta int) {
