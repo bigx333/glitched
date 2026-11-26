@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"glitched/internal/api"
 )
@@ -64,14 +65,17 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, tools *Tools) error
 			Method  string `json:"method"`
 		}{JSONRPC: "2.0", Method: method})
 	}
-	var calls sync.WaitGroup
-	defer calls.Wait()
+	// Cancel and join the ownership watcher only AFTER all request handlers
+	// have finished, so a finishing handler can never launch a watcher that
+	// outlives Serve.
 	watchCtx, watchCancel := context.WithCancel(ctx)
 	var watchWG sync.WaitGroup
 	defer func() {
 		watchCancel()
 		watchWG.Wait()
 	}()
+	var calls sync.WaitGroup
+	defer calls.Wait()
 	var watchOnce sync.Once
 	startWatch := func(initialChild bool) {
 		if tools == nil || tools.Engine == nil || tools.Origin.Thread.IsZero() {
@@ -113,39 +117,75 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, tools *Tools) error
 	return sc.Err()
 }
 
+func sleepContext(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
 // watchOwnership watches a child thread for live takeover or handback and
 // emits notifications/tools/list_changed when UserOwned flips so MCP clients
 // refresh their cached tool catalog (e.g. exposing request_credentials).
+// It handles both StreamThread and StreamSnapshot items and re-subscribes
+// after stream overflow or transient errors.
 func watchOwnership(ctx context.Context, tools *Tools, lastChild bool, notify func(string)) {
-	snap, err := tools.Engine.Read(ctx, api.Query{Thread: tools.Origin.Thread})
-	if err != nil || len(snap.Threads) != 1 {
-		return
-	}
-	th := snap.Threads[0]
-	if th.Parent.IsZero() && th.Origin == nil {
-		return
-	}
-	if cur := !th.UserOwned(); cur != lastChild {
-		lastChild = cur
-		notify("notifications/tools/list_changed")
-	}
-	stream, err := tools.Engine.Open(ctx, api.Subscription{Thread: tools.Origin.Thread, After: snap.Cursor, Views: true})
-	if err != nil {
-		return
-	}
-	defer stream.Close()
-	for {
-		item, err := stream.Next(ctx)
-		if err != nil {
-			return
-		}
-		if item.Thread == nil {
-			continue
-		}
-		if cur := !item.Thread.UserOwned(); cur != lastChild {
+	const minBackoff = 50 * time.Millisecond
+	backoff := minBackoff
+	check := func(th api.Thread) {
+		if cur := !th.UserOwned(); cur != lastChild {
 			lastChild = cur
 			notify("notifications/tools/list_changed")
 		}
+	}
+	for ctx.Err() == nil {
+		snap, err := tools.Engine.Read(ctx, api.Query{Thread: tools.Origin.Thread})
+		if err != nil {
+			if !sleepContext(ctx, backoff) {
+				return
+			}
+			backoff = min(backoff*2, time.Second)
+			continue
+		}
+		if len(snap.Threads) != 1 {
+			return
+		}
+		th := snap.Threads[0]
+		if th.Parent.IsZero() && th.Origin == nil {
+			return
+		}
+		check(th)
+		stream, err := tools.Engine.Open(ctx, api.Subscription{Thread: tools.Origin.Thread, After: snap.Cursor, Views: true})
+		if err != nil {
+			if !sleepContext(ctx, backoff) {
+				return
+			}
+			backoff = min(backoff*2, time.Second)
+			continue
+		}
+		backoff = minBackoff
+		for {
+			item, err := stream.Next(ctx)
+			if err != nil {
+				break
+			}
+			switch {
+			case item.Thread != nil && (item.Thread.ID == tools.Origin.Thread || item.Thread.ID.IsZero()):
+				check(*item.Thread)
+			case item.Snapshot != nil:
+				for _, st := range item.Snapshot.Threads {
+					if st.ID == tools.Origin.Thread || (len(item.Snapshot.Threads) == 1 && st.ID.IsZero()) {
+						check(st)
+						break
+					}
+				}
+			}
+		}
+		stream.Close()
 	}
 }
 

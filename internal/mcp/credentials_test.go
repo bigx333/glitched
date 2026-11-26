@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"io"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -229,5 +231,170 @@ func TestLiveTakeoverEmitsToolsListChanged(t *testing.T) {
 	inW.Close()
 	if err := <-done; err != nil {
 		t.Fatalf("Serve returned %v", err)
+	}
+}
+
+type scriptedStream struct {
+	items []api.StreamItem
+	err   error
+	idx   int
+	block bool
+}
+
+func (s *scriptedStream) Next(ctx context.Context) (api.StreamItem, error) {
+	if s.idx < len(s.items) {
+		it := s.items[s.idx]
+		s.idx++
+		return it, nil
+	}
+	if s.err != nil {
+		err := s.err
+		s.err = nil
+		return api.StreamItem{}, err
+	}
+	if s.block {
+		<-ctx.Done()
+		return api.StreamItem{}, ctx.Err()
+	}
+	return api.StreamItem{}, io.EOF
+}
+
+func (s *scriptedStream) Close() error { return nil }
+
+type scriptedEndpoint struct {
+	mu         sync.Mutex
+	thread     api.Thread
+	streams    []*scriptedStream
+	opens      int
+	afterClose atomic.Bool
+	closed     atomic.Bool
+	readDelay  time.Duration
+}
+
+func (e *scriptedEndpoint) Info(context.Context) (api.Environment, error) {
+	return api.Environment{}, nil
+}
+func (e *scriptedEndpoint) Submit(context.Context, api.Command) (api.Receipt, error) {
+	return api.Receipt{}, nil
+}
+func (e *scriptedEndpoint) Read(ctx context.Context, _ api.Query) (api.Snapshot, error) {
+	if e.closed.Load() {
+		e.afterClose.Store(true)
+	}
+	if e.readDelay > 0 {
+		select {
+		case <-time.After(e.readDelay):
+		case <-ctx.Done():
+			return api.Snapshot{}, ctx.Err()
+		}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return api.Snapshot{Threads: []api.Thread{e.thread}}, nil
+}
+func (e *scriptedEndpoint) Open(_ context.Context, _ api.Subscription) (api.Stream, error) {
+	if e.closed.Load() {
+		e.afterClose.Store(true)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	i := e.opens
+	e.opens++
+	if i < len(e.streams) {
+		return e.streams[i], nil
+	}
+	return &scriptedStream{block: true}, nil
+}
+
+// The ownership watcher handles ownership changes delivered in StreamSnapshot,
+// re-subscribes after ErrOverflow, and never outlives Serve at EOF.
+func TestOwnershipWatcherHandlesSnapshotOverflowAndShutdown(t *testing.T) {
+	childID, parentID := api.NewID(), api.NewID()
+	taken := api.Thread{ID: childID, Parent: parentID, TakenOver: true}
+	handedBack := api.Thread{ID: childID, Parent: parentID, TakenOver: false}
+	ep := &scriptedEndpoint{
+		thread: api.Thread{ID: childID, Parent: parentID, TakenOver: false},
+		streams: []*scriptedStream{
+			// First stream delivers takeover via StreamSnapshot, then overflows.
+			{
+				items: []api.StreamItem{{Kind: api.StreamSnapshot, Snapshot: &api.Snapshot{Threads: []api.Thread{taken}}}},
+				err:   api.ErrOverflow,
+			},
+			// Second stream (after reconnect) delivers handback via StreamThread, then blocks until ctx done.
+			{
+				items: []api.StreamItem{{Kind: api.StreamThread, Thread: &handedBack}},
+				block: true,
+			},
+		},
+	}
+
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		done <- mcp.Serve(ctx, inR, outW, &mcp.Tools{
+			Engine: ep,
+			Origin: mcp.Origin{Thread: childID, Access: api.AccessAsk, Child: true},
+		})
+		outW.Close()
+	}()
+	lines := make(chan string, 16)
+	go func() {
+		sc := bufio.NewScanner(outR)
+		for sc.Scan() {
+			lines <- sc.Text()
+		}
+		close(lines)
+	}()
+	nextLine := func(what string) string {
+		t.Helper()
+		select {
+		case l, ok := <-lines:
+			if !ok {
+				t.Fatalf("closed waiting for %s", what)
+			}
+			return l
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for %s", what)
+			return ""
+		}
+	}
+
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`+"\n")
+	_ = nextLine("initialize")
+	// 1) Takeover via StreamSnapshot
+	if l := nextLine("snapshot list_changed"); !strings.Contains(l, `"notifications/tools/list_changed"`) {
+		t.Fatalf("got %s, want notifications/tools/list_changed from snapshot", l)
+	}
+	// 2) After ErrOverflow, watcher reconnects and picks up handback from stream 2
+	if l := nextLine("post-overflow list_changed"); !strings.Contains(l, `"notifications/tools/list_changed"`) {
+		t.Fatalf("got %s, want notifications/tools/list_changed after overflow", l)
+	}
+	inW.Close()
+	if err := <-done; err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	ep.closed.Store(true)
+	time.Sleep(30 * time.Millisecond)
+	if ep.afterClose.Load() {
+		t.Fatal("ownership watcher called Endpoint after Serve returned")
+	}
+
+	// Shutdown race: EOF arrives while initialize is still inside Read.
+	slow := &scriptedEndpoint{
+		thread:    api.Thread{ID: childID, Parent: parentID},
+		readDelay: 40 * time.Millisecond,
+	}
+	var out bytes.Buffer
+	if err := mcp.Serve(ctx, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`+"\n"), &out, &mcp.Tools{
+		Engine: slow,
+		Origin: mcp.Origin{Thread: childID, Access: api.AccessAsk, Child: true},
+	}); err != nil {
+		t.Fatalf("slow Serve: %v", err)
+	}
+	slow.closed.Store(true)
+	time.Sleep(80 * time.Millisecond)
+	if slow.afterClose.Load() {
+		t.Fatal("watcher started after EOF and called Endpoint after Serve returned")
 	}
 }

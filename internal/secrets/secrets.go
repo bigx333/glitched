@@ -189,9 +189,22 @@ func (v *Vault) valuesLocked(thread api.ID) (map[string]string, error) {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
+	envInfo, _ := os.Lstat(filepath.Join(v.Dir(thread), EnvScript))
 	for _, e := range entries {
-		if !e.Type().IsRegular() || !api.ValidName(e.Name()) || strings.EqualFold(e.Name(), EnvScript) {
+		if !e.Type().IsRegular() || e.Name() == EnvScript {
 			continue
+		}
+		if !api.ValidName(e.Name()) {
+			// A vault written by an earlier build on a case-sensitive volume
+			// may hold a legacy ENV file distinct from EnvScript; keep reading
+			// it so redaction never drops existing secrets on upgrade.
+			if !strings.EqualFold(e.Name(), EnvScript) {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil || (envInfo != nil && os.SameFile(info, envInfo)) {
+				continue
+			}
 		}
 		b, err := os.ReadFile(filepath.Join(v.Dir(thread), e.Name()))
 		if err != nil {
@@ -287,12 +300,15 @@ func (v *Vault) everLocked(thread api.ID, name, value string) {
 	}
 }
 
-// Forget deletes thread's folder and everything in it.
+// Forget deletes thread's folder and everything in it, after recording any
+// on-disk values in v.ever so active consumers still redact them after a
+// restart.
 func (v *Vault) Forget(thread api.ID) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	defer v.publishLocked()
 	defer v.checkLocked(thread)
+	_, _ = v.valuesLocked(thread)
 	delete(v.loaded, thread)
 	return os.RemoveAll(v.Dir(thread))
 }

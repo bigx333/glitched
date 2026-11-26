@@ -85,6 +85,59 @@ func TestPutReplacesAndForgetDeletes(t *testing.T) {
 	}
 }
 
+// Reopening a vault after restart and calling Forget before reading the
+// thread still preserves its on-disk values for RedactValues.
+func TestForgetAfterRestartRetainsRedactValues(t *testing.T) {
+	dir := t.TempDir()
+	th := api.NewID()
+	if err := New(dir).Put(th, map[string]string{"KEY": "persisted-secret-value"}); err != nil {
+		t.Fatal(err)
+	}
+	reopened := New(dir)
+	if err := reopened.Forget(th); err != nil {
+		t.Fatal(err)
+	}
+	rv := reopened.RedactValues(th)
+	if rv["KEY"] != "persisted-secret-value" {
+		t.Fatalf("RedactValues after restart+Forget = %v, want persisted-secret-value retained", rv)
+	}
+}
+
+// On a case-sensitive volume, a legacy vault containing an ENV file distinct
+// from EnvScript still loads ENV for redaction while Put rejects new ENV
+// writes.
+func TestLegacyENVFileRetainedOnCaseSensitiveVolume(t *testing.T) {
+	dir := t.TempDir()
+	th := api.NewID()
+	v := New(dir)
+	if _, err := v.Prepare(th); err != nil {
+		t.Fatal(err)
+	}
+	envPath := filepath.Join(v.Dir(th), EnvScript)
+	legacyPath := filepath.Join(v.Dir(th), "ENV")
+	if err := os.WriteFile(legacyPath, []byte("legacy-env-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envInfo, err := os.Lstat(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyInfo, err := os.Lstat(legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(envInfo, legacyInfo) {
+		t.Skip("case-insensitive filesystem; ENV and env are the same file")
+	}
+	reopened := New(dir)
+	if got := reopened.RedactValues(th)["ENV"]; got != "legacy-env-secret" {
+		t.Fatalf("RedactValues on legacy ENV file = %v, want legacy-env-secret", reopened.RedactValues(th))
+	}
+	if err := reopened.Put(th, map[string]string{"ENV": "new-value"}); err == nil {
+		t.Fatal("Put accepted new ENV credential")
+	}
+}
+
 // scanned is v's Held once the vault has read every thread's folder.
 func scanned(t *testing.T, v *Vault) Held {
 	t.Helper()
