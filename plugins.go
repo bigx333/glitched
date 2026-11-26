@@ -19,6 +19,7 @@ import (
 	plugin "github.com/yxxbc/mygo-plugin"
 
 	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/bundled"
@@ -566,9 +567,26 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		a.select_(t)
-		a.revealing = t.id()
+		var args struct {
+			Find string
+			Seq  uint64
+		}
+		json.Unmarshal(e.Args, &args)
+		a.openHit(t, args.Find, args.Seq)
 		return nil, nil
+	case "threads.search":
+		var args struct {
+			Query string
+			Limit int
+		}
+		json.Unmarshal(e.Args, &args)
+		limit := args.Limit
+		if limit <= 0 {
+			limit = 20
+		}
+		return plugins.Pending(func(done func(any, error)) {
+			a.backend.Search(args.Query, min(limit, 100), func(ms []client.SearchMatch) { done(a.searchHits(ms), nil) })
+		}), nil
 	case "threads.rename":
 		var args struct{ Title string }
 		json.Unmarshal(e.Args, &args)

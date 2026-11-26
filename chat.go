@@ -544,8 +544,8 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) (laid bool) {
 	at := v.thinkingPos(thinkingAt(t, rs))
 	var matchSet map[int]bool
 	activeMatch := -1
-	if a.findOpen && strings.TrimSpace(a.findQuery) != "" && t.id() == a.findThread {
-		if ms := findMatches(rs.es, a.findQuery); len(ms) > 0 {
+	if a.findOpen {
+		if ms := a.findMatches(t, rs); len(ms) > 0 {
 			matchSet = make(map[int]bool, len(ms))
 			for _, idx := range ms {
 				matchSet[v.pos(idx)] = true

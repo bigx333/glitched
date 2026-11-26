@@ -159,8 +159,11 @@ const (
 // An entry is a row of the timeline. Its key stays the same while it
 // changes and as rows come before it.
 type entry struct {
-	key       string
-	kind      entryKind
+	key  string
+	kind entryKind
+	// seq is where the log starts a message or a reply, as search's hits
+	// say; 0 for other rows.
+	seq       uint64
 	text      string
 	streaming bool
 	// note is under a message: queued, sending, cancelled.
@@ -257,7 +260,7 @@ func (d *deriving) add(e client.Entry) {
 		d.listed[e.Message] = true
 		d.es = append(d.es, userEntry(e))
 	case *client.AssistantEntry:
-		ae := entry{key: d.key("a", e.Run), kind: entryAssistant, text: e.Text, streaming: e.Streaming, at: e.At, ran: ranFor(e.End), retry: unfinished(e.End), run: e.Run}
+		ae := entry{key: d.key("a", e.Run), kind: entryAssistant, seq: e.Seq, text: e.Text, streaming: e.Streaming, at: e.At, ran: ranFor(e.End), retry: unfinished(e.End), run: e.Run}
 		if e.End != nil {
 			ae.turn = e.Run
 		}
@@ -591,7 +594,7 @@ func userEntry(u *client.UserEntry) entry {
 	if u.Reason != "" {
 		note += ": " + u.Reason
 	}
-	return entry{key: "m/" + u.Message.String(), kind: entryUser, text: u.Text, note: note, at: u.At, retry: unfinished(u.End), run: u.Run()}
+	return entry{key: "m/" + u.Message.String(), kind: entryUser, seq: u.Seq, text: u.Text, note: note, at: u.At, retry: unfinished(u.End), run: u.Run()}
 }
 
 // ranFor is how long a turn that ended so ran, zero while it runs.

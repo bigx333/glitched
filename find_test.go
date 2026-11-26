@@ -26,16 +26,16 @@ func TestFindMatchesEntries(t *testing.T) {
 		{key: "a1", kind: entryAssistant, text: "Added HandshakeLimiter and exponential backoff."},
 		{key: "r1", kind: entryReport, reports: []client.ReportEntry{{ChildReported: api.ChildReported{Title: "Worker", Outcome: "verified reconnect"}}}},
 	}
-	if got := findMatches(es, "RECONNECT"); !slices.Equal(got, []int{0, 3}) {
+	if got := findMatches(es, "RECONNECT", false); !slices.Equal(got, []int{0, 3}) {
 		t.Errorf("findMatches(RECONNECT) = %v, want [0 3]", got)
 	}
-	if got := findMatches(es, "server.go"); !slices.Equal(got, []int{1}) {
+	if got := findMatches(es, "server.go", false); !slices.Equal(got, []int{1}) {
 		t.Errorf("findMatches(server.go) = %v, want [1]", got)
 	}
-	if got := findMatches(es, "handshake"); !slices.Equal(got, []int{2}) {
+	if got := findMatches(es, "handshake", false); !slices.Equal(got, []int{2}) {
 		t.Errorf("findMatches(handshake) = %v, want [2]", got)
 	}
-	if got := findMatches(es, "  "); len(got) != 0 {
+	if got := findMatches(es, "  ", false); len(got) != 0 {
 		t.Errorf("blank query matched %v", got)
 	}
 }
@@ -137,7 +137,7 @@ func TestFindMatchesEveryRowItShows(t *testing.T) {
 		{key: "fork", kind: entryFork, fork: &client.ForkEntry{Forked: api.Forked{Title: "Parser rewrite"}}},
 	}
 	for q, want := range map[string]int{"tokenizer": 0, "lexer": 1, "yylex": 1, "offline": 2, "rate limited": 3, "compacted": 4, "parser rewrite": 5} {
-		if got := findMatches(es, q); !slices.Equal(got, []int{want}) {
+		if got := findMatches(es, q, false); !slices.Equal(got, []int{want}) {
 			t.Errorf("findMatches(%q) = %v, want [%d]", q, got, want)
 		}
 	}
@@ -149,10 +149,10 @@ func TestFindFoldsAccents(t *testing.T) {
 		{key: "u", kind: entryUser, text: "Meet at the Café Zoë"},
 		{key: "a", kind: entryAssistant, text: "See you at the cafe"},
 	}
-	if got := findMatches(es, "cafe"); !slices.Equal(got, []int{0, 1}) {
+	if got := findMatches(es, "cafe", false); !slices.Equal(got, []int{0, 1}) {
 		t.Errorf("findMatches(cafe) = %v, want [0 1]", got)
 	}
-	if got := findMatches(es, "ZOE"); !slices.Equal(got, []int{0}) {
+	if got := findMatches(es, "ZOE", false); !slices.Equal(got, []int{0}) {
 		t.Errorf("findMatches(ZOE) = %v, want [0]", got)
 	}
 }
@@ -335,7 +335,7 @@ func TestFindInZenScrollsToTheMatchsLine(t *testing.T) {
 	h.wantFound("1 of 12")
 	rs := h.a.rowsOf(th)
 	v := h.a.viewFor(th.id(), rs)
-	at := v.pos(findMatches(rs.es, "Done.")[0])
+	at := v.pos(findMatches(rs.es, "Done.", false)[0])
 	if first, last := h.a.listFor(th.id()).Visible(); at < first || at > last {
 		t.Errorf("the first match's line, %d, is out of view: %d to %d", at, first, last)
 	}

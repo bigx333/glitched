@@ -1,12 +1,12 @@
 {
   "id": "palette",
   "name": "Command palette",
-  "description": "The command palette's search field, its results, the actions and the threads it finds, and its keys. Built into Glitched; make a copy in Settings › Plugins to change it.",
+  "description": "The command palette's search field, its results, the actions, threads and messages it finds, and its keys. Built into Glitched; make a copy in Settings › Plugins to change it.",
   "version": "1.0.0",
   "main": "main.ts",
   "contract": "glitched",
   "contractVersion": 2,
-  "capabilities": ["ui.place", "ui.replace", "threads:read", "commands"],
+  "capabilities": ["ui.place", "ui.replace", "threads:read", "messages:read", "commands"],
   "glitched": {
     "places": [{ "id": "palette", "at": "palette", "replaces": true }]
   }

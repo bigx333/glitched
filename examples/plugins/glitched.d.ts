@@ -535,6 +535,19 @@ interface SyncedFrom {
   pulled: string;
 }
 
+/** A message threads.search found: its thread, and the words around the match. */
+interface SearchHit {
+  thread: string;
+  title: string;
+  project: string;
+  snippet: string;
+  /** Where the thread's log has the message, for threads.open's find. */
+  seq: number;
+  role: "user" | "assistant";
+  /** How long ago the thread was last active, as its row says it. */
+  ago: string;
+}
+
 interface SkillList {
   skills: Skill[];
   skipped?: SkippedSkill[];
@@ -1314,7 +1327,10 @@ declare const glitched: {
   };
   threads: {
     list(): Promise<ThreadRecord[]>;
-    open(thread: string): Promise<void>;
+    /** With find, opens the find bar on it at the message search found at seq. */
+    open(thread: string, options?: { find?: string; seq?: number }): Promise<void>;
+    /** The messages of every thread that hold each word of query, each thread's best, the best first. Needs messages:read. */
+    search(query: string, options?: { limit?: number }): Promise<SearchHit[]>;
     /**
      * Starts a thread at Ask for approval, or at access, which needs threads:access too. Needs threads:write.
      * model: the composer's (a service's: the last thread's) when omitted. worktree: a new one from base, or HEAD.

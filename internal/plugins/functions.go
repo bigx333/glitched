@@ -59,7 +59,8 @@ globalThis.glitched = Object.freeze({
   }),
   threads: Object.freeze({
     list: () => app("threads.list"),
-    open: (thread) => app("threads.open", { thread }),
+    open: (thread, options = {}) => app("threads.open", { ...options, thread }),
+    search: (query, options = {}) => app("threads.search", { ...options, query }),
     create: (prompt, options = {}) => app("threads.create", { ...options, prompt }),
     send: (thread, text) => app("threads.send", { thread, text }),
     rename: (thread, title) => app("threads.rename", { thread, title }),

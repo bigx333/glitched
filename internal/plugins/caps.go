@@ -66,6 +66,7 @@ var Effects = map[string]string{
 	"composer.draft":         "composer",
 	"threads.list":           "threads:read",
 	"threads.open":           "threads:read",
+	"threads.search":         "messages:read",
 	"threads.create":         "threads:write",
 	"threads.send":           "threads:write",
 	"threads.rename":         "threads:write",
