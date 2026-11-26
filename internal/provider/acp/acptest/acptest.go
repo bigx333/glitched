@@ -814,7 +814,9 @@ func (f *fake) SetSessionMode(ctx context.Context, p acp.SetSessionModeRequest) 
 	f.mu.Lock()
 	f.mode = string(p.ModeId)
 	f.mu.Unlock()
-	f.send(ctx, p.SessionId, acp.SessionUpdate{CurrentModeUpdate: &acp.SessionCurrentModeUpdate{CurrentModeId: p.ModeId}})
+	if !f.is("mode-silent") {
+		f.send(ctx, p.SessionId, acp.SessionUpdate{CurrentModeUpdate: &acp.SessionCurrentModeUpdate{CurrentModeId: p.ModeId}})
+	}
 	return acp.SetSessionModeResponse{}, nil
 }
 

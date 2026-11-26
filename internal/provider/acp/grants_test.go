@@ -268,3 +268,31 @@ func TestDescribingOpenCodeDeletesItsProbesSession(t *testing.T) {
 		t.Errorf("OpenCode's CLI ran with %q", got)
 	}
 }
+
+func TestASilentSetModeReportsTheGrantedMode(t *testing.T) {
+	t.Setenv(acptest.Offered, "default,autoEdit,yolo,plan")
+	a, log := fake(t, "mode-silent")
+	a.Profile = Gemini
+	s := spec(t)
+	s.Model = api.ModelRef{Provider: Gemini.Provider}
+	s.Access = api.AccessAutoEdits
+	for i := range 2 {
+		s.Run, s.Generation = api.NewID(), uint64(i+1)
+		g := open(t, a, s)
+		do(t, g, provider.Start{Text: "hi"})
+		var granted *provider.Granted
+		for _, e := range turn(t, g) {
+			if gr, ok := e.(provider.Granted); ok {
+				granted = &gr
+			}
+		}
+		closeRun(t, g)
+		want := provider.Granted{Access: api.AccessAutoEdits, Mode: "autoEdit"}
+		if granted == nil || *granted != want {
+			t.Fatalf("turn %d: granted %+v, want %+v", i+1, granted, want)
+		}
+	}
+	if n := len(find(t, wire(t, log), "session/set_mode")); n != 1 {
+		t.Errorf("session/set_mode sent %d times across 2 turns, want 1", n)
+	}
+}
