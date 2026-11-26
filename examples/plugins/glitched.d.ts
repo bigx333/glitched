@@ -92,7 +92,7 @@ type Widget = {
       grow?: boolean;
     }
   | { type: "markdown"; id?: string; text: string }
-  | { type: "badge"; id?: string; text: string; style?: "default" | "accent" | "success" | "warning" | "danger" | "count"; color?: Color }
+  | { type: "badge"; id?: string; text: string; style?: "default" | "accent" | "success" | "warning" | "danger" | "count"; tooltip?: string; color?: Color }
   /** The header's hairline pill, as its workspace and tokens; the tooltip is also its name to assistive tools. */
   | { type: "badge"; id?: string; text: string; style: "pill"; tooltip?: string; color?: Color; /** 0 to 1, draws a progress ring before the text. */ value?: number }
   | { type: "divider"; id?: string; /** vertical: a line that stands up in its row, as tall as the row. */ style?: "vertical" }
@@ -513,6 +513,26 @@ interface ThreadRecord {
   local?: boolean;
   /** What its agent gets on its next run; only in a thread.header record. */
   skills?: SkillList;
+  /** "manager" on a Manager thread; omitted on plain threads. */
+  role?: "manager";
+  /** A Manager thread's periodic sweep schedule, reflecting any pending change. */
+  sweep?: SweepSchedule;
+  /** Live Manager header state: sweep timing, worker counts, and whether Overview is open. */
+  manager?: ManagerHeader;
+}
+
+interface SweepSchedule {
+  /** Seconds between sweeps; 0 or omitted disables sweeps. */
+  intervalSeconds?: number;
+  prompt?: string;
+}
+
+interface ManagerHeader {
+  sweepTiming?: string;
+  sweepBlocked?: boolean;
+  needs?: number;
+  active?: number;
+  overviewOpen?: boolean;
 }
 
 interface Skill {
@@ -1177,6 +1197,7 @@ interface PanelState {
   diff: boolean;
   preview: boolean;
   subagent?: boolean;
+  overview?: boolean;
 }
 
 interface InitArgs {
@@ -1256,7 +1277,7 @@ declare const glitched: {
   /** The panels beside the chat. Needs ui.place. */
   panels: {
     /** Opens or closes one; open says which way, else it flips. */
-    toggle(panel: "terminal" | "diff" | "preview" | "subagent", open?: boolean): Promise<PanelState>;
+    toggle(panel: "terminal" | "diff" | "preview" | "subagent" | "overview", open?: boolean): Promise<PanelState>;
     state(): Promise<PanelState>;
   };
   /** Opens the thread's workspace, on this machine, in an app. Needs threads:read. */
@@ -1360,10 +1381,12 @@ declare const glitched: {
     interrupt(thread: string): Promise<void>;
     /**
      * The model (the id of one of models.list, of the thread's provider),
-     * effort (one of that model's efforts) and fast mode of its next turn. Never the access: naming it, or anything
+     * effort (one of that model's efforts), speed mode and sweep schedule of its next turn. Never the access: naming it, or anything
      * else, is refused. Needs threads:write.
      */
-    configure(thread: string, options: { model?: string; effort?: string; fast?: boolean }): Promise<void>;
+    configure(thread: string, options: { model?: string; effort?: string; fast?: boolean; ultrafast?: boolean; sweep?: SweepSchedule }): Promise<void>;
+    /** Runs a Manager thread's sweep immediately. Needs threads:write. */
+    sweepNow(thread: string): Promise<void>;
     /** The access of its next turns, one the access picker offers; with "", the default for new threads. Needs threads:access. */
     setAccess(thread: string, access: AccessLevel | ""): Promise<void>;
   };

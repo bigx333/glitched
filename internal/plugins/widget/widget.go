@@ -292,7 +292,7 @@ type Node struct {
 	Corners         []float32 `json:"corners,omitempty"`
 	MaxWidthPercent int       `json:"maxWidthPercent,omitempty"`
 
-	// Tooltip is a button's or menu's tooltip, and what it is called to
+	// Tooltip is a button's, menu's or badge's tooltip, and what it is called to
 	// assistive tools. Icon is an icon before the label of a ghost or
 	// outline button or menu, and Compact shows it alone. Active shows a
 	// ghost button on, as a panel's toggle; Badge is a count over its
@@ -969,7 +969,7 @@ func (c *checker) extra(n *Node) error {
 	}
 	drawn := n.Style == "ghost" || n.Style == "outline" || n.Style == "bordered" || n.Type == "item" || n.Type == "tile"
 	switch {
-	case n.Tooltip != "" && n.Type != "button" && n.Type != "menu" && !(n.Type == "badge" && n.Style == "pill"):
+	case n.Tooltip != "" && n.Type != "button" && n.Type != "menu" && n.Type != "badge":
 		return fmt.Errorf("a %s has no tooltip", n.Type)
 	case len(n.Tooltip) > MaxTooltip || len(n.Badge) > MaxBadge:
 		return fmt.Errorf("a tooltip is up to %d bytes and a badge up to %d", MaxTooltip, MaxBadge)

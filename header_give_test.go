@@ -165,8 +165,13 @@ func TestANarrowHeaderGivesWayForAManagersPills(t *testing.T) {
 	const title = "Header fixture for the narrow window"
 	h := headerFixture(t, title, false, func(c *api.ThreadCreate) {
 		c.Role, c.Sweep = api.RoleManager, &api.SweepSchedule{IntervalSeconds: 1800}
-	}, nil)
+	}, func(dir string) { installOwn(t, dir, "managers") })
+	h.grantManagers()
 	h.at(1320)
+	h.until("the Manager's pills", func() bool {
+		h.tt.Frame()
+		return h.tt.HasText("Manager") && h.tt.HasText("Sweep 30m") && h.tt.HasText("Overview")
+	})
 	for _, s := range []string{"Manager", "Sweep 30m", "Overview", "#12"} {
 		if _, ok := h.inHeader(s); !ok {
 			t.Errorf("at 1320 points the header gave %q way: %q", s, h.tt.Texts())
@@ -179,6 +184,14 @@ func TestANarrowHeaderGivesWayForAManagersPills(t *testing.T) {
 		for _, s := range []string{"Manager", "Sweep 30m", "Overview"} {
 			if _, ok := h.inHeader(s); ok {
 				controls = append(controls, s)
+			}
+		}
+		if w == 600 {
+			if _, ok := h.inHeader("Manager"); ok {
+				t.Errorf("at 600 points the header keeps the Manager pill: %q", h.tt.Texts())
+			}
+			if _, ok := h.inHeader("Sweep 30m"); !ok {
+				t.Errorf("at 600 points the header gave the sweep button way: %q", h.tt.Texts())
 			}
 		}
 		h.fitsHeader(w, controls...)

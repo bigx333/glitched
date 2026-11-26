@@ -156,7 +156,8 @@ func TestTheChromeWidgetsAreChecked(t *testing.T) {
 		{"type": "button", "id": "b", "label": "Check", "style": "bordered", "icon": "refresh"},
 		{"type": "button", "id": "g", "label": "Go", "progress": true},
 		{"type": "menu", "id": "m", "label": "M", "options": ["a", {"separator": true}, "b"]},
-		{"type": "badge", "style": "pill", "text": "76%", "value": 0.76, "color": "$warning", "tooltip": "Context"}
+		{"type": "badge", "style": "pill", "text": "76%", "value": 0.76, "color": "$warning", "tooltip": "Context"},
+		{"type": "badge", "style": "accent", "text": "M", "tooltip": "Manager thread"}
 	]}}`
 	if _, err := Decode([]byte(good)); err != nil {
 		t.Fatal(err)

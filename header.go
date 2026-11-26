@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cmp"
 	"fmt"
 
 	"github.com/egoist/mygo/plugins/glass"
@@ -49,17 +48,6 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 		if !a.sidebarVisible() {
 			pills.sidebar = headerIconW + headerGap
 		}
-		manager := isManager(t)
-		needs, active := 0, 0
-		if manager {
-			needs, active = a.managerAttention(t)
-			pills.manager = text("Manager", 11) + headerPillIcon + 2*pillPadX + 2 + headerGap
-			pills.sweep = text(sweepLabel(effectiveSweep(t)), 11) + 2*pillPadX + 2 + headerGap
-			pills.overview = text("Overview", 11) + headerPillIcon + 2*pillPadX + 2 + headerGap
-			if n := cmp.Or(needs, active); n > 0 {
-				pills.overview += text(fmt.Sprint(n), 10.5) + 4
-			}
-		}
 		natural, _ := c.MeasureText(0, ui.Span{Text: title(t), Weight: 600})
 		g := &a.headerGive
 		give := g.choose(t.id(), narrow, chat-left-right, min(natural, headerTitleRoom), pills)
@@ -77,33 +65,6 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 		}
 		if !narrow {
 			a.usagePill(c, t)
-		}
-		if manager && give < giveProject {
-			ui.Row(c).Key("header-manager").Shrink(0).Gap(4).AlignItems(ui.Center).Padding(2, pillPadX).Radius(999).
-				Background(palette.accent.Alpha(0.14)).Border(1, palette.accent.Alpha(0.28)).Children(func() {
-				ui.Icon(c, icManager).FontSize(11).TextColor(palette.accent)
-				ui.Text(c, "Manager").FontSize(11).TextColor(palette.accent).NoWrap()
-			})
-		}
-		if manager && give < givePlan {
-			open := a.mgr.sweepPopover == t.id()
-			label := sweepLabel(effectiveSweep(t))
-			sweep := ui.ButtonBase(c.Key("header-sweep")).Padding(2, pillPadX).Radius(999).
-				Border(1, palette.border).Shrink(0).Cursor(ui.CursorPointer).Label(label)
-			if open || sweep.Hovered() {
-				sweep.Background(palette.active)
-			} else {
-				sweep.Background(palette.hover)
-			}
-			if sweep.Children(func() { ui.Text(c, label).FontSize(11).TextColor(palette.muted).NoWrap() }).Clicked() {
-				a.toggleSweepPopover(t)
-			}
-			a.sweepPopover(c, t, sweep)
-		} else if manager && a.mgr.sweepPopover == t.id() {
-			a.mgr.sweepPopover = api.ID{} // its button gave way
-		}
-		if manager && give < givePlan {
-			a.overviewButton(c, t, needs, active)
 		}
 		drew := headerDrew{thread: t.id(), narrow: narrow, step: give, left: left, right: right, pills: pills}
 		drew.plan = t.Transcript != nil && t.Transcript.Plan != nil
@@ -211,12 +172,10 @@ const (
 	pillPadX  = 7
 )
 
-// headerPillIcon is what an icon adds to a pill: the icon and its gap;
 // headerIconW is an icon button's width, its icon and its padding, and
 // machinePillChrome what a machine's pill adds to its name: its dot, the
 // dot's gap, its padding and its border.
 const (
-	headerPillIcon    = 11 + 4
 	headerIconW       = 15 + 2*6
 	machinePillChrome = 5 + 4 + 2*6 + 2
 )
@@ -224,9 +183,9 @@ const (
 // What the header gives way, in order, while its row doesn't fit: the
 // actions to their icons, the plan's pill to its count, the project's and
 // the machine's pills, the branch's, the plugins' copies to their
-// smallest, the plan's pill with a Manager's sweep and overview, then
-// those copies. Under 700 points it starts with the pills gone, the
-// actions as icons and the plan as its count.
+// smallest, the plan's pill, then those copies. Under 700 points it
+// starts with the pills gone, the actions as icons and the plan as its
+// count.
 const (
 	giveNone = iota
 	giveActions
@@ -241,7 +200,7 @@ const (
 // headerPills are the widths, gaps included, of what the header draws
 // itself and its steps take away, the project's pill with the machine's
 // and the branch's, and of the sidebar's button.
-type headerPills struct{ project, branch, sidebar, manager, sweep, overview float32 }
+type headerPills struct{ project, branch, sidebar float32 }
 
 // headerGive is what the header gives way. It picks the step in the frame
 // that draws it, from the chat's width in that frame and from what it has
@@ -290,7 +249,7 @@ func (g *headerGive) widths() *headerWidths { return g.seen[g.thread] }
 func (w *headerWidths) row(k int, narrow bool, p headerPills) float32 {
 	r := max(w.base[b2i(narrow)], 0) + p.sidebar
 	if k < giveProject {
-		r += p.project + p.manager
+		r += p.project
 	}
 	if k < giveBranch {
 		r += p.branch
@@ -299,7 +258,7 @@ func (w *headerWidths) row(k int, narrow bool, p headerPills) float32 {
 		r += max(w.slot[min(k/giveCompactPlaces, 1)], 0)
 	}
 	if k < givePlan {
-		r += max(w.plan[b2i(k >= giveCompactPlan)], 0) + p.sweep + p.overview
+		r += max(w.plan[b2i(k >= giveCompactPlan)], 0)
 	}
 	return r + max(w.actions[min(k, giveActions)], 0)
 }
@@ -377,7 +336,7 @@ func (g *headerGive) measure(h ui.Rect, title, spacer float32, actions ui.Rect, 
 	}
 	base := end - h.X - d.left - title - spacer - d.pills.sidebar
 	if d.step < giveProject {
-		base -= d.pills.project + d.pills.manager
+		base -= d.pills.project
 	}
 	if d.step < giveBranch {
 		base -= d.pills.branch
@@ -387,9 +346,6 @@ func (g *headerGive) measure(h ui.Rect, title, spacer float32, actions ui.Rect, 
 	}
 	if d.planShown {
 		base -= w.plan[d.planV]
-	}
-	if d.step < givePlan {
-		base -= d.pills.sweep + d.pills.overview
 	}
 	if d.actionsShown {
 		base -= actions.W + headerGap
@@ -414,30 +370,4 @@ func (a *app) glassButton(c *ui.Context, key any) ui.Element {
 func pill(c *ui.Context, label string) ui.Element {
 	return ui.Text(c, label).FontSize(11).TextColor(palette.muted).SingleLine().
 		Padding(2, pillPadX).Radius(999).Border(1, palette.border)
-}
-
-// overviewButton opens and closes the Manager t's overview panel: a count
-// of what waits on the user, in amber, or else of the workers working.
-func (a *app) overviewButton(c *ui.Context, t thread, needs, active int) {
-	on := a.managerPanelShown(t)
-	b := ui.ButtonBase(c.Key("header-overview")).Padding(2, pillPadX).Radius(999).Gap(4).AlignItems(ui.Center).
-		Border(1, palette.border).Shrink(0).Cursor(ui.CursorPointer).Label("Overview")
-	switch {
-	case on:
-		b.Background(palette.active)
-	case b.Hovered():
-		b.Background(palette.hover)
-	}
-	if b.Children(func() {
-		ui.Icon(c, icManager).FontSize(11).TextColor(palette.accent)
-		ui.Text(c, "Overview").FontSize(11).TextColor(palette.muted).NoWrap()
-		switch {
-		case needs > 0:
-			ui.Textf(c, "%d", needs).FontSize(10.5).FontWeight(600).TextColor(palette.amber).NoWrap()
-		case active > 0:
-			ui.Textf(c, "%d", active).FontSize(10.5).FontWeight(600).TextColor(palette.blue).NoWrap()
-		}
-	}).Clicked() {
-		a.toggleOverview(t)
-	}
 }

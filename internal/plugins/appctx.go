@@ -40,7 +40,20 @@ type ThreadRecord struct {
 	Local bool `json:"local,omitempty"`
 	// Skills are what its agent gets on its next run, as its engine last
 	// said: only in a thread header's record, and left out till it says.
-	Skills *api.SkillList `json:"skills,omitempty"`
+	Skills  *api.SkillList     `json:"skills,omitempty"`
+	Role    api.ThreadRole     `json:"role,omitempty"`
+	Sweep   *api.SweepSchedule `json:"sweep,omitempty"`
+	Manager *ManagerHeader     `json:"manager,omitempty"`
+}
+
+// ManagerHeader is the live Manager header state a plugin needs to draw
+// the sweep popover and overview button without duplicating engine timing.
+type ManagerHeader struct {
+	SweepTiming  string `json:"sweepTiming,omitempty"`
+	SweepBlocked bool   `json:"sweepBlocked,omitempty"`
+	Needs        int    `json:"needs,omitempty"`
+	Active       int    `json:"active,omitempty"`
+	OverviewOpen bool   `json:"overviewOpen,omitempty"`
 }
 
 // Disposition is a thread's inbox state: inbox, snoozed till Until (RFC

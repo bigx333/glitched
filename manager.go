@@ -31,12 +31,11 @@ type managerUI struct {
 	// showPanel is whether the overview panel shows beside a Manager's
 	// chat, while no other panel does.
 	showPanel bool
-	// sweepPopover is the Manager whose header sweep popover is open.
-	sweepPopover api.ID
 	// promptDraft is the standing sweep prompt being edited, of the
-	// Manager promptFor.
+	// Manager promptFor; promptSaved is the last saved value synced into it.
 	promptFor   api.ID
 	promptDraft string
+	promptSaved string
 	dialog      managerDialog
 	// docs are the shared context docs of each local workspace root.
 	docs map[string]*workspaceDocs
@@ -681,55 +680,26 @@ func span(d time.Duration) string {
 	return fmt.Sprintf("%dh %dm", h, m)
 }
 
-// syncSweepDraft starts the sweep prompt's edit over from t's, when it was
-// another Manager's or force says so.
+// syncSweepDraft starts the sweep prompt's edit over from t's when it was
+// another Manager's, force says so, or the user hasn't edited the draft.
 func (a *app) syncSweepDraft(t thread, force bool) {
-	if a.mgr.promptFor == t.id() && !force {
-		return
-	}
-	a.mgr.promptFor, a.mgr.promptDraft = t.id(), ""
+	saved := ""
 	if s := effectiveSweep(t); s != nil {
-		a.mgr.promptDraft = s.Prompt
+		saved = s.Prompt
 	}
-}
-
-// toggleSweepPopover opens the sweep popover of t, or closes it.
-func (a *app) toggleSweepPopover(t thread) {
-	if a.mgr.sweepPopover == t.id() {
-		a.mgr.sweepPopover = api.ID{}
-		return
-	}
-	a.mgr.sweepPopover = t.id()
-	a.syncSweepDraft(t, false)
-}
-
-// sweepPopover is the header's sweep popover of t, under anchor while
-// open: its cadence, its standing prompt and Run sweep now.
-func (a *app) sweepPopover(c *ui.Context, t thread, anchor ui.Element) {
-	open := a.mgr.sweepPopover == t.id() && !t.id().IsZero()
-	if !open {
-		return
-	}
-	a.overlay(c, open, func() {
-		box := a.cover(coverKey{kind: "sweep"}, ui.Column(c).Key("sweep-popover").AttachTo(anchor, ui.AnchorBottomStart, ui.AnchorTopStart))
-		box.Margin(6, 0, 0, 0).Width(340).Padding(14).Gap(12).Radius(12).Label("Sweep schedule")
-		a.frosted(c, box).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.35))
-		box.Children(func() {
-			ui.Column(c).Gap(2).Children(func() {
-				ui.Text(c, "Sweep schedule").FontSize(13).FontWeight(600).TextColor(palette.text)
-				ui.Text(c, sweepTiming(t, a.now)).FontSize(11.5).TextColor(palette.muted)
-			})
-			a.sweepControls(c, t, false)
-		})
-		if box.OverlayShortcut(0, ui.KeyEscape) || box.PressedOutside() && !anchor.Hovered() {
-			a.mgr.sweepPopover = api.ID{}
+	if a.mgr.promptFor == t.id() && !force {
+		if a.mgr.promptDraft == a.mgr.promptSaved {
+			a.mgr.promptDraft = saved
 		}
-	})
+		a.mgr.promptSaved = saved
+		return
+	}
+	a.mgr.promptFor, a.mgr.promptDraft, a.mgr.promptSaved = t.id(), saved, saved
 }
 
 // sweepControls are a Manager's cadence, its standing prompt, and Run
-// sweep now, which in the popover closes it.
-func (a *app) sweepControls(c *ui.Context, t thread, inPanel bool) {
+// sweep now, inside the overview panel.
+func (a *app) sweepControls(c *ui.Context, t thread) {
 	a.syncSweepDraft(t, false)
 	cur := effectiveSweep(t)
 	at := sweepSeconds(cur)
@@ -752,17 +722,16 @@ func (a *app) sweepControls(c *ui.Context, t thread, inPanel bool) {
 		if ui.Button(c.Key("sweep-save"), "Save prompt").Disabled(draft == saved).Clicked() {
 			a.backend.SetSweep(t.env, t.id(), &api.SweepSchedule{IntervalSeconds: at, Prompt: draft})
 			a.mgr.promptDraft = draft
+			a.mgr.promptSaved = draft
 		}
 		if saved != "" && ui.Button(c.Key("sweep-reset"), "Reset").Clicked() {
 			a.backend.SetSweep(t.env, t.id(), &api.SweepSchedule{IntervalSeconds: at})
 			a.mgr.promptDraft = ""
+			a.mgr.promptSaved = ""
 		}
 		ui.Spacer(c)
 		if ui.PrimaryButton(c.Key("sweep-run"), "Run sweep now").Disabled(sweepBlocked(t)).Clicked() {
 			a.backend.RunSweep(t.env, t.id(), "")
-			if !inPanel {
-				a.mgr.sweepPopover = api.ID{}
-			}
 		}
 	})
 }
@@ -779,7 +748,6 @@ func (a *app) managerPanelShown(t thread) bool {
 // place of any other there, its docs read anew.
 func (a *app) openOverview(t thread) {
 	a.mgr.showPanel = true
-	a.mgr.sweepPopover = api.ID{}
 	a.showDiff, a.showPreview, a.showPluginTab, a.panelsJump = false, false, false, false
 	delete(a.subagentStep, t.id())
 	a.syncSweepDraft(t, false)
@@ -830,7 +798,7 @@ func (a *app) managerPanel(c *ui.Context, t thread) {
 			a.docsCard(c, t)
 			overviewSection(c, "SWEEPS & BRIEF", "", func() {
 				ui.Text(c, sweepTiming(t, a.now)).FontSize(12).TextColor(palette.muted)
-				a.sweepControls(c, t, true)
+				a.sweepControls(c, t)
 			})
 		})
 	})

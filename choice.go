@@ -370,20 +370,21 @@ func (a *app) configureEffect(args json.RawMessage) (any, error) {
 		Effort    *string
 		Fast      *bool
 		Ultrafast *bool
+		Sweep     *api.SweepSchedule
 	}
 	d := json.NewDecoder(bytes.NewReader(args))
 	d.DisallowUnknownFields()
 	if err := d.Decode(&in); err != nil {
-		return nil, fmt.Errorf("threads.configure sets a model, an effort and a speed, and nothing else: %v", err)
+		return nil, fmt.Errorf("threads.configure sets a model, an effort, a speed and a sweep, and nothing else: %v", err)
 	}
-	if in.Model == nil && in.Effort == nil && in.Fast == nil && in.Ultrafast == nil {
-		return nil, errors.New("threads.configure needs a model, an effort or a speed")
+	if in.Model == nil && in.Effort == nil && in.Fast == nil && in.Ultrafast == nil && in.Sweep == nil {
+		return nil, errors.New("threads.configure needs a model, an effort, a speed or a sweep")
 	}
 	t, err := a.pluginFind(args)
 	if err != nil {
 		return nil, err
 	}
-	c := api.ThreadConfigure{Fast: in.Fast, Ultrafast: in.Ultrafast}
+	c := api.ThreadConfigure{Fast: in.Fast, Ultrafast: in.Ultrafast, Sweep: in.Sweep}
 	now, _ := configured(t)
 	// A thread keeps its provider: its session is that provider's.
 	m, _ := a.modelOf(threadModel(t, now))
@@ -438,6 +439,29 @@ func (a *app) sendConfigure(t thread, c api.ThreadConfigure) error {
 		}
 	}
 	return nil
+}
+
+// sweepNowEffect is threads.sweepNow: runs a Manager thread's sweep now.
+func (a *app) sweepNowEffect(args json.RawMessage) (any, error) {
+	t, err := a.pluginFind(args)
+	if err != nil {
+		return nil, err
+	}
+	if !isManager(t) {
+		return nil, errors.New("only a Manager thread can run a sweep")
+	}
+	if sweepBlocked(t) {
+		return nil, errors.New("a sweep cannot run while the Manager is busy or has queued work")
+	}
+	cmd := a.backend.RunSweep(t.env, t.id(), "")
+	if now, ok := a.find(t.id()); ok {
+		for _, p := range now.Pending {
+			if p.Command == cmd && p.Err != nil {
+				return nil, p.Err
+			}
+		}
+	}
+	return nil, nil
 }
 
 // setAccessEffect is threads.setAccess: a thread's access, or with none
