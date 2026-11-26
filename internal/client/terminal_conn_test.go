@@ -28,6 +28,7 @@ type flaky struct {
 	mu          sync.Mutex
 	be          *pty.Manager
 	down        bool
+	stallOpen   bool
 	dropReplyOn bool
 	streams     []*cutStream
 	refused     chan struct{}
@@ -72,6 +73,13 @@ func (f *flaky) restore(be *pty.Manager) {
 }
 
 func (f *flaky) OpenTerminal(ctx context.Context, req api.TerminalOpen) (api.TerminalStream, error) {
+	f.mu.Lock()
+	stall := f.stallOpen
+	f.mu.Unlock()
+	if stall {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	be, err := f.backend()
 	if err != nil {
 		return nil, err
@@ -287,6 +295,24 @@ func TestOfflineWriteRespectsDeadline(t *testing.T) {
 	write(t, conn, "x")
 	if took := time.Since(start); took > time.Second {
 		t.Fatalf("offline Write took %v, want <= 1s (write timeout is %v)", took, terminalWriteTimeout)
+	}
+}
+
+func TestStalledOpenWriteRespectsDeadline(t *testing.T) {
+	prev := terminalWriteTimeout
+	terminalWriteTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { terminalWriteTimeout = prev })
+
+	f := newFlaky(shPTYs(t, pty.Options{}))
+	f.mu.Lock()
+	f.stallOpen = true
+	f.mu.Unlock()
+	conn := newViewer(t, f).open(t, t.TempDir(), 80, 24)
+
+	start := time.Now()
+	write(t, conn, "x")
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("Write during stalled OpenTerminal took %v, want <= 1s (write timeout is %v)", took, terminalWriteTimeout)
 	}
 }
 

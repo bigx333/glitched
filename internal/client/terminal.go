@@ -189,7 +189,7 @@ func (tc *TerminalConn) ensureStream(ctx context.Context) (api.TerminalStream, t
 			tc.mu.Unlock()
 		}
 
-		opened, err := tg.fn.OpenTerminal(tc.ctx, api.TerminalOpen{
+		opened, err := tg.fn.OpenTerminal(ctx, api.TerminalOpen{
 			Workspace: tc.workspace,
 			Session:   sess,
 			After:     after,

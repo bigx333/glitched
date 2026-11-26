@@ -438,15 +438,14 @@ type termClients struct {
 
 func (tc *termClients) record(id string) {
 	tc.mu.Lock()
+	defer tc.mu.Unlock()
 	if _, ok := tc.ids[id]; ok {
-		tc.mu.Unlock()
 		return
 	}
 	if tc.ids == nil {
 		tc.ids = map[string]struct{}{}
 	}
 	tc.ids[id] = struct{}{}
-	tc.mu.Unlock()
 	if tc.srv.Terminals != nil {
 		tc.srv.Terminals.AcquireTerminalClient(id)
 	}
