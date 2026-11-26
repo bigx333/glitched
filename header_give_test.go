@@ -167,16 +167,19 @@ func TestANarrowHeaderGivesWayForAManagersPills(t *testing.T) {
 		c.Role, c.Sweep = api.RoleManager, &api.SweepSchedule{IntervalSeconds: 1800}
 	}, nil)
 	h.at(1320)
-	for _, s := range []string{"Manager", "Sweep 30m", "#12"} {
+	for _, s := range []string{"Manager", "Sweep 30m", "Overview", "#12"} {
 		if _, ok := h.inHeader(s); !ok {
 			t.Errorf("at 1320 points the header gave %q way: %q", s, h.tt.Texts())
 		}
 	}
+	h.fitsHeader(1320, append([]string{title, "Manager", "Sweep 30m", "Overview", "Pull request #12"}, headerControls...)...)
 	for _, w := range []int{760, 600} {
 		h.at(w)
 		controls := append([]string{title, "Pull request #12"}, headerControls...)
-		if _, ok := h.inHeader("Sweep 30m"); ok {
-			controls = append(controls, "Sweep 30m")
+		for _, s := range []string{"Manager", "Sweep 30m", "Overview"} {
+			if _, ok := h.inHeader(s); ok {
+				controls = append(controls, s)
+			}
 		}
 		h.fitsHeader(w, controls...)
 	}

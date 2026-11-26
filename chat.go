@@ -107,6 +107,8 @@ func (a *app) chatPage(c *ui.Context) {
 			ui.Column(c).Key("preview").Width(a.previewWidth()).Transition(panel(16, 0)).Children(func() { a.previewPanel(c) })
 		case a.showPluginTab:
 			ui.Column(c).Key("plugin-tab").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.pluginTabPanel(c, t) })
+		case a.managerPanelShown(t):
+			ui.Column(c).Key("manager-overview").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.managerPanel(c, t) })
 		default:
 			if sel, w, ok := a.subagentShown(t); ok {
 				ui.Column(c).Key("subagent").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.subagentPanel(c, t, sel, w) })

@@ -497,7 +497,7 @@ interface ThreadRecord {
   machine?: string;
   updatedAt?: string;
   /** Where the sidebar files it. */
-  section?: "inbox" | "working" | "snoozed" | "settled";
+  section?: "inbox" | "working" | "snoozed" | "settled" | "managers";
   /** How the user left it, what was just done here counted. */
   disposition?: Disposition;
   unread?: boolean;

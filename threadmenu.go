@@ -22,6 +22,10 @@ import (
 // offered only for a thread on this machine, where the workspace is.
 
 func (a *app) threadMenu(c *ui.Context, m *ui.Menu, t thread, cat category) {
+	if isManager(t) {
+		a.managerMenu(c, m, t)
+		return
+	}
 	if m.Item("Rename").Chosen() {
 		a.renaming, a.renameDraft, a.renameFocused = t.id(), title(t), false
 	}

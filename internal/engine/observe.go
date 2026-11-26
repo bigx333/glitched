@@ -94,11 +94,6 @@ func (d *decision) observe(o Observation) error {
 			if err := d.emit(api.TurnEnded{Run: o.Run, Outcome: o.Outcome, Error: o.Error, Tokens: o.Tokens, Limit: limit, Head: o.Head}); err != nil {
 				return err
 			}
-			if live.Wake != api.NotWake && !live.Dismissed {
-				if err := d.unsnooze(); err != nil {
-					return err
-				}
-			}
 			// A run being stopped or a silent maintenance run reports nothing.
 			switch {
 			case stopped || silent:
@@ -148,9 +143,6 @@ func (d *decision) observe(o Observation) error {
 			return d.stop(*live)
 		}
 		if isLive(o.Run) && !dup {
-			if err := d.unsnooze(); err != nil {
-				return err
-			}
 			if err := d.raise(*live); err != nil {
 				return err
 			}
@@ -350,7 +342,14 @@ func (d *decision) sweepDue(o SweepDue) error {
 	if !d.runs() {
 		return fmt.Errorf("%w: the thread may run nothing now", ErrRefused)
 	}
-	text := strings.TrimSpace(o.Text)
+	return d.startSweep(o.Run, "")
+}
+
+// startSweep admits run as a sweep wake on the idle Manager, on prompt, or
+// the thread's sweep prompt, or the default one. The wake keeps the
+// thread's UpdatedAt from before it, for a dismissal to go back to.
+func (d *decision) startSweep(run api.ID, prompt string) error {
+	text := strings.TrimSpace(prompt)
 	if text == "" && d.t.Sweep != nil {
 		text = strings.TrimSpace(d.t.Sweep.Prompt)
 	}
@@ -358,18 +357,18 @@ func (d *decision) sweepDue(o SweepDue) error {
 		text = api.DefaultSweepPrompt
 	}
 	prior := d.t.UpdatedAt
-	if err := d.emit(api.MessageQueued{Message: o.Run, Text: text, Mode: api.StartNow, Pos: d.t.pos(false), Auto: true, Sweep: true}); err != nil {
+	if err := d.emit(api.MessageQueued{Message: run, Text: text, Mode: api.StartNow, Pos: d.t.pos(false), Auto: true, Sweep: true}); err != nil {
 		return err
 	}
 	gen := d.t.Generation + 1
-	if err := d.emit(api.TurnAdmitted{Run: o.Run, Generation: gen, Wake: api.WakeSweep, Prior: prior}); err != nil {
+	if err := d.emit(api.TurnAdmitted{Run: run, Generation: gen, Wake: api.WakeSweep, Prior: prior}); err != nil {
 		return err
 	}
-	if err := d.emit(api.SweepStarted{Run: o.Run}); err != nil {
+	if err := d.emit(api.SweepStarted{Run: run}); err != nil {
 		return err
 	}
 	d.effects = append(d.effects, StartTurn{
-		Run: o.Run, Generation: gen, Text: text, Workspace: d.t.Workspace, Model: d.t.Model, Access: d.t.Access,
+		Run: run, Generation: gen, Text: text, Workspace: d.t.Workspace, Model: d.t.Model, Access: d.t.Access,
 	})
 	return nil
 }
@@ -397,8 +396,7 @@ func (d *decision) reported(o Reported) error {
 		return err
 	}
 	wakes := !(o.Report.Kind == api.ReportBlocked && o.Question.IsZero() || d.t.settled())
-	staysSnoozed := wakes && d.t.Role == api.RoleManager && d.snoozing()
-	if d.t.Disposition.State == api.Snoozed && !staysSnoozed {
+	if d.t.Disposition.State == api.Snoozed {
 		if err := d.emit(api.DispositionChanged{Disposition: api.Disposition{}}); err != nil {
 			return err
 		}
@@ -411,13 +409,7 @@ func (d *decision) reported(o Reported) error {
 	}); err != nil {
 		return err
 	}
-	if err := d.settle(prior); err != nil || !staysSnoozed {
-		return err
-	}
-	if live := d.t.Live(); live != nil && live.Wake != api.NotWake {
-		return nil
-	}
-	return d.emit(api.DispositionChanged{Disposition: api.Disposition{}})
+	return d.settle(prior)
 }
 
 // wakeID is the wake for a child's run, the same each time it reports, so

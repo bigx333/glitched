@@ -698,8 +698,8 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 	if version < 20 {
 		sqlText = managersV19 + sqlText + runsV19
 	}
-	if version < 21 {
-		sqlText += ftsV20
+	if version < 22 {
+		sqlText += ftsV21
 	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
@@ -727,7 +727,7 @@ const runsV19 = `
 	ALTER TABLE runs DROP COLUMN dismissed;
 `
 
-const ftsV20 = `
+const ftsV21 = `
 	DROP TABLE IF EXISTS transcript_fts;
 `
 
@@ -1756,14 +1756,79 @@ func TestAVersion17DatabaseUpgradesWithIndexes(t *testing.T) {
 	}
 	defer db.Close()
 	var version int
-	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 21 {
-		t.Fatalf("user_version = %d (%v), want 21", version, err)
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 22 {
+		t.Fatalf("user_version = %d (%v), want 22", version, err)
 	}
 	for _, idx := range []string{"events_by_thread_type", "threads_live_updated", "threads_by_parent"} {
 		var count int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?`, idx).Scan(&count); err != nil || count != 1 {
 			t.Errorf("index %s missing after upgrade (count=%d, err=%v)", idx, count, err)
 		}
+	}
+}
+
+func TestAVersion20DatabaseReopensStoredManagers(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	snoozedMgr, settledMgr, plainSnoozed := api.NewID(), api.NewID(), api.NewID()
+	for _, tc := range []struct {
+		id   api.ID
+		role api.ThreadRole
+	}{
+		{snoozedMgr, api.RoleManager},
+		{settledMgr, api.RoleManager},
+		{plainSnoozed, api.RoleDefault},
+	} {
+		var sweep *api.SweepSchedule
+		if tc.role == api.RoleManager {
+			sweep = &api.SweepSchedule{IntervalSeconds: 900}
+		}
+		if _, err := s.Submit(ctx, api.Command{
+			ID:     api.NewID(),
+			Target: tc.id,
+			Body: api.ThreadCreate{
+				Workspace: "/repo",
+				Title:     "Thread",
+				Model:     api.ModelRef{Provider: "claude", Model: "sonnet"},
+				Role:      tc.role,
+				Sweep:     sweep,
+			},
+		}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+
+	// Simulate a v20 database with legacy snoozed/settled Manager rows
+	// and a snoozed plain thread, then reopen to run the v20->v21 upgrade.
+	until := now.Add(time.Hour).UnixNano()
+	downgrade(t, path, fmt.Sprintf(`
+UPDATE threads SET disposition = %d, until = %d WHERE id IN (x'%x', x'%x');
+UPDATE threads SET disposition = %d, until = NULL WHERE id = x'%x';
+`, api.Snoozed, until, snoozedMgr[:], plainSnoozed[:], api.Settled, settledMgr[:]), 20)
+
+	s = open(t, path)
+	for _, id := range []api.ID{snoozedMgr, settledMgr} {
+		got, err := s.Thread(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Disposition != (api.Disposition{}) {
+			t.Fatalf("upgraded Manager %s disposition = %+v, want Open", id, got.Disposition)
+		}
+	}
+	plain, err := s.Thread(ctx, plainSnoozed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Disposition.State != api.Snoozed {
+		t.Fatalf("upgraded plain thread disposition = %+v, want Snoozed", plain.Disposition)
+	}
+	sweeping, err := s.SweepManagers(ctx)
+	if err != nil || len(sweeping) != 2 {
+		t.Fatalf("SweepManagers after upgrade = %+v (%v), want 2 Managers", sweeping, err)
 	}
 }
 
@@ -2057,8 +2122,8 @@ func TestAVersion18DatabaseLosesTheReceiptPruningLeftovers(t *testing.T) {
 		(SELECT COUNT(*) FROM meta WHERE key = 'commands_pruned')`).Scan(&version, &index, &mark); err != nil {
 		t.Fatal(err)
 	}
-	if version != 21 || index != 0 || mark != 0 {
-		t.Fatalf("after the upgrade: user_version %d, commands_by_seq %d, watermark %d; want 21, 0, 0", version, index, mark)
+	if version != 22 || index != 0 || mark != 0 {
+		t.Fatalf("after the upgrade: user_version %d, commands_by_seq %d, watermark %d; want 22, 0, 0", version, index, mark)
 	}
 }
 

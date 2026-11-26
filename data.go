@@ -896,6 +896,8 @@ func failedTo(p client.Pending) string {
 		return "delete the thread"
 	case api.ThreadConfigure:
 		return "change the thread's " + given(b)
+	case api.SweepRun:
+		return "run a sweep"
 	}
 	return ""
 }

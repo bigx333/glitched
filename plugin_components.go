@@ -341,7 +341,7 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 			break
 		}
 		if !child {
-			a.rowTitle(c, *t)
+			a.rowName(c, *t)
 			break
 		}
 		name := ui.Text(c, title(*t)).FontSize(12.5).SingleLine().Grow(1).Shrink(1)

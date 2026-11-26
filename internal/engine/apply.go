@@ -128,7 +128,11 @@ func apply(t Thread, e Event) (Thread, error) {
 			c.Settles++
 			t.Remote = &c
 		}
-		t.Disposition = b.Disposition
+		if t.Role == api.RoleManager {
+			t.Disposition = api.Disposition{}
+		} else {
+			t.Disposition = b.Disposition
+		}
 	case api.ThreadRenamed:
 		t.Title = b.Title
 	case api.SessionBound:

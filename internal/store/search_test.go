@@ -179,12 +179,12 @@ func TestSearchIndexesWhatTheTranscriptShows(t *testing.T) {
 
 // A database from before search finds what the transcript shows, as one
 // written since does, and a run going as it upgraded matches once it ends.
-func TestAVersion20DatabaseIndexesWhatTheTranscriptShows(t *testing.T) {
+func TestAVersion21DatabaseIndexesWhatTheTranscriptShows(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "host.db")
 	s := open(t, path)
 	sc := writeTranscript(newSearchLog(t, s))
 	s.Close()
-	downgrade(t, path, "", 20)
+	downgrade(t, path, "", 21)
 	sc.l.s = open(t, path)
 	sc.check()
 }
@@ -219,7 +219,7 @@ func TestSearchTakesANulByte(t *testing.T) {
 	}
 }
 
-func TestVersion20UpgradesWithFTS5AndBackfills(t *testing.T) {
+func TestVersion21UpgradesWithFTS5AndBackfills(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "host.db")
 	s := open(t, path)
@@ -246,8 +246,8 @@ func TestVersion20UpgradesWithFTS5AndBackfills(t *testing.T) {
 	}
 	s.Close()
 
-	// Downgrade to schema 20 (dropping transcript_fts) and reopen to trigger v20 -> v21 migration.
-	downgrade(t, path, "", 20)
+	// Downgrade to schema 21 (dropping transcript_fts) and reopen to trigger v21 -> v22 migration.
+	downgrade(t, path, "", 21)
 	s = open(t, path)
 	defer s.Close()
 

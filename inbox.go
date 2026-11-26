@@ -56,9 +56,6 @@ func (a *app) categoryOf(t thread) category {
 	d := disposition(t)
 	snoozed := d.State == api.Snoozed && a.now.Before(d.Until)
 	switch {
-	case snoozed && t.View.Role == api.RoleManager && len(t.View.Requests) == 0:
-		// A Manager's quiet wake runs while it sleeps.
-		return catSnoozed
 	case a.statusOf(t) == statusWorking:
 		return catWorking
 	case snoozed:
@@ -97,13 +94,15 @@ type sortedAt struct {
 // what they were sorted after, and until when a snooze or a row's joke
 // ends, which moves a thread with no change at all. index is each
 // thread's place in its section, unread how many in the inbox are, and
-// snoozed when the first snoozed thread, of any project, wakes.
+// snoozed when the first snoozed thread, of any project, wakes. managers
+// are the Managers, which no section holds: they have their own.
 type sortedThreads struct {
 	at             sortedAt
 	until, snoozed time.Time
 	items          map[category][]inboxItem
 	index          map[category]map[api.ID]int
 	unread         int
+	managers       []inboxItem
 }
 
 // sortThreads sorts the threads into the sidebar's sections, with their
@@ -145,6 +144,12 @@ func (a *app) sortThreads() {
 	}
 	for _, t := range recent {
 		if deleting(t) {
+			continue
+		}
+		if isManager(t) && !a.nested(t) {
+			if p := shown[envProject{t.env, a.threadKey(t)}]; p != nil {
+				s.managers = append(s.managers, inboxItem{t, p})
+			}
 			continue
 		}
 		c, d := a.shownIn(t), disposition(t)
@@ -229,6 +234,7 @@ func (a *app) threadsNav(c *ui.Context) {
 		}
 	})
 	a.projectStrip(c)
+	a.managersSection(c)
 	// What needs the user at the top, the inbox; what's out of their hands
 	// at the bottom, over Settings, Working, Snoozed and Settled, each only
 	// while it has threads.
@@ -474,7 +480,7 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 			a.renameInput(c, t)
 			return
 		}
-		a.rowTitle(c, t)
+		a.rowName(c, t)
 		a.pluginSlot(c, "thread.row", t.id().String(), &t, false, true)
 		if len(a.backend.Envs()) > 1 {
 			a.machineBadge(c, t.env)
@@ -496,20 +502,8 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 	}
 }
 
-// rowTitle is a row's thread's title, bold while unread; a child lifted
+// rowName is a row's thread's title, bold while unread; a child lifted
 // into Working has the way to its parent under it.
-func (a *app) rowTitle(c *ui.Context, t thread) {
-	if t.View.Role != api.RoleManager {
-		a.rowName(c, t)
-		return
-	}
-	ui.Row(c).Grow(1).Shrink(1).Gap(6).AlignItems(ui.Center).Children(func() {
-		a.rowName(c, t)
-		a.tip(c, ui.Text(c, "M").FontSize(10).Bold().TextColor(palette.accent).Padding(1, 5).Radius(4).
-			Background(palette.accent.Alpha(0.14)).Shrink(0), "Manager thread")
-	})
-}
-
 func (a *app) rowName(c *ui.Context, t thread) {
 	var name ui.Element
 	if p, ok := a.parentOf(t); ok {

@@ -132,4 +132,6 @@ var (
 	icCircle = lucide(`<circle cx="12" cy="12" r="8"/>`)
 	// A thread's actions.
 	icDots = lucide(`<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>`)
+	// A Manager: a hub that coordinates its workers.
+	icManager = lucide(`<circle cx="12" cy="12" r="2.5"/><circle cx="12" cy="4" r="1.75"/><circle cx="5" cy="18.5" r="1.75"/><circle cx="19" cy="18.5" r="1.75"/><path d="M12 9.5V5.75"/><path d="M10.2 13.7 6.3 17.3"/><path d="M13.8 13.7 17.7 17.3"/>`)
 )

@@ -19,9 +19,9 @@ type ThreadRecord struct {
 	Status    string `json:"status,omitempty"`
 	Machine   string `json:"machine,omitempty"`
 	UpdatedAt string `json:"updatedAt,omitempty"`
-	// Section is where the sidebar files it: inbox, working, snoozed or
-	// settled. Disposition is how the user left it, with what they last
-	// did here counted before the engine has it.
+	// Section is where the sidebar files it: inbox, working, snoozed,
+	// settled or managers. Disposition is how the user left it, with what
+	// they last did here counted before the engine has it.
 	Section     string       `json:"section,omitempty"`
 	Disposition *Disposition `json:"disposition,omitempty"`
 	Unread      bool         `json:"unread,omitempty"`
