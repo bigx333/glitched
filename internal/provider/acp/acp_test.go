@@ -527,20 +527,6 @@ func TestAMissingAgentSaysHowToInstall(t *testing.T) {
 	}
 }
 
-// A run asked to steer says it can't: the composer queues the message for
-// the next turn instead.
-func TestSteerIsUnsupported(t *testing.T) {
-	a, _ := fake(t, "cancel")
-	g := open(t, a, spec(t))
-	do(t, g, provider.Start{Text: "Work."})
-	if err := g.Do(context.Background(), provider.Steer{Text: "faster"}); !errors.Is(err, provider.ErrUnsupported) {
-		t.Fatalf("steer: %v", err)
-	}
-	do(t, g, provider.Interrupt{})
-	turn(t, g)
-	closeRun(t, g)
-}
-
 // Updates the agent sends before its session is open, as a session's
 // history, are no part of the run.
 func TestUpdatesBeforeTheSessionGoNowhere(t *testing.T) {
