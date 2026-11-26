@@ -135,6 +135,33 @@ func TestManagerSharedWorkspaceDocsInjected(t *testing.T) {
 	}
 }
 
+type holdAdapter struct {
+	*fake.Adapter
+	release chan struct{}
+}
+
+type holdAgent struct {
+	provider.Agent
+	release chan struct{}
+}
+
+func (a *holdAdapter) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	ag, err := a.Adapter.Open(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	return &holdAgent{ag, a.release}, nil
+}
+
+func (a *holdAgent) Next(ctx context.Context) (provider.Event, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-a.release:
+		return a.Agent.Next(ctx)
+	}
+}
+
 func TestManagerScheduledSweepFiresAndDismissesSilently(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "host.db"))
@@ -147,7 +174,9 @@ func TestManagerScheduledSweepFiresAndDismissesSilently(t *testing.T) {
 		mu  sync.Mutex
 		now = time.Unix(10_000, 0).UTC()
 	)
-	h, err := New(ctx, st, provider.Mux{"fake": fake.New(fake.Turn(true))}, WithClock(func() time.Time {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	h, err := New(ctx, st, provider.Mux{"fake": &holdAdapter{fake.New(fake.Turn(false)), release}}, WithClock(func() time.Time {
 		mu.Lock()
 		defer mu.Unlock()
 		return now

@@ -93,15 +93,6 @@ func (a *app) actions() []command {
 		rm.also = "workspace delete"
 		cmds = append(cmds, rm)
 	}
-	if cur := a.current(); cur.env != nil {
-		root := cur.project()
-		scratch := root == "" || root == a.scratchRoot()
-		if !scratch || cur.local() {
-			mgr := action("manager.new", "New manager thread", "", "checklist", func() { a.newManager(cur.env, root, scratch) })
-			mgr.also = "manager workers sweep"
-			cmds = append(cmds, mgr)
-		}
-	}
 	cmds = append(cmds,
 		action("model.switch", "Switch model", "", "sparkles", a.openModelPicker),
 		action("diff.toggle", "Toggle diff panel", "⌘D", "pull-request", func() { a.showDiff = !a.showDiff }),
@@ -112,6 +103,15 @@ func (a *app) actions() []command {
 		action("theme.toggle", "Toggle light / dark", "⇧⌘L", "pallete-2", a.toggleLightDark),
 		action("zen.toggle", "Toggle Zen mode", "", "tuning", func() { a.settings.zen = !a.settings.zen }),
 	)
+	if cur := a.current(); cur.env != nil {
+		root := cur.project()
+		scratch := root == "" || root == a.scratchRoot()
+		if !scratch || cur.local() {
+			mgr := action("manager.new", "New manager thread", "", "checklist", func() { a.newManager(cur.env, root, scratch) })
+			mgr.also = "manager workers sweep"
+			cmds = append(cmds, mgr)
+		}
+	}
 	for i, s := range settingsSections {
 		hint := ""
 		if i == 0 {
