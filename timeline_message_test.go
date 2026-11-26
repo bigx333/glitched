@@ -60,7 +60,9 @@ func TestTimelineRowsAreABuiltInPluginYoursCanWrap(t *testing.T) {
 		settlePlugins(t, a, tt, h.p)
 		return tt.HasText(label)
 	}
-	rows := func() bool { return shows(turnText(1)) && shows("Reply 1.") && shows("Worked for 40s") }
+	rows := func() bool {
+		return shows(turnText(1)) && shows("Reply 1.") && shows("Ran 1 command · edited 1 file · searched 1 time")
+	}
 	if !rows() {
 		t.Fatalf("no rows: %q", tt.Texts())
 	}

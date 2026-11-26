@@ -138,6 +138,48 @@ type timelineMemo struct {
 	built  uint64 // opened, as the view was built
 	turns  []zenTurn
 	epoch  uint64
+	// disclosures are the work logs and plans the user opened or closed,
+	// by key, against how they start.
+	disclosures map[string]disclosureOverride
+}
+
+// A disclosureOverride is how the user left a work log or plan: as it
+// starts, open or closed.
+type disclosureOverride uint8
+
+const (
+	disclosureAuto disclosureOverride = iota
+	disclosureOpen
+	disclosureClosed
+)
+
+// disclosureOpen is whether the work log or plan with the key is open,
+// which it starts as auto says.
+func (m *timelineMemo) disclosureOpen(key string, auto bool) bool {
+	switch m.disclosures[key] {
+	case disclosureOpen:
+		return true
+	case disclosureClosed:
+		return false
+	}
+	return auto
+}
+
+// toggleDisclosure opens the work log or plan with the key, or closes it;
+// back as it starts, it forgets it.
+func (m *timelineMemo) toggleDisclosure(key string, auto bool) {
+	open := !m.disclosureOpen(key, auto)
+	if open == auto {
+		delete(m.disclosures, key)
+		return
+	}
+	if m.disclosures == nil {
+		m.disclosures = map[string]disclosureOverride{}
+	}
+	m.disclosures[key] = disclosureClosed
+	if open {
+		m.disclosures[key] = disclosureOpen
+	}
 }
 
 // toggle opens the line with the key, or closes it.
@@ -504,7 +546,7 @@ func covered(spans [][2]time.Time) time.Duration {
 func failedSteps(ws []client.WorkStep) int {
 	n := 0
 	for _, w := range ws {
-		if w.Status == api.WorkFailed {
+		if stepFailed(w) {
 			n++
 		}
 	}

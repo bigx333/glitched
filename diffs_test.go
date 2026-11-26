@@ -33,6 +33,7 @@ import (
 // reviewed and copy its path.
 func TestDiffFileActions(t *testing.T) {
 	h, th := checked(t)
+	h.openWork("Ran 2 commands", "Edit "+sidebarPath)
 	h.clickPlugin("Edit " + sidebarPath)
 	h.diffsRead()
 	d := h.diffOf(th, sidebarPath)
@@ -87,6 +88,7 @@ func TestNoDiffActionChangesTheWorkspace(t *testing.T) {
 	h, th := checked(t)
 	ws := th.View.Workspace
 	before := snapshot(t, ws)
+	h.openWork("Ran 2 commands", "Edit "+sidebarPath)
 	h.clickPlugin("Edit " + sidebarPath)
 	h.diffsRead()
 	d := h.diffOf(th, sidebarPath)
@@ -520,6 +522,7 @@ func TestARemoteThreadsDiffSaysWhereItsFilesAre(t *testing.T) {
 	}
 	h.a.select_(h.thread("Sort the sidebar"))
 	h.until("its transcript", func() bool { return h.tt.HasText("One test fails.") })
+	h.openWork("Ran 2 commands", "Edit "+sidebarPath)
 	h.clickPlugin("Edit " + sidebarPath)
 	h.diffsRead()
 	if !h.tt.HasText("The files are on devbox.") || !h.tt.HasText(sidebarPath) {
@@ -548,6 +551,7 @@ func TestEachThreadReviewsItsOwnDiff(t *testing.T) {
 		h.a.select_(th)
 		h.until("its transcript", func() bool { return len(changedFiles(entriesOf(th))) == 2 })
 		h.tt.Advance(time.Second)
+		h.openWork("Edited 2 files", "Edit "+path)
 		h.clickPlugin("Edit " + path)
 		h.diffsRead()
 	}
@@ -593,6 +597,7 @@ func TestOpenInEditorOpensTheEditedFile(t *testing.T) {
 	h.a.select_(h.thread("Both"))
 	h.until("its transcript", func() bool { return h.tt.HasText("Edited both.") })
 	h.tt.Advance(time.Second)
+	h.openWork("Edited 2 files", "Edit "+sidebarPath)
 	h.clickPlugin("Edit " + sidebarPath)
 	h.diffsRead()
 	// Each row is named by the path from the workspace.
@@ -785,6 +790,7 @@ func TestADiffOpensPainted(t *testing.T) {
 	h, _ := checked(t)
 	h.tt.SetSize(1320, 860)
 	settlePlugins(t, h.a, h.tt, h.p)
+	h.openWork("Ran 2 commands", "Edit "+sidebarPath)
 	h.tt.SetWindowHidden(true)
 	if err := h.tt.Click("Edit " + sidebarPath); err != nil {
 		t.Fatal(err)
@@ -833,6 +839,7 @@ func TestADiffFileShowsItsName(t *testing.T) {
 	h.tt.Advance(time.Second)
 	rel := filepath.Join("packages", "a-rather-long-package-name", "src", "some", "deeply", "nested", "folder")
 	ruled, hooked := filepath.Join(rel, "ruled.txt"), filepath.Join(rel, "hooked.txt")
+	h.openWork("Edited 2 files", "Write "+ruled)
 	if h.tt.HasText(ws) {
 		t.Errorf("the work log shows the workspace's path: %q", h.tt.Texts())
 	}

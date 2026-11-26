@@ -257,7 +257,7 @@ func TestALongTimeline(t *testing.T) {
 		}
 	})
 
-	t.Run("a work log folds and unfolds in place", func(t *testing.T) {
+	t.Run("a work log unfolds and folds in place", func(t *testing.T) {
 		l().ScrollToEnd()
 		h.tt.Frame()
 		h.tt.Advance(time.Second)
@@ -271,28 +271,32 @@ func TestALongTimeline(t *testing.T) {
 			}
 			return false
 		}
-		// The last work log's head in view.
+		// The last work log's head in view, folded or open.
 		last := func() (head ui.Rect) {
 			for _, n := range h.tt.AccessAll() {
-				if n.Name == "Worked for 40s 3 steps" && !n.Offscreen {
+				if strings.HasPrefix(n.Name, "Ran 1 command · edited 1 file · searched 1 time 40s 3 steps") && !n.Offscreen {
 					head = n.Bounds
 				}
 			}
 			return head
 		}
 		head := last()
-		if head.H == 0 || !open(head) {
-			t.Fatal("no open work log shows at the end")
+		if head.H == 0 || open(head) {
+			t.Fatalf("no folded work log shows at the end: %q", h.tt.Texts())
 		}
 		h.tt.ClickAt(head.X+head.W/2, head.Y+head.H/2)
 		h.tt.Advance(time.Second)
-		if head = last(); open(head) {
-			t.Fatal("a click on its head didn't fold the work log")
+		opened := last()
+		if !open(opened) {
+			t.Fatal("a click on its head didn't unfold the work log")
 		}
-		h.tt.ClickAt(head.X+head.W/2, head.Y+head.H/2)
+		if opened.Y != head.Y {
+			t.Errorf("the head moved from %v to %v as it unfolded", head.Y, opened.Y)
+		}
+		h.tt.ClickAt(opened.X+opened.W/2, opened.Y+opened.H/2)
 		h.tt.Advance(time.Second)
-		if !open(last()) {
-			t.Error("a second click didn't unfold the work log")
+		if folded := last(); open(folded) || folded.Y != head.Y {
+			t.Errorf("a second click didn't fold the work log in place: head at %v, was %v", folded.Y, head.Y)
 		}
 	})
 
@@ -369,10 +373,11 @@ func TestALongTimeline(t *testing.T) {
 			h.tt.Advance(time.Second)
 			return len(h.tt.AccessAll())
 		}
-		short, long := nodes(300), nodes(30000)
-		t.Logf("%d accessibility nodes at 300 rows, %d at 30,000", short, long)
+		// synthetic repeats its rows every 420, so both end on the same.
+		short, long := nodes(300), nodes(300+420*71)
+		t.Logf("%d accessibility nodes at 300 rows, %d at 30,120", short, long)
 		if long > short+5 {
-			t.Errorf("%d accessibility nodes at 30,000 rows, %d at 300", long, short)
+			t.Errorf("%d accessibility nodes at 30,120 rows, %d at 300", long, short)
 		}
 	})
 }

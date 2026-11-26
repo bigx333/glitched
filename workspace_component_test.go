@@ -129,6 +129,7 @@ func TestTheWorkspaceButtonIsTheBuiltInsDrawnAsGlitchedsOwn(t *testing.T) {
 		{"a new thread's", func() {}, []string{"user", "t3code", "-", "Add project…", "Clone repository…", "Remove project"}},
 		{"a thread's", func() {
 			h.a.select_(th)
+			h.openWork("Ran 2 commands", "+10")
 			h.until("the edit's counts", func() bool { return h.tt.HasText("+10") })
 		}, nil},
 	} {

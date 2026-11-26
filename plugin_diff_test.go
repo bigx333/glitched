@@ -41,6 +41,7 @@ export function update({ state, event }) {
 // draws the panel.
 func TestYourDiffPanelEmbedsTheNativeDiff(t *testing.T) {
 	h, th := checked(t)
+	h.openWork("Ran 2 commands", "Edit "+sidebarPath)
 	h.click("Edit " + sidebarPath)
 	h.diffsRead()
 	manifest := func(id string) string {
@@ -95,6 +96,7 @@ func TestYourDiffPanelEmbedsTheNativeDiff(t *testing.T) {
 // The diff calls reach only the files the thread changed.
 func TestTheDiffCallsReachOnlyTheThreadsFiles(t *testing.T) {
 	h, th := checked(t)
+	h.openWork("Ran 2 commands", "Edit "+sidebarPath)
 	h.click("Edit " + sidebarPath)
 	h.diffsRead()
 	call := func(typ, args string) error {

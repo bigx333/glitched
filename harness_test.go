@@ -359,6 +359,31 @@ func (h *harness) click(text string) {
 	}
 }
 
+// openWork opens the work log whose head starts with summary, unless the
+// window shows its step already: a settled log of several steps starts
+// folded.
+func (h *harness) openWork(summary, step string) {
+	h.t.Helper()
+	var head ui.Rect
+	h.until(fmt.Sprintf("the work log %q", summary), func() bool {
+		if _, ok := h.tt.Find(step); ok {
+			return true
+		}
+		// The head, not the row around it, which its name starts too.
+		for _, n := range h.tt.AccessAll() {
+			if strings.HasPrefix(n.Name, summary) && !n.Offscreen && (head.H == 0 || n.Bounds.H < head.H) {
+				head = n.Bounds
+			}
+		}
+		return head.H > 0
+	})
+	if head.H == 0 {
+		return
+	}
+	h.tt.ClickAt(head.X+head.W/2, head.Y+head.H/2)
+	h.tt.Advance(time.Second)
+}
+
 // clickPlugin clicks a plugin's declarative widget once the window shows
 // it, and waits for the plugin to answer the click.
 func (h *harness) clickPlugin(text string) {

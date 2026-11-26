@@ -105,6 +105,7 @@ func TestAnAntigravityThread(t *testing.T) {
 	for range 50 {
 		h.tt.Advance(100 * time.Millisecond)
 	}
+	h.openWork("Paused for approval", "Read")
 	for _, want := range []string{"I'll read the notes, then add a line to them.", "Read", "notes.txt", "Edit notes.txt", "Allow once", "Deny"} {
 		if !h.tt.HasText(want) {
 			t.Fatalf("the thread shows no %q: %q", want, h.tt.Texts())
