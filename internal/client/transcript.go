@@ -389,6 +389,12 @@ func (t *Transcript) apply(e api.Event) {
 			t.starting = b.Run
 			break
 		}
+		if b.Quiet {
+			if t.dismissed == nil {
+				t.dismissed = map[api.ID]bool{}
+			}
+			t.dismissed[b.Run] = true
+		}
 		if w := t.wakes[b.Run]; w != nil {
 			w.run = b.Run
 		}

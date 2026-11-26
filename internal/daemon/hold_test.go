@@ -17,16 +17,7 @@ func TestAPlaceholderSaysWhatAStopThereHolds(t *testing.T) {
 	p.adB.Spawns(p.b.Endpoint(), "do it there", fake.Child{Title: "local nested", Task: "go"})
 	k := p.place("report parent")
 	b := p.bound(k).Thread
-	var grand api.Thread
-	until(t, "the thread there idle and its own child waiting", func() bool {
-		for _, v := range p.there() {
-			if v.Parent == b && v.Run == api.RunWaiting && len(v.Requests) == 1 {
-				grand = v
-				return p.onB(b).Live() == nil
-			}
-		}
-		return false
-	})
+	grand := waitingGrandchild(t, p, b)
 	if _, err := p.b.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: b, Body: api.TurnInterrupt{}}); err != nil {
 		t.Fatal(err)
 	}
@@ -119,4 +110,26 @@ func TestAResumeThereEndsTheHoldWithTheRunItAdmits(t *testing.T) {
 	if engine.View(p.placeholder(k)).Remote.Held {
 		t.Error("A's placeholder still says held after the resume there")
 	}
+}
+
+// waitingGrandchild waits for the child b's turn started on B to wait on
+// its approval, and for b to be idle with that approval's wake done: the
+// wake's turn asks too, and B's person allows it.
+func waitingGrandchild(t *testing.T, p *remotes, b api.ID) api.Thread {
+	t.Helper()
+	var grand api.Thread
+	until(t, "the thread there idle and its own child waiting", func() bool {
+		v := engine.View(p.onB(b))
+		for _, r := range v.Requests {
+			p.b.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: b, Body: api.RequestRespond{Request: r.ID, Generation: r.Generation, Answer: []byte(`{"allow":true}`)}})
+		}
+		for _, g := range p.there() {
+			if g.Parent == b && g.Run == api.RunWaiting && len(g.Requests) == 1 {
+				grand = g
+				return v.LastReport != nil && v.LastReport.Child == g.ID && v.Run == api.RunIdle && v.Queued == 0
+			}
+		}
+		return false
+	})
+	return grand
 }

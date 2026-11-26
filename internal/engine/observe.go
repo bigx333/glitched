@@ -3,6 +3,7 @@ package engine
 import (
 	"cmp"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -90,6 +91,12 @@ func (d *decision) observe(o Observation) error {
 			limit := o.Limit
 			if stopped {
 				limit = nil
+			}
+			// A quiet wake that failed is the user's to see.
+			if o.Outcome == api.OutcomeFailed && !stopped && !silent && live.Wake != api.NotWake && live.Dismissed {
+				if err := d.raise(*live); err != nil {
+					return err
+				}
 			}
 			if err := d.emit(api.TurnEnded{Run: o.Run, Outcome: o.Outcome, Error: o.Error, Tokens: o.Tokens, Limit: limit, Head: o.Head}); err != nil {
 				return err
@@ -287,9 +294,13 @@ func (d *decision) remote(o Observation) error {
 }
 
 // remoteReport has the placeholder report p to its parent, as report
-// does for a local child, with what its machine, labelled on, said.
+// does for a local child, with what its machine, labelled on, said. What
+// a child its machine's person took over asks is theirs, as report has it.
 func (d *decision) remoteReport(on string, p RemoteReport) {
-	r := ReportToParent{Parent: d.t.Parent, Child: d.t.ID, Run: p.Run, Kind: p.Kind, Title: d.t.Title, Error: p.Error, Ask: p.Ask, Question: p.Question, On: on}
+	if d.t.Remote.Taken {
+		p.Question, p.Approval = api.ID{}, api.ID{}
+	}
+	r := ReportToParent{Parent: d.t.Parent, Child: d.t.ID, Run: p.Run, Kind: p.Kind, Title: d.t.Title, Error: p.Error, Ask: p.Ask, Question: p.Question, Approval: p.Approval, On: on}
 	if p.Kind == api.ReportDone {
 		r.Reply = &p.Reply
 	}
@@ -361,7 +372,7 @@ func (d *decision) startSweep(run api.ID, prompt string) error {
 		return err
 	}
 	gen := d.t.Generation + 1
-	if err := d.emit(api.TurnAdmitted{Run: run, Generation: gen, Wake: api.WakeSweep, Prior: prior}); err != nil {
+	if err := d.emit(api.TurnAdmitted{Run: run, Generation: gen, Wake: api.WakeSweep, Prior: prior, Quiet: d.t.Role == api.RoleManager}); err != nil {
 		return err
 	}
 	if err := d.emit(api.SweepStarted{Run: run}); err != nil {
@@ -376,17 +387,22 @@ func (d *decision) startSweep(run api.ID, prompt string) error {
 // reported logs a child's report. It brings a snoozed parent, and only its
 // parent, back to the inbox. A done or failed one queues a wake, which
 // gives the parent's agent the child's result with its next turn (see
-// settle), and so does a question the child waits on, with a wake of its
-// own, for the parent's agent to answer or leave to the user. An approval
-// or credentials are the user's alone, and wake nothing. A settled parent stays settled and takes no wake: settling
+// settle), and so do a question and an approval the child waits on, each
+// with a wake of its own: the parent's agent answers a question or takes
+// it to the user, and vets an approval, which only the user grants.
+// Credentials wake nothing: a child asks its parent for them in its
+// report. A settled parent stays settled and takes no wake: settling
 // halted the tree, so this is a run that ended before its stop landed, and
 // the user is done with the thread. The report is logged either way. A
 // report the parent already took a wake for is a replay, and changes
 // nothing.
 func (d *decision) reported(o Reported) error {
 	id, text := wakeID(o.Report.Run), wakeText(o, d.t.Branch)
-	if !o.Question.IsZero() {
+	switch {
+	case !o.Question.IsZero():
 		id, text = askWakeID(o.Question), askText(o)
+	case !o.Approval.IsZero():
+		id, text = askWakeID(o.Approval), approvalText(o)
 	}
 	if d.t.messageAt(id) >= 0 {
 		return nil
@@ -395,7 +411,7 @@ func (d *decision) reported(o Reported) error {
 	if err := d.emit(o.Report); err != nil {
 		return err
 	}
-	wakes := !(o.Report.Kind == api.ReportBlocked && o.Question.IsZero() || d.t.settled())
+	wakes := !(o.Report.Kind == api.ReportBlocked && o.Question.IsZero() && o.Approval.IsZero() || d.t.settled())
 	if d.t.Disposition.State == api.Snoozed {
 		if err := d.emit(api.DispositionChanged{Disposition: api.Disposition{}}); err != nil {
 			return err
@@ -423,9 +439,9 @@ func wakeID(run api.ID) api.ID {
 	return id
 }
 
-// askWakeID is the wake for a child's question, one per question request,
-// apart from its run's: the run's own report still wakes the parent when
-// it ends.
+// askWakeID is the wake for a child's question or approval, one per
+// request, apart from its run's: the run's own report still wakes the
+// parent when it ends.
 func askWakeID(request api.ID) api.ID {
 	sum := sha256.Sum256(append([]byte("glitched ask wake "), request[:]...))
 	var id api.ID
@@ -457,12 +473,37 @@ func askText(o Reported) string {
 			b.WriteString("\n")
 		}
 	}
-	answer := "Answer it with task_answer, or leave it to the user, who sees it too."
+	answer := "The question is yours to triage first: answer it with task_answer, steer or stop the child with task_send or task_cancel, or ask the user yourself if only they can answer."
 	if o.On != "" {
-		answer = "It runs on " + o.On + ". Answer it with task_answer, or leave it to the user there, who sees it too."
+		answer = "It runs on " + o.On + ". " + answer
 	}
 	return fmt.Sprintf("<task id=\"%s\" title=\"%s\" state=\"waiting_on_question\" request=\"%s\">\n<task_question>\n%s</task_question>\n</task>\n%s",
 		o.Report.Child, html.EscapeString(o.Report.Title), o.Question, b.String(), answer)
+}
+
+// approvalText gives the parent's agent an approval its child waits on, in
+// the task tags askText uses: what the child wants to do, and that only
+// the user grants it.
+func approvalText(o Reported) string {
+	what := strings.TrimSpace(o.Report.Outcome)
+	if what == "" {
+		var b struct{ Operation, Path, Command string }
+		json.Unmarshal(o.Ask, &b)
+		switch {
+		case b.Command != "":
+			what = "Wants to run " + b.Command
+		case b.Operation != "":
+			what = strings.TrimSpace("Wants to " + b.Operation + " " + b.Path)
+		default:
+			what = "Waits on an approval"
+		}
+	}
+	note := "Only the user can grant it: task_answer refuses approvals. Stop a request that is bogus or off its task with task_cancel, or steer the child with task_send; if the work does need it, tell the user what to approve and why."
+	if o.On != "" {
+		note = "It runs on " + o.On + ". " + note
+	}
+	return fmt.Sprintf("<task id=\"%s\" title=\"%s\" state=\"waiting_on_approval\" request=\"%s\">\n<task_approval>\n%s\n</task_approval>\n</task>\n%s",
+		o.Report.Child, html.EscapeString(o.Report.Title), o.Approval, what, note)
 }
 
 // wakeText gives the parent's agent a child's result, in the tags Zeron
@@ -485,7 +526,8 @@ func wakeText(o Reported, parentBranch string) string {
 
 // report has a child's run report to its parent, after the commit, as how
 // it went, with the request a blocked run waits on. A run the user stopped
-// reports nothing: they asked for it.
+// reports nothing: they asked for it. The question or approval a child the
+// user took over asks is theirs, so it wakes no parent.
 func (d *decision) report(run api.ID, kind api.ReportKind, failure string, ask *api.Request) {
 	if d.t.Parent.IsZero() {
 		return
@@ -493,8 +535,13 @@ func (d *decision) report(run api.ID, kind api.ReportKind, failure string, ask *
 	r := ReportToParent{Parent: d.t.Parent, Child: d.t.ID, Run: run, Kind: kind, Title: d.t.Title, Error: failure, Branch: d.t.Branch}
 	if ask != nil {
 		r.Ask = ask.Body
-		if ask.Kind == api.KindQuestion {
+	}
+	if ask != nil && !d.t.TakenOver {
+		switch ask.Kind {
+		case api.KindQuestion:
 			r.Question = ask.ID
+		case api.KindApproval:
+			r.Approval = ask.ID
 		}
 	}
 	d.effects = append(d.effects, r)

@@ -538,3 +538,37 @@ func TestManagerSweepTimingAndDocsTotalCap(t *testing.T) {
 		t.Fatalf("docs omitted flags = [%v, %v, %v], want [false, false, true]", docs[0].omitted, docs[1].omitted, docs[2].omitted)
 	}
 }
+
+// The Manager's row and the Managers' count say Needs you for what the
+// Manager asks or failed, and for a worker the user took over; what its
+// other workers ask or fail is the Manager's to vet, which its overview
+// still shows.
+func TestTheManagersRowNeedsYouOnlyForWhatReachesTheUser(t *testing.T) {
+	h, id := managerFixture(t, t.TempDir(), nil, "Worker one")
+	mgr := thread{h.local(), h.local().Threads[id]}
+	worker := h.thread("Worker one")
+	row := func() bool {
+		h.tt.Advance(time.Second)
+		return managerNeedsUser(mgr, h.a.shown(mgr)) && h.tt.HasText("Needs you")
+	}
+	if row() {
+		t.Fatalf("nothing waits, yet the row says %q", h.tt.Texts())
+	}
+	worker.View.LastTurn = &api.TurnResult{Outcome: api.OutcomeFailed, Ended: time.Now()}
+	worker.View.Requests = []api.Request{{ID: api.NewID(), Kind: api.KindApproval}}
+	if row() {
+		t.Fatalf("a worker's unvetted ask and failure show on the Manager's row: %q", h.tt.Texts())
+	}
+	if needs, _ := h.a.managerAttention(mgr); needs != 1 {
+		t.Fatalf("the overview counts %d needing the user, want the worker", needs)
+	}
+	worker.View.TakenOver = true
+	if !row() {
+		t.Fatalf("a worker the user took over asks, yet the row says %q", h.tt.Texts())
+	}
+	worker.View.TakenOver = false
+	mgr.View.Requests = []api.Request{{ID: api.NewID(), Kind: api.KindQuestion}}
+	if !row() {
+		t.Fatalf("the Manager asks, yet the row says %q", h.tt.Texts())
+	}
+}

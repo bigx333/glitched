@@ -97,3 +97,62 @@ func TestRequestCredentialsRefusals(t *testing.T) {
 		t.Errorf("asked %+v", a.got)
 	}
 }
+
+// listed is whether tools/list names tool.
+func listed(t *testing.T, tools *mcp.Tools, tool string) bool {
+	t.Helper()
+	r := rawServe(t, tools, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	return strings.Contains(string(r[0]["result"]), `"`+tool+`"`)
+}
+
+// refused asks for a secret through tools, and is whether the call was
+// refused.
+func refused(t *testing.T, tools *mcp.Tools) bool {
+	t.Helper()
+	r := rawServe(t, tools, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"request_credentials","arguments":{"reason":"probe","fields":[{"name":"GLX_PROBE"}]}}}`)
+	var res struct{ IsError bool }
+	json.Unmarshal(r[0]["result"], &res)
+	return res.IsError
+}
+
+// A child the user hasn't taken over has no request_credentials: it asks
+// its parent, which its instructions say. The engine's word on whether the
+// user took it over wins over the flag it started with.
+func TestAChildAsksItsParentForSecrets(t *testing.T) {
+	a := &asker{out: api.Asked{Status: api.AskDeclined}}
+	kid := &mcp.Tools{Origin: mcp.Origin{Thread: api.NewID(), Access: api.AccessFull, Child: true}, Secrets: a}
+	if listed(t, kid, "request_credentials") || !refused(t, kid) || len(a.got) != 0 {
+		t.Fatalf("a child: listed %v, asked %+v; want it hidden and refused", listed(t, kid, "request_credentials"), a.got)
+	}
+	init := rawServe(t, kid, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`)
+	if s := string(init[0]["result"]); !strings.Contains(s, "report the names of the secrets you need") || strings.Contains(s, "ask with request_credentials") {
+		t.Fatalf("a child's instructions: %s", s)
+	}
+
+	h := engine(t)
+	o := working(t, h)
+	c := child(t, h, o, "Deploy it")
+	live := &mcp.Tools{Engine: h, Origin: mcp.Origin{Thread: c.ID, Access: o.Access}, Secrets: a}
+	if listed(t, live, "request_credentials") || !refused(t, live) {
+		t.Fatal("a child the engine has answering to its parent lists or takes request_credentials")
+	}
+	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: c.ID, Body: api.MessageDispatch{Text: "mine now", Mode: api.AfterActive}}); err != nil {
+		t.Fatal(err)
+	}
+	until(t, h, c.ID, "the takeover", func(th api.Thread) bool { return th.TakenOver })
+	live.Origin.Child = true
+	if !listed(t, live, "request_credentials") || refused(t, live) || len(a.got) != 1 {
+		t.Fatalf("a child the user took over: listed %v, asked %+v; want request_credentials its own", listed(t, live, "request_credentials"), a.got)
+	}
+	top := &mcp.Tools{Engine: h, Origin: o, Secrets: a}
+	if !listed(t, top, "request_credentials") || refused(t, top) {
+		t.Fatal("a thread of the user's lacks request_credentials")
+	}
+	s := (mcp.Launcher{Command: "glitched", Engine: "/tmp/sock"}).ForThread(c.ID, api.AccessAsk, api.RoleDefault, true)
+	if s.Env[mcp.EnvChild] != "1" || strings.Contains(s.Instructions, "ask with request_credentials") {
+		t.Fatalf("a child's MCP server: env %+v, instructions %q", s.Env, s.Instructions)
+	}
+	if s := (mcp.Launcher{}).For(o.Thread, api.AccessAsk); s.Env[mcp.EnvChild] != "" || !strings.Contains(s.Instructions, "ask with request_credentials") {
+		t.Fatalf("a top-level thread's MCP server: env %+v, instructions %q", s.Env, s.Instructions)
+	}
+}

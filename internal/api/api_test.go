@@ -65,6 +65,8 @@ func TestCommandJSON(t *testing.T) {
 		ThreadConfigure{Effort: new("")},
 		ThreadConfigure{},
 		WakeDismiss{Run: NewID(), Reason: "all on track"},
+		WakeRaise{Run: NewID(), Reason: "a worker needs a key"},
+		WakeRaise{},
 		SweepRun{},
 		SweepRun{Prompt: "Check the release blockers"},
 	} {

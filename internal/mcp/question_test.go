@@ -71,20 +71,24 @@ func TestAChildsQuestionWakesItsParentWhichAnswersIt(t *testing.T) {
 	}
 }
 
-// A child's approval is the user's: it wakes no parent, and task_answer
-// refuses it.
-func TestAParentCannotAnswerItsChildsApproval(t *testing.T) {
+// A child's approval wakes its parent to vet it, saying which child waits
+// on what, but only the user grants it: task_answer refuses it.
+func TestAParentVetsButCannotAnswerItsChildsApproval(t *testing.T) {
 	h := engine(t)
 	o := working(t, h)
 	kid := threadOf(t, h, child(t, h, o, "Review it").ID)
 	if len(kid.Requests) != 1 || kid.Requests[0].Kind != api.KindApproval {
 		t.Fatalf("child waits on %+v, want one approval", kid.Requests)
 	}
-	until(t, h, o.Thread, "the child's report", func(api.Thread) bool { return reported(t, h, o.Thread, kid.ID) })
-	if w := wakes(t, h, o.Thread, kid.ID); len(w) != 0 {
-		t.Fatalf("an approval woke the parent: %q", w)
+	req := kid.Requests[0].ID.String()
+	until(t, h, o.Thread, "the approval's wake", func(api.Thread) bool { return len(wakes(t, h, o.Thread, kid.ID)) == 1 })
+	w := wakes(t, h, o.Thread, kid.ID)[0]
+	for _, want := range []string{`state="waiting_on_approval"`, `request="` + req + `"`, "Wants to edit main.go", "task_answer refuses approvals"} {
+		if !strings.Contains(w, want) {
+			t.Fatalf("the wake says %q, want it to say %q", w, want)
+		}
 	}
-	args := `{"task_id":"` + kid.ID.String() + `","request_id":"` + kid.Requests[0].ID.String() + `","answers":[{"other":"allow"}]}`
+	args := `{"task_id":"` + kid.ID.String() + `","request_id":"` + req + `","answers":[{"other":"allow"}]}`
 	if _, err := task(t, h, o, "task_answer", args); !strings.Contains(err, "approvals and credentials are the user's") {
 		t.Fatalf("task_answer on an approval: %q, want it refused", err)
 	}

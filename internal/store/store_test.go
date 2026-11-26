@@ -701,6 +701,9 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 	if version < 22 {
 		sqlText += ftsV21
 	}
+	if version < 23 {
+		sqlText = takenOverV22 + sqlText
+	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
 	}
@@ -710,6 +713,10 @@ const indexesV17 = `
 	DROP INDEX IF EXISTS events_by_thread_type;
 	DROP INDEX IF EXISTS threads_live_updated;
 	DROP INDEX IF EXISTS threads_by_parent;
+`
+
+const takenOverV22 = `
+	ALTER TABLE threads DROP COLUMN taken_over;
 `
 
 const managersV19 = `
@@ -1726,11 +1733,12 @@ func upgradesForManagers(t *testing.T, version int) {
 		t.Fatalf("unexpected manager thread persisted: %+v", got)
 	}
 	live := got.Live()
-	if live == nil || live.Silent || !live.Dismissed || live.Wake != api.WakeSweep || !live.Woke.Equal(sweepAt) || !live.Prior.Equal(alertAt) {
+	// A Manager's worker reports and sweeps are quiet: neither moves it.
+	if live == nil || live.Silent || !live.Dismissed || live.Wake != api.WakeSweep || !live.Woke.Equal(sweepAt) || !live.Prior.Equal(now) {
 		t.Fatalf("the dismissed sweep persisted as %+v", live)
 	}
-	if !got.UpdatedAt.Equal(alertAt) {
-		t.Fatalf("UpdatedAt after the dismissal = %v, want the sweep's prior %v", got.UpdatedAt, alertAt)
+	if !got.UpdatedAt.Equal(now) {
+		t.Fatalf("UpdatedAt after the dismissal = %v, want the sweep's prior %v", got.UpdatedAt, now)
 	}
 	sweeping, err := s.SweepManagers(ctx)
 	if err != nil || len(sweeping) != 1 || sweeping[0].ID != mgr {
@@ -1756,8 +1764,8 @@ func TestAVersion17DatabaseUpgradesWithIndexes(t *testing.T) {
 	}
 	defer db.Close()
 	var version int
-	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 22 {
-		t.Fatalf("user_version = %d (%v), want 22", version, err)
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 23 {
+		t.Fatalf("user_version = %d (%v), want 23", version, err)
 	}
 	for _, idx := range []string{"events_by_thread_type", "threads_live_updated", "threads_by_parent"} {
 		var count int
@@ -1765,6 +1773,45 @@ func TestAVersion17DatabaseUpgradesWithIndexes(t *testing.T) {
 			t.Errorf("index %s missing after upgrade (count=%d, err=%v)", idx, count, err)
 		}
 	}
+}
+
+// A version 22 database learns from its log which children the user took
+// over: those whose last message or stop was theirs.
+func TestAVersion22DatabaseBackfillsTakenOver(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	parent, run := working(t, s)
+	kept, _, err := spawn(s, parent, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taken, _, err := spawn(s, parent, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submitTo(t, s, api.Command{ID: api.NewID(), Target: taken, Body: api.MessageDispatch{Text: "mine now", Mode: api.AfterActive}})
+	want := map[api.ID]bool{parent: false, kept: false, taken: true}
+	check := func(when string) {
+		t.Helper()
+		for id, w := range want {
+			got, err := s.Thread(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.TakenOver != w {
+				t.Errorf("%s: TakenOver of %s = %v, want %v", when, id, got.TakenOver, w)
+			}
+		}
+	}
+	check("as committed")
+	s.Close()
+	s = open(t, path)
+	check("reopened")
+	s.Close()
+	downgrade(t, path, "", 22)
+	s = open(t, path)
+	check("after the upgrade")
 }
 
 func TestAVersion20DatabaseReopensStoredManagers(t *testing.T) {
@@ -2122,8 +2169,8 @@ func TestAVersion18DatabaseLosesTheReceiptPruningLeftovers(t *testing.T) {
 		(SELECT COUNT(*) FROM meta WHERE key = 'commands_pruned')`).Scan(&version, &index, &mark); err != nil {
 		t.Fatal(err)
 	}
-	if version != 22 || index != 0 || mark != 0 {
-		t.Fatalf("after the upgrade: user_version %d, commands_by_seq %d, watermark %d; want 22, 0, 0", version, index, mark)
+	if version != 23 || index != 0 || mark != 0 {
+		t.Fatalf("after the upgrade: user_version %d, commands_by_seq %d, watermark %d; want 23, 0, 0", version, index, mark)
 	}
 }
 

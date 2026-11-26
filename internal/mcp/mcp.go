@@ -32,6 +32,9 @@ const (
 	EnvAccess = "GLITCHED_ACCESS"
 	EnvEngine = "GLITCHED_ENGINE"
 	EnvRole   = "GLITCHED_ROLE"
+	// EnvChild is "1" for an agent of a child the user hasn't taken over,
+	// which answers to its parent, not the user.
+	EnvChild = "GLITCHED_CHILD"
 	// EnvMachines lists, as a JSON array, the labels of the machines a
 	// child may be placed on: labels only, never a link's token.
 	EnvMachines = "GLITCHED_MACHINES"
@@ -41,7 +44,7 @@ const (
 // process the engine starts drops any it inherited, so an engine inside a
 // run never speaks for that run's thread.
 func Routing(k string) bool {
-	for _, e := range []string{EnvThread, EnvAccess, EnvEngine, EnvRole, EnvMachines} {
+	for _, e := range []string{EnvThread, EnvAccess, EnvEngine, EnvRole, EnvChild, EnvMachines} {
 		if strings.EqualFold(k, e) {
 			return true
 		}
@@ -50,11 +53,13 @@ func Routing(k string) bool {
 }
 
 // Origin is the thread whose agent calls the tools, and the access the
-// agent was started at.
+// agent was started at. Child is that the thread was a child the user
+// hadn't taken over when the agent started.
 type Origin struct {
 	Thread api.ID
 	Access api.Access
 	Role   api.ThreadRole
+	Child  bool
 }
 
 // Launcher is how an engine's agents start glitched mcp: Command is a
@@ -76,7 +81,13 @@ func (l Launcher) For(thread api.ID, access api.Access) provider.MCPServer {
 // ForRole returns the glitched MCP server configuration for thread at access
 // and role.
 func (l Launcher) ForRole(thread api.ID, access api.Access, role api.ThreadRole) provider.MCPServer {
-	s := l.server(thread, access, role)
+	return l.ForThread(thread, access, role, false)
+}
+
+// ForThread is ForRole, with child set for a child the user hasn't taken
+// over, which answers to its parent instead of the user.
+func (l Launcher) ForThread(thread api.ID, access api.Access, role api.ThreadRole, child bool) provider.MCPServer {
+	s := l.server(thread, access, role, child)
 	if l.Machines == nil {
 		return s
 	}
@@ -87,7 +98,7 @@ func (l Launcher) ForRole(thread api.ID, access api.Access, role api.ThreadRole)
 	return s
 }
 
-func (l Launcher) server(thread api.ID, access api.Access, role api.ThreadRole) provider.MCPServer {
+func (l Launcher) server(thread api.ID, access api.Access, role api.ThreadRole, child bool) provider.MCPServer {
 	env := map[string]string{
 		EnvThread: thread.String(),
 		EnvAccess: strconv.Itoa(int(access)),
@@ -96,12 +107,15 @@ func (l Launcher) server(thread api.ID, access api.Access, role api.ThreadRole) 
 	if role != api.RoleDefault {
 		env[EnvRole] = string(role)
 	}
+	if child {
+		env[EnvChild] = "1"
+	}
 	return provider.MCPServer{
 		Name:         "glitched",
 		Command:      l.Command,
 		Args:         []string{"mcp"},
 		Env:          env,
-		Instructions: instructionsFor(role),
+		Instructions: instructionsFor(role, child),
 		Trusted:      true,
 		// request_credentials waits for the user up to the engine's 30
 		// minutes, past which the engine answers it itself.
@@ -114,12 +128,18 @@ const instructions = `Glitched runs you in a thread. Its MCP server glitched giv
 - Follow the user's delegation preferences and the repository's instructions. That the tool is there does not by itself call for delegating work.
 - The child starts at once, with this thread's permissions, its folder unless you ask for isolation worktree (a worktree and branch of its own from this folder's HEAD, without its uncommitted changes), and its provider and model unless you pick others: another provider (claude for codex, say) starts at its own default model unless you pick one. It does not see this conversation, so give it a self-contained brief.
 - Each time a child's turn ends done or failed, its report reaches this thread as a new message, in your next turn. Do not wait or poll for it: carry on, or end your turn.
-- list_tasks and task_status show your children; task_send messages one (a new brief or a correction), task_cancel stops one and everything under it, and task_answer answers a question one asks, which reaches you on its own. An approval or credentials a child asks for are the user's. Use them to act on a child, never to wait for one: its report comes on its own. A child the user took over (the user sent its last message or stop) is theirs, and these refuse it.
+- list_tasks and task_status show your children; task_send messages one (a new brief or a correction), task_cancel stops one and everything under it, and task_answer answers a question one asks, which reaches you on its own. An approval a child waits on reaches you too, but only the user grants it, so task_answer refuses it. Use them to act on a child, never to wait for one: its report comes on its own. A child the user took over (the user sent its last message or stop) is theirs, and these refuse it.
 - A child that delegates in turn reports each turn it ends done or failed, so it can report before its own children finish and again after. Its latest report is the current one. If you delegate and end your turn while children still work, say so in your reply: that reply is your report to your parent.
 - The user sees each child and can open it. A child cannot get wider permissions than this thread.
-- Use a new client_request_id for each new task, and the same one to retry a call, so a retry does not start a second child.
+- Use a new client_request_id for each new task, and the same one to retry a call, so a retry does not start a second child.`
 
-When you need a secret from the user (an API key, a token, a password), ask with request_credentials, never in chat. The user types the values into a private card; you get back where they are, never the values, and must never print them.`
+const credentialsInstructions = `
+
+When you need a secret from the user (an API key, a token, a password), ask with request_credentials, never in chat. The user types the values into a private card; you get back where they are, never the values, and must never print them. When a child reports that it needs a secret, vet the request, call request_credentials once yourself, and pass the child the env script or file paths it returns, never the values.`
+
+const childCredentialsInstructions = `
+
+You run under a parent thread and answer to it, not to the user. If you need a secret (an API key, a token, a password), do not ask the user: report the names of the secrets you need and why to your parent, in your reply as you end your turn. Your parent vets the request, asks the user with request_credentials, and passes you the env script or file paths it gets back. Never print or echo a secret's value.`
 
 // Main serves stdin and stdout for the caller its environment names, until
 // stdin closes.
@@ -153,5 +173,5 @@ func fromEnv() (Origin, string, error) {
 	if err != nil || aerr != nil || engine == "" {
 		return Origin{}, "", fmt.Errorf("mcp: %s, %s and %s name the agent's thread and access, and glitched sets them for each agent it starts", EnvThread, EnvAccess, EnvEngine)
 	}
-	return Origin{Thread: thread, Access: api.Access(access), Role: api.ThreadRole(os.Getenv(EnvRole))}, engine, nil
+	return Origin{Thread: thread, Access: api.Access(access), Role: api.ThreadRole(os.Getenv(EnvRole)), Child: os.Getenv(EnvChild) == "1"}, engine, nil
 }

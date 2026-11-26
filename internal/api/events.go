@@ -220,6 +220,9 @@ type TurnAdmitted struct {
 	// thread's UpdatedAt before the wake, which a dismissal restores.
 	Wake  WakeKind  `json:"wake,omitempty"`
 	Prior time.Time `json:"prior,omitzero"`
+	// Quiet is a Manager's wake, admitted as a dismissed one: it neither
+	// moves the thread nor marks it unread until something raises it.
+	Quiet bool `json:"quiet,omitempty"`
 }
 
 // TurnStarted: the agent accepted the run's message.

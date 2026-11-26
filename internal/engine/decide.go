@@ -287,6 +287,8 @@ func (d *decision) local(id api.ID, b api.Intent) error {
 		err = d.cancelResume(b)
 	case api.WakeDismiss:
 		err = d.dismissWake(b)
+	case api.WakeRaise:
+		err = d.raiseWake(b)
 	case api.SweepRun:
 		err = d.runSweep(id, b)
 	default:

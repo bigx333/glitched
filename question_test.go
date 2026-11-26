@@ -634,9 +634,10 @@ func TestARequestNotifies(t *testing.T) {
 	}
 }
 
-// A child's request is told of in its parent's notification only, as
-// the report's Needs you; the child's report names its first question.
-func TestAChildsQuestionsNotifyItsParentOnly(t *testing.T) {
+// A child's question is told of on the child, once the user took it over,
+// with what it asks, and never on its parent; the parent's transcript
+// still shows the report's line.
+func TestAChildsQuestionsNotifyOnTheChildTheUserTookOver(t *testing.T) {
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Asking()))
 	top := seed(t, d, "/work/t3code", "Ship the cache")
@@ -655,8 +656,8 @@ func TestAChildsQuestionsNotifyItsParentOnly(t *testing.T) {
 		h.p.run()
 		h.tt.Advance(100 * time.Millisecond)
 	}
-	if slices.ContainsFunc(got, func(o mygo.NotificationOptions) bool { return o.ID == "thread:"+kid.String() }) {
-		t.Errorf("the child notified of its own request: %+v", got)
+	if len(got) != 1 || got[0].ID != "thread:"+kid.String() || got[0].Body != "Fake asks: Which store should the cache use?" {
+		t.Errorf("notifications %+v; want one on the child, with its first question", got)
 	}
 }
 

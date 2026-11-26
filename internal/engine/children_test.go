@@ -333,3 +333,73 @@ func TestAPlaceholderFoldsItsMachine(t *testing.T) {
 		t.Fatalf("a local thread's remote: %+v; want none", local.Remote)
 	}
 }
+
+// A child answers to its parent until the user takes it over, by their
+// message or stop; its parent's agent's message gives it back. Only what a
+// child that answers to its parent asks goes to the parent as a question
+// or approval to vet.
+func TestTheUserTakesAChildOver(t *testing.T) {
+	parent := newThread(t)
+	c := &thread{t: t}
+	run := api.NewID()
+	evs, _, err := engine.Decide(engine.Thread{}, api.Command{ID: run, Target: api.NewID(), Body: api.ThreadCreate{Title: "child", Parent: parent.th.ID, Run: api.NewID(), Text: "go"}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.fold(evs)
+	owned := func(want bool) {
+		t.Helper()
+		if v := engine.View(c.th); c.th.TakenOver != want || v.TakenOver != want || v.UserOwned() != want {
+			t.Fatalf("TakenOver %v, view %v, UserOwned %v; want %v", c.th.TakenOver, v.TakenOver, v.UserOwned(), want)
+		}
+	}
+	owned(false)
+	c.observe(engine.Started{Run: run})
+	asked := func(kind string) engine.ReportToParent {
+		t.Helper()
+		req := api.NewID()
+		_, effects, err := engine.Observe(c.th, engine.Surfaced{Run: run, Request: req, Dedup: req.String(), Kind: kind, Body: json.RawMessage(`{}`)}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range effects {
+			if r, ok := e.(engine.ReportToParent); ok {
+				return r
+			}
+		}
+		t.Fatalf("a %s reported nothing", kind)
+		return engine.ReportToParent{}
+	}
+	if r := asked(api.KindApproval); r.Approval.IsZero() || !r.Question.IsZero() {
+		t.Fatalf("its parent's child's approval: %+v; want it for the parent to vet", r)
+	}
+	if r := asked(api.KindQuestion); r.Question.IsZero() {
+		t.Fatalf("its parent's child's question: %+v; want it for the parent", r)
+	}
+	c.must(dispatch("mine now", api.AfterActive))
+	owned(true)
+	if r := asked(api.KindApproval); !r.Approval.IsZero() || !r.Question.IsZero() {
+		t.Fatalf("a taken-over child's approval: %+v; want it the user's", r)
+	}
+	evs, _, err = engine.Decide(c.th, api.Command{ID: api.NewID(), Target: c.th.ID, Body: dispatch("back to you", api.AfterActive), Caller: &api.Caller{Thread: parent.th.ID}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.fold(evs)
+	owned(false)
+	c.must(api.TurnInterrupt{})
+	owned(true)
+}
+
+// A link's thread's first message is its create's, though an older log
+// leaves out whose: it takes nothing over. The person's message after
+// does.
+func TestALinksThreadsFirstMessageTakesNothingOver(t *testing.T) {
+	th := engine.Apply(engine.Thread{}, engine.Event{Thread: api.NewID(), At: now, Body: api.ThreadCreated{Title: "link", Origin: &api.Origin{Link: api.NewID(), Thread: api.NewID()}}})
+	for i, want := range []bool{false, true} {
+		th = engine.Apply(th, engine.Event{At: now, Body: api.MessageQueued{Message: api.NewID(), Text: "go", Mode: api.AfterActive}})
+		if th.TakenOver != want {
+			t.Fatalf("after message %d: TakenOver %v, want %v", i+1, th.TakenOver, want)
+		}
+	}
+}

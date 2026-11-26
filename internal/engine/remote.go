@@ -75,8 +75,11 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 			r.Pending = append(slices.Clip(r.Pending), b.Request)
 			if !r.Silent {
 				p := RemoteReport{Key: b.Request, Run: b.Run, Kind: api.ReportBlocked, Ask: b.Body}
-				if b.Kind == api.KindQuestion {
+				switch b.Kind {
+				case api.KindQuestion:
 					p.Question = b.Request
+				case api.KindApproval:
+					p.Approval = b.Request
 				}
 				add(p)
 			}

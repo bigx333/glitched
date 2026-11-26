@@ -66,6 +66,9 @@ type credentialsResult struct {
 // credentials asks the user for the values the call names, for the
 // origin's turn, and returns where they are once given.
 func (t *Tools) credentials(ctx context.Context, raw json.RawMessage, toolUse string) (credentialsResult, error) {
+	if t.isChild(ctx) {
+		return credentialsResult{}, errors.New(requestCredentials + ": this thread is a child, which never asks the user for secrets itself. Report the names of the secrets you need and why to your parent as you end your turn; it vets the request, asks the user, and passes you the env script or file paths")
+	}
 	if t.Secrets == nil {
 		return credentialsResult{}, errors.New(requestCredentials + ": this engine keeps no credentials")
 	}

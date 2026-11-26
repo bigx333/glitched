@@ -51,14 +51,14 @@ func TestFollowReportsAsALocalChildDoes(t *testing.T) {
 	want := []engine.RemoteReport{
 		{Key: done, Run: done, Kind: api.ReportDone},
 		{Key: question, Run: asks, Kind: api.ReportBlocked, Ask: body, Question: question},
-		{Key: approval, Run: asks, Kind: api.ReportBlocked, Ask: json.RawMessage(`{"command":"ls"}`)},
+		{Key: approval, Run: asks, Kind: api.ReportBlocked, Ask: json.RawMessage(`{"command":"ls"}`), Approval: approval},
 		{Key: asks, Run: asks, Kind: api.ReportFailed, Error: "it broke"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("reports %+v; want %+v", got, want)
 	}
 	for i := range want {
-		if got[i].Key != want[i].Key || got[i].Run != want[i].Run || got[i].Kind != want[i].Kind || got[i].Error != want[i].Error || got[i].Question != want[i].Question || string(got[i].Ask) != string(want[i].Ask) {
+		if got[i].Key != want[i].Key || got[i].Run != want[i].Run || got[i].Kind != want[i].Kind || got[i].Error != want[i].Error || got[i].Question != want[i].Question || got[i].Approval != want[i].Approval || string(got[i].Ask) != string(want[i].Ask) {
 			t.Fatalf("report %d: %+v; want %+v", i, got[i], want[i])
 		}
 	}

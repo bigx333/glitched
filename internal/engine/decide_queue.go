@@ -82,14 +82,17 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 	if err := d.emit(q); err != nil {
 		return err
 	}
+	// The user writing to a quiet wake, whatever the mode, is watching it.
+	if live := d.t.Live(); live != nil && d.by.IsZero() && !m.Auto {
+		if err := d.raise(*live); err != nil {
+			return err
+		}
+	}
 	live := d.t.Live()
 	switch {
 	case m.Mode == api.StartNow && live == nil:
 		return d.admit(id, d.t.UpdatedAt)
 	case m.Mode == api.SteerActive && live != nil && steerable[live.State]:
-		if err := d.raise(*live); err != nil {
-			return err
-		}
 		if err := d.emit(api.MessageClaimed{Message: id, Run: live.ID}); err != nil {
 			return err
 		}
@@ -180,7 +183,7 @@ func (d *decision) admit(message api.ID, prior time.Time) error {
 	gen := d.t.Generation + 1
 	admitted := api.TurnAdmitted{Run: message, Generation: gen}
 	if m.waking() {
-		admitted.Wake, admitted.Prior = api.WakeReport, prior
+		admitted.Wake, admitted.Prior, admitted.Quiet = api.WakeReport, prior, d.t.Role == api.RoleManager
 	}
 	if err := d.emit(admitted); err != nil {
 		return err
@@ -681,6 +684,25 @@ func (d *decision) dismissWake(b api.WakeDismiss) error {
 		e.UpdatedAt = kept
 	}
 	return d.emit(e)
+}
+
+// raiseWake is a Manager raising its live wake, which is quiet, for the
+// user to see: what it found needs them.
+func (d *decision) raiseWake(b api.WakeRaise) error {
+	if d.t.Role != api.RoleManager || d.t.child() {
+		return rejected("only a Manager thread raises its wakes")
+	}
+	live := d.t.Live()
+	if live == nil {
+		return rejected("no live run to raise")
+	}
+	if !b.Run.IsZero() && b.Run != live.ID {
+		return rejected("that run is no longer live")
+	}
+	if live.Wake == api.NotWake {
+		return nil
+	}
+	return d.emit(api.WakeRaised{Run: live.ID, Reason: strings.TrimSpace(b.Reason)})
 }
 
 // runSweep starts a sweep the user asked for now, under the command's ID,

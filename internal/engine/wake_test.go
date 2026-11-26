@@ -1,6 +1,7 @@
 package engine_test
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -161,5 +162,37 @@ func TestAReplayedReportWakesOnce(t *testing.T) {
 	p.see(engine.Started{Run: s.Run})
 	if s, ok := started(p.see(engine.Ended{Run: s.Run, Outcome: api.OutcomeCompleted})); ok {
 		t.Errorf("the wake's turn ended and started %+v", s)
+	}
+}
+
+// A child's approval wakes its parent, a wake for each request apart from
+// its run's: the parent's agent learns which child waits on what, and that
+// only the user grants it. A replayed report wakes nothing more.
+func TestAnApprovalWakesTheParent(t *testing.T) {
+	p := newThread(t)
+	child, run := api.NewID(), api.NewID()
+	approval := func(id api.ID, outcome string) engine.Reported {
+		return engine.Reported{Report: api.ChildReported{Child: child, Run: run, Kind: api.ReportBlocked, Title: "Deploy it", Outcome: outcome},
+			Approval: id, Ask: json.RawMessage(`{"operation":"run","command":"kubectl apply -f prod.yaml"}`)}
+	}
+	first, second := api.NewID(), api.NewID()
+	s, ok := started(p.see(approval(first, "Wants to run kubectl apply -f prod.yaml")))
+	for _, want := range []string{`<task id="` + child.String() + `"`, `state="waiting_on_approval"`, `request="` + first.String() + `"`, "Wants to run kubectl apply -f prod.yaml", "task_answer refuses approvals", "task_cancel"} {
+		if !ok || !strings.Contains(s.Text, want) {
+			t.Fatalf("the approval's wake: %+v, %v; want its text to hold %q", s, ok, want)
+		}
+	}
+	p.see(engine.Ended{Run: s.Run, Outcome: api.OutcomeCompleted})
+	if s, ok := started(p.see(approval(first, ""))); ok {
+		t.Fatalf("a replayed approval started %+v", s)
+	}
+	s, ok = started(p.see(approval(second, "")))
+	if !ok || !strings.Contains(s.Text, `request="`+second.String()+`"`) || !strings.Contains(s.Text, "Wants to run kubectl apply -f prod.yaml") {
+		t.Fatalf("the run's second approval, its outcome unsaid: %+v, %v; want its own wake, from its body", s, ok)
+	}
+	p.see(engine.Ended{Run: s.Run, Outcome: api.OutcomeCompleted})
+	done := engine.Reported{Report: api.ChildReported{Child: child, Run: run, Kind: api.ReportDone, Title: "Deploy it", Outcome: "Deployed."}}
+	if s, ok := started(p.see(done)); !ok || !strings.Contains(s.Text, "Deployed.") {
+		t.Fatalf("the run's done report after its approvals: %+v, %v; want its own wake", s, ok)
 	}
 }

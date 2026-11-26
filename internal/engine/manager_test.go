@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -158,11 +159,6 @@ func (m *mgr) report(kind api.ReportKind) api.ChildReported {
 	return r
 }
 
-func (m *mgr) dismiss() {
-	m.t.Helper()
-	m.must(api.WakeDismiss{Run: m.th.Live().ID})
-}
-
 func (m *mgr) end() {
 	m.t.Helper()
 	m.observe(Ended{Run: m.th.Live().ID, Outcome: api.OutcomeCompleted})
@@ -177,25 +173,189 @@ func emitted[B api.EventBody](evs []Event) bool {
 	return false
 }
 
-func TestADismissedSweepLeavesTheThreadAsItWas(t *testing.T) {
+// quiet is whether the Manager's live run shows as a quiet wake.
+func (m *mgr) quiet() bool {
+	v := View(m.th)
+	return v.Turn != nil && v.Turn.Silent && v.Turn.Dismissed
+}
+
+func TestASweepIsQuietUntilRaised(t *testing.T) {
 	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
 	before := m.th.UpdatedAt
 	m.sweep()
-	if !m.th.UpdatedAt.After(before) {
-		t.Fatalf("a live sweep shows as new activity: UpdatedAt %v, was %v", m.th.UpdatedAt, before)
+	if !m.quiet() || !m.th.UpdatedAt.Equal(before) {
+		t.Fatalf("a live sweep: turn %+v, UpdatedAt %v; want quiet, %v", View(m.th).Turn, m.th.UpdatedAt, before)
 	}
-	m.dismiss()
 	m.observe(Work{Item: api.WorkItem{Run: m.th.Live().ID, Item: "tool-1", Kind: "tool"}})
 	m.end()
 	if !m.th.UpdatedAt.Equal(before) {
-		t.Fatalf("UpdatedAt after a dismissed sweep = %v, want %v", m.th.UpdatedAt, before)
+		t.Fatalf("UpdatedAt after a quiet sweep = %v, want %v", m.th.UpdatedAt, before)
 	}
 	v := View(m.th)
 	if v.LastTurn != nil || v.Live() {
-		t.Fatalf("a dismissed sweep left LastTurn %+v, run %v", v.LastTurn, v.Run)
+		t.Fatalf("a quiet sweep left LastTurn %+v, run %v", v.LastTurn, v.Run)
 	}
 	if !m.th.LastSweep.Equal(m.th.Runs[0].Woke) {
 		t.Fatalf("LastSweep %v, want the sweep's admission %v", m.th.LastSweep, m.th.Runs[0].Woke)
+	}
+}
+
+// A worker's report to a Manager, and the wake it starts, move nothing:
+// the Manager vets it quietly. A plain thread's report wake is the user's.
+func TestAReportWakeIsQuietOnlyOnAManager(t *testing.T) {
+	m := newManager(t, nil)
+	before := m.th.UpdatedAt
+	r := m.report(api.ReportDone)
+	if live := m.th.Live(); live == nil || live.Wake != api.WakeReport || !m.quiet() {
+		t.Fatalf("the report's wake = %+v, want a quiet report wake", live)
+	}
+	if !m.th.UpdatedAt.Equal(before) || m.th.Reported.IsZero() || m.th.LastReport == nil || m.th.LastReport.Child != r.Child {
+		t.Fatalf("after the report: UpdatedAt %v (want %v), Reported %v, LastReport %+v", m.th.UpdatedAt, before, m.th.Reported, m.th.LastReport)
+	}
+	m.end()
+	if !m.th.UpdatedAt.Equal(before) || View(m.th).LastTurn != nil {
+		t.Fatalf("a quiet report wake left UpdatedAt %v, LastTurn %+v", m.th.UpdatedAt, View(m.th).LastTurn)
+	}
+
+	p := &mgr{t: t, at: time.Unix(10_000, 0).UTC()}
+	p.must(api.ThreadCreate{Workspace: "/repo", Title: "Plain", Model: api.ModelRef{Provider: "claude", Model: "sonnet"}})
+	before = p.th.UpdatedAt
+	evs, _ := p.observe(Reported{Report: api.ChildReported{Child: api.NewID(), Run: api.NewID(), Kind: api.ReportDone, Title: "worker"}})
+	for _, e := range evs {
+		if a, ok := e.Body.(api.TurnAdmitted); ok && a.Quiet {
+			t.Fatal("a plain thread's report wake was admitted quiet")
+		}
+	}
+	if p.th.Live() == nil || !p.th.UpdatedAt.After(before) || View(p.th).Turn.Silent {
+		t.Fatalf("a plain thread's report wake: run %+v, UpdatedAt %v; want it the user's", p.th.Live(), p.th.UpdatedAt)
+	}
+}
+
+func TestAManagerRaisesItsWake(t *testing.T) {
+	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
+	run := m.sweep()
+	evs := m.must(api.WakeRaise{Reason: "  a worker needs a key  "})
+	if len(evs) != 1 || evs[0].Body != (api.WakeRaised{Run: run, Reason: "a worker needs a key"}) {
+		t.Fatalf("WakeRaise emitted %v, want one WakeRaised with the trimmed reason", evs)
+	}
+	if m.quiet() || !m.th.UpdatedAt.Equal(m.at) {
+		t.Fatalf("a raised wake: turn %+v, UpdatedAt %v; want the user's, %v", View(m.th).Turn, m.th.UpdatedAt, m.at)
+	}
+	if evs := m.must(api.WakeRaise{Run: run}); len(evs) != 0 {
+		t.Fatalf("raising a raised wake emitted %v, want nothing", evs)
+	}
+	m.end()
+	if v := View(m.th); v.LastTurn == nil || v.LastTurn.Run != run || !m.th.UpdatedAt.Equal(m.at) {
+		t.Fatalf("a raised wake's end: LastTurn %+v, UpdatedAt %v", v.LastTurn, m.th.UpdatedAt)
+	}
+
+	u := newManager(t, nil)
+	u.must(api.MessageDispatch{Text: "go", Mode: api.StartNow})
+	if evs := u.must(api.WakeRaise{}); len(evs) != 0 {
+		t.Fatalf("raising the user's own turn emitted %v, want nothing", evs)
+	}
+}
+
+func TestAWakeRaiseIsRefused(t *testing.T) {
+	model := api.ModelRef{Provider: "claude", Model: "sonnet"}
+	refused := func(t *testing.T, m *mgr, b api.WakeRaise) {
+		t.Helper()
+		if evs, err := m.submit(b); !errors.As(err, new(*api.RejectedError)) || len(evs) != 0 {
+			t.Fatalf("WakeRaise = %v, %v; want RejectedError", evs, err)
+		}
+	}
+	t.Run("plain", func(t *testing.T) {
+		m := &mgr{t: t, at: time.Unix(10_000, 0).UTC()}
+		m.must(api.ThreadCreate{Workspace: "/repo", Title: "Plain", Model: model, Text: "work"})
+		refused(t, m, api.WakeRaise{})
+	})
+	t.Run("child", func(t *testing.T) {
+		m := &mgr{t: t, at: time.Unix(10_000, 0).UTC()}
+		m.must(api.ThreadCreate{Workspace: "/repo", Title: "Worker", Model: model, Parent: api.NewID(), Run: api.NewID(), Text: "work"})
+		m.th.Role = api.RoleManager
+		refused(t, m, api.WakeRaise{})
+	})
+	t.Run("idle", func(t *testing.T) {
+		refused(t, newManager(t, nil), api.WakeRaise{})
+	})
+	t.Run("another run", func(t *testing.T) {
+		m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
+		m.sweep()
+		refused(t, m, api.WakeRaise{Run: api.NewID()})
+	})
+}
+
+// What needs the user raises a quiet wake: a request of its own, the
+// user's message, whatever its mode, and a failure. Ending as it should
+// does not.
+func TestAQuietWakeIsRaisedByWhatNeedsTheUser(t *testing.T) {
+	raised := func(t *testing.T, m *mgr, evs []Event) {
+		t.Helper()
+		if !emitted[api.WakeRaised](evs) {
+			t.Fatalf("emitted %v, want WakeRaised", evs)
+		}
+	}
+	for _, kind := range []string{api.KindApproval, api.KindQuestion, api.KindCredentials} {
+		t.Run("a "+kind, func(t *testing.T) {
+			m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
+			run := m.sweep()
+			evs, _ := m.observe(Surfaced{Run: run, Request: api.NewID(), Dedup: kind, Kind: kind, Body: []byte(`{}`)})
+			raised(t, m, evs)
+			if m.quiet() || !m.th.UpdatedAt.Equal(m.at) {
+				t.Fatalf("after a %s: turn %+v, UpdatedAt %v", kind, View(m.th).Turn, m.th.UpdatedAt)
+			}
+		})
+	}
+	for _, mode := range []api.DispatchMode{api.StartNow, api.AfterActive, api.SteerActive, api.Defer, api.RestartActive} {
+		t.Run(fmt.Sprint("the user's message, mode ", mode), func(t *testing.T) {
+			m := newManager(t, nil)
+			m.report(api.ReportDone)
+			raised(t, m, m.must(api.MessageDispatch{Text: "and this", Mode: mode}))
+		})
+	}
+	t.Run("a failure", func(t *testing.T) {
+		m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
+		run := m.sweep()
+		evs, _ := m.observe(Ended{Run: run, Outcome: api.OutcomeFailed, Error: "boom"})
+		raised(t, m, evs)
+		if i := slices.IndexFunc(evs, func(e Event) bool { _, ok := e.Body.(api.TurnEnded); return ok }); i < 0 || !emitted[api.WakeRaised](evs[:i]) {
+			t.Fatalf("emitted %v, want WakeRaised before TurnEnded", evs)
+		}
+		if v := View(m.th); v.LastTurn == nil || v.LastTurn.Run != run || v.LastTurn.Outcome != api.OutcomeFailed || !m.th.UpdatedAt.Equal(m.at) {
+			t.Fatalf("a failed wake: LastTurn %+v, UpdatedAt %v", v.LastTurn, m.th.UpdatedAt)
+		}
+	})
+	t.Run("a completion", func(t *testing.T) {
+		m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
+		run := m.sweep()
+		if evs, _ := m.observe(Ended{Run: run, Outcome: api.OutcomeCompleted}); emitted[api.WakeRaised](evs) {
+			t.Fatalf("a completed wake was raised: %v", evs)
+		}
+	})
+}
+
+// A log an older engine wrote, whose wakes were admitted loud and then
+// dismissed, replays as it did.
+func TestALegacyDismissedWakeReplays(t *testing.T) {
+	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
+	before, run := m.th.UpdatedAt, api.NewID()
+	at := before.Add(time.Minute)
+	for _, b := range []api.EventBody{
+		api.MessageQueued{Message: run, Text: "sweep", Mode: api.StartNow, Auto: true},
+		api.TurnAdmitted{Run: run, Generation: 1, Wake: api.WakeSweep, Prior: before},
+	} {
+		m.th = Apply(m.th, Event{At: at, Body: b})
+	}
+	if m.quiet() || !m.th.UpdatedAt.Equal(at) {
+		t.Fatalf("a legacy wake: turn %+v, UpdatedAt %v; want it loud", View(m.th).Turn, m.th.UpdatedAt)
+	}
+	evs := m.must(api.WakeDismiss{Run: run})
+	if len(evs) != 1 || !emitted[api.WakeDismissed](evs) || !m.quiet() || !m.th.UpdatedAt.Equal(before) {
+		t.Fatalf("dismissing a legacy wake: %v, turn %+v, UpdatedAt %v", evs, View(m.th).Turn, m.th.UpdatedAt)
+	}
+	m.th = Apply(m.th, Event{At: at.Add(time.Minute), Body: api.WakeRaised{Run: run}})
+	if m.quiet() || m.th.Live().Wake != api.NotWake {
+		t.Fatalf("raising a legacy dismissed wake left %+v", m.th.Live())
 	}
 }
 
@@ -234,18 +394,17 @@ func TestOnlyAManagersWakeIsDismissed(t *testing.T) {
 	})
 }
 
-func TestADismissedWakeKeepsWorkingAndAsksTheUser(t *testing.T) {
+func TestAQuietWakeKeepsWorkingAndAsksTheUser(t *testing.T) {
 	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
 	before := m.th.UpdatedAt
 	run := m.sweep()
-	m.dismiss()
 	worker := Thread{ID: api.NewID(), Parent: m.th.ID}
 	if err := CheckCaller([]Thread{worker, m.th}, api.Caller{Thread: m.th.ID, Run: run}, false); err != nil {
-		t.Fatalf("CheckCaller after a dismissal: %v", err)
+		t.Fatalf("CheckCaller in a quiet wake: %v", err)
 	}
 	evs, effs := m.observe(Surfaced{Run: run, Request: api.NewID(), Dedup: "edit", Kind: api.KindApproval, Body: []byte(`{"tool":"Edit"}`)})
 	if emitted[api.TurnStopping](evs) || len(effs) != 0 {
-		t.Fatalf("a dismissed wake's request stopped it: %v, %v", evs, effs)
+		t.Fatalf("a quiet wake's request stopped it: %v, %v", evs, effs)
 	}
 	v := View(m.th)
 	if len(v.Requests) != 1 || v.Turn == nil || v.Turn.Silent || !m.th.UpdatedAt.After(before) {
@@ -256,61 +415,13 @@ func TestADismissedWakeKeepsWorkingAndAsksTheUser(t *testing.T) {
 	}
 }
 
-func TestARestartDuringADismissedWakeLeavesItUncertain(t *testing.T) {
+func TestARestartDuringAQuietWakeLeavesItUncertain(t *testing.T) {
 	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
 	run := m.sweep()
-	m.dismiss()
 	evs, _ := m.observe(Reconciled{Run: run})
 	if !emitted[api.TurnUncertain](evs) || emitted[api.TurnEnded](evs) {
-		t.Fatalf("a restart during a dismissed wake: %v, want it uncertain", evs)
+		t.Fatalf("a restart during a quiet wake: %v, want it uncertain", evs)
 	}
-}
-
-func TestDismissingAWakeKeepsTheReportsItDidNotTake(t *testing.T) {
-	t.Run("sweep", func(t *testing.T) {
-		m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
-		m.report(api.ReportBlocked)
-		alerted := m.th.Reported
-		m.sweep()
-		m.report(api.ReportDone)
-		reported := m.th.Reported
-		m.dismiss()
-		if !m.th.Reported.Equal(reported) || reported.Equal(alerted) {
-			t.Fatalf("a dismissed sweep moved Reported to %v, want %v", m.th.Reported, reported)
-		}
-	})
-	t.Run("report after a blocked one", func(t *testing.T) {
-		m := newManager(t, nil)
-		m.report(api.ReportBlocked)
-		alerted := m.th.Reported
-		m.report(api.ReportDone)
-		if m.th.Live() == nil || m.th.Live().Wake != api.WakeReport {
-			t.Fatal("the report started no wake")
-		}
-		m.dismiss()
-		if !m.th.Reported.Equal(alerted) {
-			t.Fatalf("Reported after the wake's dismissal = %v, want the blocked report's %v", m.th.Reported, alerted)
-		}
-	})
-	t.Run("report alone", func(t *testing.T) {
-		m := newManager(t, nil)
-		m.report(api.ReportDone)
-		m.dismiss()
-		m.end()
-		if !m.th.Reported.IsZero() || View(m.th).LastTurn != nil {
-			t.Fatalf("a dismissed report's wake left Reported %v, LastTurn %+v", m.th.Reported, View(m.th).LastTurn)
-		}
-	})
-	t.Run("newer report", func(t *testing.T) {
-		m := newManager(t, nil)
-		m.report(api.ReportDone)
-		m.report(api.ReportDone)
-		reported := m.th.Reported
-		m.dismiss()
-		if !m.th.Reported.Equal(reported) {
-			t.Fatalf("a dismissal erased a newer report: Reported %v, want %v", m.th.Reported, reported)
-		}
-	})
 }
 
 func TestASweepWaitsForALimitsContinue(t *testing.T) {
@@ -332,34 +443,37 @@ func TestASweepWaitsForALimitsContinue(t *testing.T) {
 	}
 }
 
-func TestALimitADismissedSweepHitHoldsTheNextSweepUntilItResets(t *testing.T) {
+// A quiet sweep a usage limit ended is raised, as any failure: the user's
+// turn now, which the next sweep waits behind until its continue is due.
+func TestALimitAQuietSweepHitRaisesItAndHoldsTheNextSweep(t *testing.T) {
 	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
 	run := m.sweep()
-	m.dismiss()
 	resets := m.at.Add(time.Hour)
-	m.observe(Ended{Run: run, Outcome: api.OutcomeFailed, Limit: &api.UsageLimit{Resets: resets}})
-	if at, ok := NextSweepAt(m.th, m.at); !ok || !at.Equal(resets) {
-		t.Fatalf("the next sweep is due at %v (%v), want when the limit resets, %v", at, ok, resets)
+	evs, _ := m.observe(Ended{Run: run, Outcome: api.OutcomeFailed, Limit: &api.UsageLimit{Resets: resets}})
+	if !emitted[api.WakeRaised](evs) {
+		t.Fatalf("a limit's end of a quiet sweep: %v, want it raised", evs)
 	}
-	for _, now := range []time.Time{m.at.Add(time.Minute), resets.Add(-time.Second)} {
+	if v := View(m.th); v.LastTurn == nil || v.LastTurn.Limit == nil {
+		t.Fatalf("LastTurn = %+v, want the sweep the limit ended", v.LastTurn)
+	}
+	for _, now := range []time.Time{m.at.Add(time.Minute), resets.Add(time.Second)} {
 		if _, _, err := Observe(m.th, SweepDue{Run: api.NewID()}, now); !errors.Is(err, ErrRefused) {
-			t.Fatalf("a sweep at %v, before the limit resets at %v = %v, want ErrRefused", now, resets, err)
+			t.Fatalf("a sweep at %v, before the limit's continue is overdue = %v, want ErrRefused", now, err)
 		}
-	}
-	if _, _, err := Observe(m.th, SweepDue{Run: api.NewID()}, resets); err != nil {
-		t.Fatalf("a sweep once the limit reset: %v", err)
 	}
 }
 
-func TestADismissedSweepKeepsAReportThatCameInIt(t *testing.T) {
+// A worker's report during a quiet sweep moves nothing either; the
+// Manager still knows when it came, and that it was blocked.
+func TestAReportDuringAQuietSweepMovesNothing(t *testing.T) {
 	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
+	before := m.th.UpdatedAt
 	m.sweep()
 	m.report(api.ReportBlocked)
-	blocked := m.th.UpdatedAt
-	m.dismiss()
+	blocked := m.at
 	m.end()
-	if !m.th.UpdatedAt.Equal(blocked) || !m.th.Reported.Equal(blocked) {
-		t.Fatalf("after the dismissal UpdatedAt %v, Reported %v, want the blocked report's %v", m.th.UpdatedAt, m.th.Reported, blocked)
+	if !m.th.UpdatedAt.Equal(before) || !m.th.Reported.Equal(blocked) || !m.th.Alerted.Equal(blocked) {
+		t.Fatalf("after the sweep UpdatedAt %v, Reported %v, Alerted %v; want %v, then the report's %v", m.th.UpdatedAt, m.th.Reported, m.th.Alerted, before, blocked)
 	}
 }
 
@@ -467,10 +581,9 @@ func TestARunSweepStartsASweepWake(t *testing.T) {
 			if st, ok := effs[0].(StartTurn); !ok || st.Run != id || st.Text != c.want {
 				t.Fatalf("effect = %+v, want StartTurn of %q", effs[0], c.want)
 			}
-			m.dismiss()
 			m.end()
 			if !m.th.UpdatedAt.Equal(before) || View(m.th).LastTurn != nil {
-				t.Fatalf("a dismissed sweep left UpdatedAt %v (was %v), LastTurn %+v", m.th.UpdatedAt, before, View(m.th).LastTurn)
+				t.Fatalf("a quiet sweep left UpdatedAt %v (was %v), LastTurn %+v", m.th.UpdatedAt, before, View(m.th).LastTurn)
 			}
 		})
 	}

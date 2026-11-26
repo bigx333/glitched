@@ -203,16 +203,7 @@ func TestR2IdleStopRealReport(t *testing.T) {
 	p.adB.Spawns(p.b.Endpoint(), "do it there", fake.Child{Title: "local nested", Task: "go"})
 	k := p.place("report parent")
 	b := p.bound(k).Thread
-	var grand api.Thread
-	until(t, "origin thread finished and grandchild awaiting approval", func() bool {
-		for _, v := range p.there() {
-			if v.Parent == b && v.Run == api.RunWaiting && len(v.Requests) == 1 {
-				grand = v
-				return p.onB(b).Live() == nil
-			}
-		}
-		return false
-	})
+	grand := waitingGrandchild(t, p, b)
 	allowChildren(t, p.dirB, api.AccessAsk)
 	r := grand.Requests[0]
 	_, err := p.b.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: grand.ID, Body: api.RequestRespond{Request: r.ID, Generation: r.Generation, Answer: []byte(`{"allow":true}`)}})
@@ -220,11 +211,12 @@ func TestR2IdleStopRealReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	until(t, "B holding child's completion report", func() bool { v := engine.View(p.onB(b)); return v.Run == api.RunIdle && v.Queued == 1 })
+	admitted := p.count(b, "turn.admitted")
 	p.submitA(k, api.TurnInterrupt{Tree: true})
 	waitStopDone(t, p, k)
 	p.submitA(k, api.ThreadConfigure{Access: new(api.AccessAsk)})
 	until(t, "B accepted narrowing", func() bool { return p.onB(b).Access == api.AccessAsk })
-	if n := p.count(b, "turn.admitted"); n != 1 {
+	if n := p.count(b, "turn.admitted"); n != admitted {
 		t.Fatalf("B reported a real local child's completed turn, acknowledged tree stop, then admitted that wake on narrowing alone; admissions=%d", n)
 	}
 }

@@ -33,6 +33,7 @@ func placed(t *testing.T, ep api.Endpoint, ad *fake.Adapter, parent api.ID, kids
 	ad.Spawns(ep, text, kids...)
 	run := submit(t, ep, parent, dispatch(text, api.AfterActive)).Command
 	until(t, ep, parent, "the spawning turn", func(th api.Thread) bool {
+		allow(ep, th)
 		return th.Run == api.RunIdle && th.Queued == 0 && ended(t, ep, parent, run)
 	})
 	ids, errs := make([]api.ID, len(kids)), make([]error, len(kids))
@@ -145,6 +146,12 @@ func TestAPlaceholderTakesAPlaceAtWork(t *testing.T) {
 		until(t, n.h, id, "a local child at work", waiting)
 	}
 	refusedWith(t, "a sixth child", errs[5], "5 child threads of this thread are at work")
+	// Each local child's approval wakes the parent, whose wakes must be
+	// done for the next spawn's turn to be its own.
+	until(t, n.h, parent, "the parent's wakes on its children's approvals", func(th api.Thread) bool {
+		allow(n.h, th)
+		return count(events(t, n.h, parent), "child.reported") >= 4 && th.Run == api.RunIdle && th.Queued == 0
+	})
 
 	submit(t, n.h, ids[0], api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
 	_, errs = placed(t, n.h, ad, parent, fake.Child{Title: "sixth again", Task: "go"})

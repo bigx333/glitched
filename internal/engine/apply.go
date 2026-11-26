@@ -196,8 +196,12 @@ func apply(t Thread, e Event) (Thread, error) {
 		t.Runs = slices.Clone(t.Runs)
 		t.Runs[i].Wake, t.Runs[i].Dismissed = api.NotWake, false
 	case api.SweepStarted:
+		silent = t.quietRun(b.Run)
 		t.LastSweep = e.At
 	case api.ChildReported:
+		// A Manager vets its workers' reports in a quiet wake: one moves
+		// it only once the Manager raises what it found.
+		silent = t.Role == api.RoleManager
 		t.Reported = e.At
 		if b.Kind == api.ReportBlocked {
 			t.Alerted = e.At
@@ -209,6 +213,9 @@ func apply(t Thread, e Event) (Thread, error) {
 		}
 		t.Deleted = true
 	case api.StopAsked:
+		if t.child() {
+			t.TakenOver = b.By.IsZero()
+		}
 		// A stop asked of a run that had ended takes at once: the run
 		// is a stopped one, whose wakes wait.
 		if i := t.runAt(b.Run); i >= 0 && t.Runs[i].State == RunFinished {
@@ -216,7 +223,14 @@ func apply(t Thread, e Event) (Thread, error) {
 			t.Runs[i].Signalled = true
 		}
 	case api.MessageQueued:
-		silent = b.Silent
+		// A child's last message or stop says whose it is: the user's
+		// takes it over, and its parent's agent's gives it back. A link's
+		// thread's first message is its create's, whoever sent it.
+		first := t.Origin != nil && len(t.Queue) == 0 && b.By.IsZero()
+		if t.child() && b.Report.IsZero() && !b.Silent && !first {
+			t.TakenOver = b.By.IsZero()
+		}
+		silent = b.Silent || t.Role == api.RoleManager && (!b.Report.IsZero() || b.Sweep)
 		state := QueueReady
 		if b.Held {
 			state = QueueHeld
@@ -277,8 +291,8 @@ func apply(t Thread, e Event) (Thread, error) {
 		if err = t.claim(b.Run, b.Run); err != nil {
 			break
 		}
-		silent = b.Silent
-		r := Run{ID: b.Run, Generation: b.Generation, Model: t.Model, Access: t.Access, Silent: b.Silent, State: RunStarting, Wake: b.Wake}
+		silent = b.Silent || b.Quiet
+		r := Run{ID: b.Run, Generation: b.Generation, Model: t.Model, Access: t.Access, Silent: b.Silent, State: RunStarting, Wake: b.Wake, Dismissed: b.Quiet}
 		if b.Wake != api.NotWake {
 			r.Woke, r.Prior = e.At, b.Prior
 		}

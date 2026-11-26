@@ -733,6 +733,27 @@ func TestAReportIsNews(t *testing.T) {
 	}
 }
 
+// A worker's report to a Manager is no news: the Manager vets it in a quiet
+// wake. A wake it raised ends as a turn of the user's does, which is.
+func TestAReportToAManagerIsNoNews(t *testing.T) {
+	m, _ := manager(t, stateDir(t))
+	th := &Thread{View: api.Thread{ID: api.NewID(), Role: api.RoleManager, LastTurn: &api.TurnResult{Ended: at(1)}}}
+	m.MarkRead(th)
+	th.View.Reported = at(2)
+	if m.Unread(th) {
+		t.Fatal("a worker's report made the Manager unread")
+	}
+	th.View.LastTurn = &api.TurnResult{Ended: at(3)}
+	if !m.Unread(th) {
+		t.Fatal("a raised wake's end left the Manager read")
+	}
+	th.Transcript = &Transcript{Ended: at(1), Reported: at(4)}
+	m.MarkShown(th)
+	if !m.Unread(th) {
+		t.Error("a report shown read the raised wake the transcript has not shown")
+	}
+}
+
 // A wake the engine queued with a child's report shows on that report, not
 // as the user's message: waiting, then sent with its own turn or with the
 // user's, or lost with a run that never started.

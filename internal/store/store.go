@@ -195,6 +195,7 @@ CREATE TABLE threads (
 	sweep       TEXT,
 	last_sweep  INTEGER,
 	alerted     INTEGER,
+	taken_over  INTEGER NOT NULL DEFAULT 0 CHECK (taken_over IN (0, 1)),
 	CHECK ((disposition = 1) = (until IS NOT NULL))
 ) STRICT;
 CREATE INDEX threads_live_updated ON threads (deleted, updated_at DESC, id);
@@ -268,7 +269,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 22
+const schemaVersion = 23
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -429,6 +430,22 @@ UPDATE threads SET disposition = 0, until = NULL WHERE role = 'manager' AND disp
 `,
 	// Full-text search over the transcript: backfillTranscriptFTS fills it.
 	21: transcriptFTS,
+	// Whether the user took a child over, as steeredByUser reads the log:
+	// its last message or stop was theirs.
+	22: `
+ALTER TABLE threads ADD COLUMN taken_over INTEGER NOT NULL DEFAULT 0 CHECK (taken_over IN (0, 1));
+UPDATE threads SET taken_over = COALESCE((
+	SELECT CASE WHEN json_extract(CAST(e.payload AS TEXT), '$.by') IS NULL THEN 1 ELSE 0 END
+	FROM events e
+	WHERE e.thread = threads.id
+		AND (e.type = 'stop.asked' OR e.type = 'message.queued'
+			AND json_extract(CAST(e.payload AS TEXT), '$.report') IS NULL
+			AND json_extract(CAST(e.payload AS TEXT), '$.silent') IS NULL
+			AND NOT (threads.origin IS NOT NULL AND e.seq = (SELECT MIN(seq) FROM events WHERE thread = threads.id AND type = 'message.queued')))
+	ORDER BY e.seq DESC LIMIT 1
+), 0)
+WHERE parent IS NOT NULL OR origin IS NOT NULL;
+`,
 }
 
 func (s *Store) migrate() error {

@@ -96,7 +96,7 @@ func handle(ctx context.Context, tools *Tools, m message) reply {
 			"protocolVersion": version,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]any{"name": "glitched", "version": "1"},
-			"instructions":    instructionsFor(tools.Origin.Role),
+			"instructions":    instructionsFor(tools.Origin.Role, tools.isChild(ctx)),
 		}
 	case "ping":
 		r.Result = struct{}{}
@@ -145,8 +145,8 @@ func handle(ctx context.Context, tools *Tools, m message) reply {
 			r.Result = map[string]any{"content": []any{text(string(b))}, "structuredContent": v, "isError": false}
 			return r
 		}
-		if p.Name == dismissWake {
-			v, err := tools.dismiss(ctx, p.Arguments)
+		if p.Name == notifyUser {
+			v, err := tools.notify(ctx, p.Arguments)
 			if err != nil {
 				r.Result = map[string]any{"content": []any{text(err.Error())}, "isError": true}
 				return r

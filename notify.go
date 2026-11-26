@@ -17,7 +17,7 @@ import (
 // Notifications setting on, and an app MyGo packaged (mygo dev and mygo
 // build), as notifications do on macOS. It runs on the main thread.
 func (a *app) notifyFinished(t thread) {
-	if !a.settings.notifications || a.notify == nil || a.watching(t) {
+	if !t.View.UserOwned() || !a.settings.notifications || a.notify == nil || a.watching(t) {
 		return
 	}
 	body := "Done. Your turn."
@@ -43,37 +43,24 @@ func (a *app) watching(t thread) bool {
 	return a.selected == t.id() && a.win != nil && a.win.IsFocused()
 }
 
-// notifyAsked tells the user, as notifyFinished does, that child waits on
-// them for a request: that ends no turn, so nothing else tells of it. A
-// child of a parent is told of on the parent, where its report is, as
-// Needs you; a thread of the user's, a zero parent, on itself, with what
-// it asks. Clicking it opens that thread. None is one they're watching.
-func (a *app) notifyAsked(e *client.Env, parent, child api.ID) {
-	c := e.Threads[child]
-	if c == nil || !a.settings.notifications || a.notify == nil || a.watching(thread{e, c}) {
+// notifyAsked tells the user, as notifyFinished does, that a thread of
+// theirs, or a child they took over, waits on them for a request: that
+// ends no turn, so nothing else tells of it. It says what the thread asks,
+// and clicking it opens the thread. A child that answers to its parent
+// asks its parent, not the user, and none is one they're watching.
+func (a *app) notifyAsked(e *client.Env, id api.ID) {
+	c := e.Threads[id]
+	if c == nil || !c.View.UserOwned() || !a.settings.notifications || a.notify == nil || a.watching(thread{e, c}) {
 		return
 	}
-	if parent.IsZero() {
-		if n := len(c.View.Requests); n > 0 {
-			a.notify(mygo.NotificationOptions{
-				ID:    "thread:" + child.String(),
-				Title: c.View.Title,
-				Body:  askBody(agentName(thread{e, c}), c.View.Requests[n-1]),
-				Group: "threads",
-			})
-		}
-		return
+	if n := len(c.View.Requests); n > 0 {
+		a.notify(mygo.NotificationOptions{
+			ID:    "thread:" + id.String(),
+			Title: c.View.Title,
+			Body:  askBody(agentName(thread{e, c}), c.View.Requests[n-1]),
+			Group: "threads",
+		})
 	}
-	p := e.Threads[parent]
-	if p == nil || a.watching(thread{e, p}) {
-		return
-	}
-	a.notify(mygo.NotificationOptions{
-		ID:    "thread:" + parent.String(),
-		Title: p.View.Title,
-		Body:  title(thread{e, c}) + ": Needs you",
-		Group: "threads",
-	})
 }
 
 // askBody is what a request asks, in a notification's line, its agent's

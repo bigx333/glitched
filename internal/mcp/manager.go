@@ -8,7 +8,7 @@ import (
 	"glitched/internal/api"
 )
 
-const dismissWake = "dismiss_wake"
+const notifyUser = "notify_user"
 
 const managerInstructions = `
 
@@ -34,8 +34,8 @@ Shared state
 - Steer incomplete, off-scope or unverified work with task_send. Never pass unverified output to the user.
 
 4. Escalation threshold and reporting
-- Wakes from worker reports and scheduled sweeps are quiet by default. Call dismiss_wake before you end the turn unless the user must act.
-- Skip dismiss_wake only for (a) a decision, secret or legitimate approval only the user can give, (b) an unresolved blocker or failure, or (c) a verified deliverable ready for review or merge.
+- Wakes from worker reports and scheduled sweeps are quiet by default: they do not notify the user or mark this thread unread. Stay silent unless the user must act.
+- Call notify_user only for (a) a decision, secret or legitimate approval only the user can give, (b) an unresolved blocker or failure, or (c) a verified deliverable ready for review or merge. A request of your own (approval, question, credentials), a message from the user, or a failed turn reaches the user without notify_user.
 - Never raise a wake for intermediate worker progress, routine steering, a healthy sweep, or WORKERS.md and NOTES.md bookkeeping.
 - Lead every update to the user with the verdict and the action the user must take. Keep it short and leave out bookkeeping.
 
@@ -44,36 +44,61 @@ Shared state
 - Preserve uncommitted changes already in the workspace.
 - Never fabricate test or check results. Never expose or commit secrets.`
 
-func instructionsFor(role api.ThreadRole) string {
-	if role == api.RoleManager {
-		return instructions + managerInstructions
+func instructionsFor(role api.ThreadRole, child bool) string {
+	s := instructions
+	if child {
+		s += childCredentialsInstructions
+	} else {
+		s += credentialsInstructions
 	}
-	return instructions
+	if role == api.RoleManager && !child {
+		s += managerInstructions
+	}
+	return s
 }
 
-var dismissWakeTool = map[string]any{
-	"name":        dismissWake,
-	"description": "Dismiss the current Manager wake so it completes silently without marking the thread unread or notifying the user. Use when a worker report or scheduled sweep requires no user action.",
+var notifyUserTool = map[string]any{
+	"name":        notifyUser,
+	"description": "Raise this quiet Manager turn, which a worker's report or a scheduled sweep started, to the user: it notifies them and marks the thread unread when the turn ends. Use only when something needs the user's attention or action.",
 	"inputSchema": map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"reason": map[string]any{"type": "string", "description": "Optional brief note on why no user attention is needed."},
+			"reason": map[string]any{"type": "string", "description": "A brief note on what needs the user's attention."},
 		},
 		"additionalProperties": false,
 	},
 }
 
 func catalogFor(tools *Tools, ctx context.Context) []map[string]any {
-	list := append(append([]map[string]any{delegateTool(tools.Machines)}, taskCatalog...), credentialsTool)
-	if tools != nil && tools.Origin.Role == api.RoleManager {
-		list = append(list, dismissWakeTool)
+	child := tools.isChild(ctx)
+	list := append([]map[string]any{delegateTool(tools.Machines)}, taskCatalog...)
+	if !child {
+		list = append(list, credentialsTool)
+	}
+	if tools.Origin.Role == api.RoleManager && !child {
+		list = append(list, notifyUserTool)
 	}
 	return append(list, tools.pluginCatalog(ctx)...)
 }
 
-func (t *Tools) dismiss(ctx context.Context, raw json.RawMessage) (any, error) {
-	if t.Origin.Role != api.RoleManager {
-		return nil, errors.New("dismiss_wake is only available to Manager threads")
+// isChild is whether the origin answers to its parent: a child the user
+// hasn't taken over, as the engine has it now, or as it was when the
+// agent started where the engine can't say.
+func (t *Tools) isChild(ctx context.Context) bool {
+	if t == nil {
+		return false
+	}
+	if t.Engine != nil {
+		if snap, err := t.Engine.Read(ctx, api.Query{Thread: t.Origin.Thread}); err == nil && len(snap.Threads) == 1 {
+			return !snap.Threads[0].UserOwned()
+		}
+	}
+	return t.Origin.Child
+}
+
+func (t *Tools) notify(ctx context.Context, raw json.RawMessage) (any, error) {
+	if t.Origin.Role != api.RoleManager || t.isChild(ctx) {
+		return nil, errors.New(notifyUser + " is only available to Manager threads")
 	}
 	var args struct {
 		Reason string `json:"reason"`
@@ -88,20 +113,20 @@ func (t *Tools) dismiss(ctx context.Context, raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	if len(snap.Threads) == 0 || snap.Threads[0].Turn == nil {
-		return nil, errors.New("this thread has no live turn to dismiss")
+		return nil, errors.New("this thread has no live turn to raise")
 	}
 	run := snap.Threads[0].Turn.Run
 	_, err = t.Engine.Submit(ctx, api.Command{
 		ID:     api.NewID(),
 		Target: t.Origin.Thread,
-		Body:   api.WakeDismiss{Run: run, Reason: args.Reason},
+		Body:   api.WakeRaise{Run: run, Reason: args.Reason},
 	})
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{
-		"dismissed": true,
-		"run":       run.String(),
-		"reason":    args.Reason,
+		"notified": true,
+		"run":      run.String(),
+		"reason":   args.Reason,
 	}, nil
 }

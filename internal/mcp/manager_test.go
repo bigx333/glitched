@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -74,103 +75,81 @@ func workingManager(t *testing.T, h *runtime.Host, on, text string, state api.Ru
 	}
 }
 
-func TestDismissWakeExposedOnlyToManagersAndSilencesRun(t *testing.T) {
-	gate := &gated{fake.New(fake.Turn(true)), make(chan struct{})}
-	h := engineOf(t, provider.Mux{"fake": fake.New(fake.Turn(true)), "gated": gate})
-
-	reg := working(t, h)
-	var regBuf bytes.Buffer
-	if err := mcp.Serve(ctx, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`+"\n"), &regBuf, &mcp.Tools{Engine: h, Origin: reg}); err != nil {
+// toolList is the names tools/list gives o.
+func toolList(t *testing.T, h *runtime.Host, o mcp.Origin) string {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := mcp.Serve(ctx, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`+"\n"), &buf, &mcp.Tools{Engine: h, Origin: o}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(regBuf.String(), `"dismiss_wake"`) {
-		t.Fatalf("non-manager tools/list unexpectedly exposed dismiss_wake: %s", regBuf.String())
-	}
-	regReplies := serve(t, h, reg,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"dismiss_wake","arguments":{}}}`,
-	)
-	if !regReplies[2].Result.IsError {
-		t.Fatalf("expected non-manager dismiss_wake call to fail cleanly")
+	return buf.String()
+}
+
+func TestNotifyUserIsATopLevelManagersAndRaisesItsWake(t *testing.T) {
+	gate := &gated{fake.New(fake.Turn(true)), make(chan struct{})}
+	h := engineOf(t, provider.Mux{"fake": fake.New(fake.Turn(true)), "gated": gate})
+	call := func(id int) string {
+		return fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"notify_user","arguments":{"reason":"a worker needs a key"}}}`, id)
 	}
 
+	reg := working(t, h)
+	if l := toolList(t, h, reg); strings.Contains(l, `"notify_user"`) || strings.Contains(l, `"dismiss_wake"`) {
+		t.Fatalf("a plain thread's tools/list: %s; want neither notify_user nor dismiss_wake", l)
+	}
+	if out := serve(t, h, reg, call(2)); !out[2].Result.IsError {
+		t.Fatalf("a plain thread's notify_user succeeded: %+v", out[2].Result)
+	}
 	forged := reg
 	forged.Role = api.RoleManager
-	if out := serve(t, h, forged, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"dismiss_wake","arguments":{}}}`); !out[3].Result.IsError {
-		t.Fatalf("a plain thread's dismiss_wake under a forged role succeeded: %+v", out[3].Result)
-	}
-
-	asked := workingManager(t, h, "fake", "Coordinate", api.RunWaiting)
-	if out := serve(t, h, asked, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"dismiss_wake","arguments":{}}}`); !out[4].Result.IsError {
-		t.Fatalf("dismiss_wake on the user's turn succeeded: %+v", out[4].Result)
+	if out := serve(t, h, forged, call(3)); !out[3].Result.IsError {
+		t.Fatalf("a plain thread's notify_user under a forged role succeeded: %+v", out[3].Result)
 	}
 
 	mgr := workingManager(t, h, "gated", "", api.RunRunning)
-	var mgrBuf bytes.Buffer
-	if err := mcp.Serve(ctx, strings.NewReader(`{"jsonrpc":"2.0","id":9,"method":"tools/list"}`+"\n"), &mgrBuf, &mcp.Tools{Engine: h, Origin: mgr}); err != nil {
-		t.Fatal(err)
+	if l := toolList(t, h, mgr); !strings.Contains(l, `"notify_user"`) || strings.Contains(l, `"dismiss_wake"`) {
+		t.Fatalf("a Manager's tools/list: %s; want notify_user and no dismiss_wake", l)
 	}
-	if !strings.Contains(mgrBuf.String(), `"dismiss_wake"`) {
-		t.Fatalf("manager tools/list missing dismiss_wake: %s", mgrBuf.String())
+	if th := threadOf(t, h, mgr.Thread); th.Turn == nil || !th.Turn.Silent || th.Working() {
+		t.Fatalf("a sweep's turn: %+v; want it quiet", th)
 	}
-	srvOut := serve(t, h, mgr,
-		`{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"dismiss_wake","arguments":{"reason":"all green"}}}`,
-	)
-	if srvOut[10].Result.IsError {
-		t.Fatalf("manager dismiss_wake failed: %+v", srvOut[10].Result)
+	if out := serve(t, h, mgr, delegate(4, `{"task":"Read the project","title":"Worker","client_request_id":"quiet-sweep-child"}`, "")); out[4].Result.IsError {
+		t.Fatalf("delegating from a quiet sweep failed: %+v", out[4].Result)
+	}
+	worker := children(t, h, mgr.Thread)
+	if len(worker) != 1 {
+		t.Fatalf("the quiet sweep's workers = %+v, want the one it delegated", worker)
+	}
+	if l := toolList(t, h, mcp.Origin{Thread: worker[0].ID, Access: mgr.Access, Role: api.RoleManager}); strings.Contains(l, `"notify_user"`) {
+		t.Fatalf("a Manager's worker, whatever its role says, lists notify_user: %s", l)
+	}
+	if out := serve(t, h, mgr, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"dismiss_wake","arguments":{}}}`); out[5].Error == nil {
+		t.Fatalf("dismiss_wake is still a tool: %+v", out[5])
+	}
+	out := serve(t, h, mgr, call(6))
+	if out[6].Result.IsError || len(out[6].Result.Content) == 0 {
+		t.Fatalf("a Manager's notify_user failed: %+v", out[6].Result)
 	}
 	var got struct {
-		Dismissed bool   `json:"dismissed"`
-		Reason    string `json:"reason"`
+		Notified bool   `json:"notified"`
+		Run      string `json:"run"`
+		Reason   string `json:"reason"`
 	}
-	if len(srvOut[10].Result.Content) > 0 {
-		_ = json.Unmarshal([]byte(srvOut[10].Result.Content[0].Text), &got)
+	json.Unmarshal([]byte(out[6].Result.Content[0].Text), &got)
+	if th := threadOf(t, h, mgr.Thread); !got.Notified || got.Reason != "a worker needs a key" || th.Turn == nil || got.Run != th.Turn.Run.String() || th.Turn.Silent {
+		t.Fatalf("notify_user replied %+v; the turn after: %+v; want it raised", got, th.Turn)
 	}
-	if !got.Dismissed || got.Reason != "all green" {
-		t.Fatalf("dismiss_wake reply = %+v, raw=%+v", got, srvOut[10].Result)
+	if out := serve(t, h, mgr, call(7)); out[7].Result.IsError {
+		t.Fatalf("notify_user again: %+v; want it done already", out[7].Result)
 	}
-
-	snap, err := h.Read(ctx, api.Query{Thread: mgr.Thread})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snap.Threads[0].Turn == nil || !snap.Threads[0].Turn.Silent || snap.Threads[0].Working() {
-		t.Fatalf("expected live turn Silent=true, got %+v", snap.Threads[0])
-	}
-
-	if out := serve(t, h, mgr, delegate(11, `{"task":"Read the project","title":"Worker","client_request_id":"dismissed-sweep-child"}`, "")); out[11].Result.IsError {
-		t.Fatalf("delegating from a dismissed sweep failed: %+v", out[11].Result)
-	}
-	if kids := children(t, h, mgr.Thread); len(kids) != 1 {
-		t.Fatalf("the dismissed sweep's workers = %+v, want the one it delegated", kids)
-	}
-
 	close(gate.open)
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(2 * time.Millisecond) {
-		snap, err := h.Read(ctx, api.Query{Thread: mgr.Thread})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if th := snap.Threads[0]; len(th.Requests) > 0 {
-			if th.Turn == nil || th.Turn.Silent {
-				t.Fatalf("the sweep's approval is hidden: %+v", th)
-			}
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the sweep's approval never opened")
-		}
-	}
-	if out := serve(t, h, mgr, `{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"dismiss_wake","arguments":{}}}`); !out[12].Result.IsError {
-		t.Fatalf("dismiss_wake once the sweep asked the user succeeded: %+v", out[12].Result)
-	}
 
 	s := (mcp.Launcher{Command: "glitched", Engine: "/tmp/sock"}).ForRole(mgr.Thread, api.AccessAutoEdits, api.RoleManager)
-	if s.Env[mcp.EnvRole] != string(api.RoleManager) || !strings.Contains(s.Instructions, "dismiss_wake") {
-		t.Fatalf("unexpected manager MCP server config: env=%+v instructions=%q", s.Env, s.Instructions)
+	if s.Env[mcp.EnvRole] != string(api.RoleManager) || !strings.Contains(s.Instructions, "notify_user") || strings.Contains(s.Instructions, "dismiss_wake") {
+		t.Fatalf("a Manager's MCP server: env %+v, instructions %q", s.Env, s.Instructions)
 	}
 	plain := (mcp.Launcher{Command: "glitched", Engine: "/tmp/sock"}).For(reg.Thread, api.AccessAsk)
-	if _, ok := plain.Env[mcp.EnvRole]; ok || strings.Contains(plain.Instructions, "dismiss_wake") {
-		t.Fatalf("non-manager MCP server unexpectedly has manager role/instructions: %+v", plain.Env)
+	if _, ok := plain.Env[mcp.EnvRole]; ok || strings.Contains(plain.Instructions, "notify_user") {
+		t.Fatalf("a plain thread's MCP server has a Manager's role or instructions: %+v", plain.Env)
 	}
 }
 
@@ -191,7 +170,7 @@ func TestManagerInstructionsCoverTheRulesetOnlyForManagers(t *testing.T) {
 		"delegation boundary":  {`isolation "worktree"`, "one bounded unit of work per worker", "Keep the root checkout clean"},
 		"gatekeeping":          {"pass-through relay", "self-contained brief", "definition of done", "task_answer", "request_credentials", "never the values", "task_cancel", "task_send", "Escalate only legitimate approvals"},
 		"verify before ready":  {"completion summary is a claim", "branch, diff, commits and checks", "Never pass unverified output"},
-		"quiet by default":     {"dismiss_wake", "quiet by default", "unless the user must act", "unresolved blocker or failure", "verified deliverable ready for review", "Lead every update to the user with the verdict"},
+		"quiet by default":     {"notify_user", "quiet by default", "unless the user must act", "unresolved blocker or failure", "verified deliverable ready for review", "Lead every update to the user with the verdict"},
 		"git and safety rails": {"Never merge, push, delete branches", "reset --hard", "Preserve uncommitted changes", "Never fabricate test or check results", "Never expose or commit secrets"},
 	}
 	for area, phrases := range rules {
@@ -201,7 +180,10 @@ func TestManagerInstructionsCoverTheRulesetOnlyForManagers(t *testing.T) {
 			}
 		}
 	}
-	for _, p := range []string{"Manager", "dismiss_wake", "WORKERS.md", "NOTES.md", "pass-through relay", "completion summary is a claim", "quiet by default", "Never merge"} {
+	if strings.Contains(mgr, "dismiss_wake") {
+		t.Errorf("manager instructions still mention dismiss_wake")
+	}
+	for _, p := range []string{"Manager", "notify_user", "dismiss_wake", "WORKERS.md", "NOTES.md", "pass-through relay", "completion summary is a claim", "quiet by default", "Never merge"} {
 		if strings.Contains(plain, p) {
 			t.Errorf("plain thread instructions mention %q", p)
 		}

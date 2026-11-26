@@ -434,3 +434,40 @@ func TestCredentialsAskWaitingForTheStartTimesOut(t *testing.T) {
 		t.Fatalf("the ask returned %+v, %v, want it timed out", got.asked, got.err)
 	}
 }
+
+// A child that answers to its parent asks it for secrets, not the user:
+// the engine refuses its ask. One the user took over asks them, as a
+// thread of theirs does.
+func TestCredentialsAChildAsksItsParent(t *testing.T) {
+	st, err := store.Open(dbPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ad := fake.New(fake.Turn(true))
+	h, err := runtime.New(ctx, st, provider.Mux{"fake": ad}, runtime.WithVault(secrets.New(t.TempDir())))
+	if err != nil {
+		st.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Kill(); st.Close() })
+	parent := newThread(t, h)
+	kid, err := newChild(t, h, ad, parent, api.AccessAsk, fake.Child{Title: "deploy", Task: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	th := until(t, h, kid, "the child's approval", waiting)
+	ask := api.Ask{Thread: kid, Access: th.Turn.Access, Call: "c", Credentials: probeAsk}
+	if _, err := h.AskCredentials(ctx, ask); err == nil || !strings.Contains(err.Error(), "parent") {
+		t.Fatalf("a child's ask: %v; want it refused, for its parent to ask", err)
+	}
+	submit(t, h, kid, dispatch("mine now", api.AfterActive))
+	until(t, h, kid, "the takeover", func(th api.Thread) bool { return th.TakenOver })
+	c, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { _, err := h.AskCredentials(c, ask); done <- err }()
+	until(t, h, kid, "the taken-over child's request", func(th api.Thread) bool {
+		return slices.ContainsFunc(th.Requests, func(r api.Request) bool { return r.Kind == api.KindCredentials })
+	})
+	cancel()
+	<-done
+}

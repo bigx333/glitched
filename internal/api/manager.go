@@ -17,7 +17,7 @@ type SweepSchedule struct {
 	Prompt          string `json:"prompt,omitempty"`
 }
 
-const DefaultSweepPrompt = "Scheduled sweep: check your active and recently finished workers. Verify each finished worker's branch, diff and checks against its brief. Steer or cancel stalled or off-scope work with task_send or task_cancel, and answer routine worker questions with task_answer. Update WORKERS.md and NOTES.md. Then call dismiss_wake unless the user must act: a decision, secret or legitimate approval only the user can give, an unresolved blocker or failure, or a verified deliverable ready for review."
+const DefaultSweepPrompt = "Scheduled sweep: check your active and recently finished workers. Verify each finished worker's branch, diff and checks against its brief. Steer or cancel stalled or off-scope work with task_send or task_cancel, and answer routine worker questions with task_answer. Update WORKERS.md and NOTES.md. This sweep is quiet by default; call notify_user only if the user must act: a decision, secret or legitimate approval only the user can give, an unresolved blocker or failure, or a verified deliverable ready for review."
 
 // WakeKind is why the engine, not the user, started a run: a child's
 // report or a Manager's scheduled sweep.
@@ -31,8 +31,19 @@ const (
 
 // WakeDismiss quiets a Manager's live wake, one a worker's report or a
 // scheduled sweep started, that needs no user attention: the thread
-// keeps the place and unread mark it had before the wake.
+// keeps the place and unread mark it had before the wake. A Manager's
+// wakes are admitted quiet since protocol 25, so it only matters to a wake
+// an older engine admitted.
 type WakeDismiss struct {
+	Run    ID     `json:"run,omitzero"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// WakeRaise makes a Manager's live wake, which is quiet, the user's: the
+// thread moves up and marks unread when it ends, as a turn of theirs does.
+// Run zero is whatever wake is live. A wake raised already, or a turn that
+// is no wake, takes it as done.
+type WakeRaise struct {
 	Run    ID     `json:"run,omitzero"`
 	Reason string `json:"reason,omitempty"`
 }
@@ -51,11 +62,13 @@ type WakeDismissed struct {
 
 func (WakeDismissed) eventType() string { return "wake.dismissed" }
 
-// WakeRaised is a wake the user is to see after all: it asked them
-// something, or they sent it a message. It is no longer dismissed, and
-// no longer a wake its Manager may dismiss.
+// WakeRaised is a wake the user is to see after all: its Manager raised
+// it, it asked them something, they sent it a message, or it failed. It is
+// no longer quiet, and no longer a wake its Manager may dismiss. Reason is
+// the Manager's, when it raised it.
 type WakeRaised struct {
-	Run ID `json:"run"`
+	Run    ID     `json:"run"`
+	Reason string `json:"reason,omitempty"`
 }
 
 func (WakeRaised) eventType() string { return "wake.raised" }

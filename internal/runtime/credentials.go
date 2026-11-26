@@ -57,6 +57,9 @@ func (h *Host) AskCredentials(ctx context.Context, a api.Ask) (api.Asked, error)
 	if err != nil {
 		return api.Asked{}, err
 	}
+	if !t.Parent.IsZero() && !t.TakenOver {
+		return api.Asked{}, errors.New("a child asks its parent for secrets, not the user: report the names you need and why, and the parent asks with request_credentials")
+	}
 	live := t.Live()
 	if live == nil {
 		return api.Asked{}, errors.New("this thread has no turn running, so nothing can ask for it")
