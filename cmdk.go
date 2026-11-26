@@ -93,9 +93,6 @@ func (a *app) actions() []command {
 		rm.also = "workspace delete"
 		cmds = append(cmds, rm)
 	}
-	// A Manager runs in the project of the thread shown, not in a
-	// worktree of it; with none, in a scratch folder of its own, which this
-	// machine makes only as it's chosen.
 	if cur := a.current(); cur.env != nil {
 		root := cur.project()
 		scratch := root == "" || root == a.scratchRoot()
@@ -374,9 +371,6 @@ func alsoMatches(cmd command, query string) bool {
 	return true
 }
 
-// newManager starts a Manager thread in root on env, or in a new scratch
-// folder, at the model a new thread takes and a sweep every half hour,
-// and shows it.
 func (a *app) newManager(env *client.Env, root string, scratch bool) {
 	if scratch {
 		dir, err := a.scratchFolder("manager")

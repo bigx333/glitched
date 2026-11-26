@@ -491,8 +491,7 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 }
 
 // rowTitle is a row's thread's title, bold while unread; a child lifted
-// into Working has the way to its parent under it. A Manager's has its
-// badge after it, which the title gives way to.
+// into Working has the way to its parent under it.
 func (a *app) rowTitle(c *ui.Context, t thread) {
 	if t.View.Role != api.RoleManager {
 		a.rowName(c, t)
@@ -505,7 +504,6 @@ func (a *app) rowTitle(c *ui.Context, t thread) {
 	})
 }
 
-// rowName is rowTitle's title, which takes the row's room.
 func (a *app) rowName(c *ui.Context, t thread) {
 	var name ui.Element
 	if p, ok := a.parentOf(t); ok {

@@ -17,11 +17,6 @@ const (
 
 var managerDocFiles = []string{"AGENTS.md", "WORKERS.md", "NOTES.md"}
 
-// loadManagerDocs reads AGENTS.md, WORKERS.md, and NOTES.md from the thread's
-// root workspace and formats non-empty files as a <workspace_context> preamble
-// for a session's initial prompt: a Manager's, or a worker's, a child of
-// any thread. A plain thread of the user's gets none. Missing or
-// unreadable files are skipped.
 func loadManagerDocs(workspace, project string, role api.ThreadRole, child bool) string {
 	root := cmp.Or(project, workspace)
 	if root == "" || role != api.RoleManager && !child {

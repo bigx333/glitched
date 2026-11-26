@@ -9,8 +9,6 @@ import (
 	"glitched/internal/api"
 )
 
-// A newer sweep schedule takes the place of a failed one, whose retry
-// would undo it.
 func TestANewerSweepReplacesAFailedOne(t *testing.T) {
 	failed := Pending{Command: api.NewID(), Body: api.ThreadConfigure{Sweep: &api.SweepSchedule{IntervalSeconds: 3600}}, Err: errors.New("offline")}
 	if !replaces(failed, api.ThreadConfigure{Sweep: &api.SweepSchedule{IntervalSeconds: 14400}}) {
@@ -21,8 +19,6 @@ func TestANewerSweepReplacesAFailedOne(t *testing.T) {
 	}
 }
 
-// A wake its Manager dismissed is no news: its end leaves the transcript's
-// last turn as it was, unless the wake asked the user something since.
 func TestADismissedWakesEndIsNoNews(t *testing.T) {
 	t0 := time.Unix(1000, 0).UTC()
 	log := api.NewID()

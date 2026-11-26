@@ -37,7 +37,6 @@ func TestManagerUIHeaderSweepAndWakeDismiss(t *testing.T) {
 		t.Fatalf("header missing Manager/Sweep 30m pills: %q", h.tt.Texts())
 	}
 
-	// Clicking Sweep 30m cycles to Sweep 1h (3600s) and persists in engine.
 	h.click("Sweep 30m")
 	h.until("sweep updated to 1h", func() bool {
 		th := h.local().Threads[mgrID]
@@ -48,8 +47,6 @@ func TestManagerUIHeaderSweepAndWakeDismiss(t *testing.T) {
 		t.Fatalf("expected updated Sweep 1h pill, got %q", h.tt.Texts())
 	}
 
-	// A turn the user asked of the Manager is theirs to read: its wake
-	// can't be dismissed.
 	runID := h.a.backend.Send(h.local(), mgrID, "sweep turn", api.StartNow)
 	h.until("manager turn waiting", func() bool {
 		th := h.local().Threads[mgrID]
@@ -63,8 +60,6 @@ func TestManagerUIHeaderSweepAndWakeDismiss(t *testing.T) {
 	}
 }
 
-// A Manager's row shows its badge right after its title, in Glitched's
-// own sidebar and in the fallback with no sidebar plugin; another's none.
 func TestManagerRowsShowTheirBadge(t *testing.T) {
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
@@ -100,9 +95,6 @@ func TestManagerRowsShowTheirBadge(t *testing.T) {
 	badge("the fallback")
 }
 
-// Cmd+K's New manager thread runs in the project of the thread shown, not
-// its worktree, at the model a new thread takes: the program's own when
-// the pickers follow it.
 func TestCmdKNewManagerTakesTheProjectAndTheNewThreadsModel(t *testing.T) {
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
@@ -126,8 +118,6 @@ func TestCmdKNewManagerTakesTheProjectAndTheNewThreadsModel(t *testing.T) {
 	}
 }
 
-// With no project, Cmd+K's New manager thread runs in a scratch folder of
-// its own, which only choosing it makes.
 func TestCmdKNewManagerWithNoProjectHasItsOwnFolder(t *testing.T) {
 	h := start(t, tempDir(t))
 	h.a.startIn(draft{env: h.local(), workspace: h.a.scratchRoot()})
@@ -146,8 +136,6 @@ func TestCmdKNewManagerWithNoProjectHasItsOwnFolder(t *testing.T) {
 	}
 }
 
-// newManager chooses Cmd+K's New manager thread, and is the Manager it
-// made once the engine has it.
 func (h *harness) newManager() *client.Thread {
 	h.t.Helper()
 	before := h.a.selected
@@ -167,7 +155,6 @@ func (h *harness) newManager() *client.Thread {
 	return h.local().Threads[id]
 }
 
-// The Sweep button changes a Manager's interval and keeps its prompt.
 func TestManagerSweepButtonKeepsItsPrompt(t *testing.T) {
 	const prompt = "Check CI and report only red builds."
 	at := &api.SweepSchedule{IntervalSeconds: 1800, Prompt: prompt}
@@ -180,7 +167,6 @@ func TestManagerSweepButtonKeepsItsPrompt(t *testing.T) {
 	}
 }
 
-// A failed sweep schedule's row says what failed.
 func TestManagerFailedSweepSaysSo(t *testing.T) {
 	p := client.Pending{Body: api.ThreadConfigure{Sweep: &api.SweepSchedule{IntervalSeconds: 3600}}, Err: errors.New("boom")}
 	if got, want := failure(p), "Couldn't change the thread's sweep schedule: boom"; got != want {

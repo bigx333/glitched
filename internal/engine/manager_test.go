@@ -35,7 +35,6 @@ func TestManagerCreateAndConfigureSweep(t *testing.T) {
 		t.Fatalf("unexpected manager thread state: %+v", th)
 	}
 
-	// Child threads cannot hold RoleManager or sweeps.
 	_, _, err = Decide(Thread{}, api.Command{
 		ID:     api.NewID(),
 		Target: api.NewID(),
@@ -51,7 +50,6 @@ func TestManagerCreateAndConfigureSweep(t *testing.T) {
 		t.Fatalf("child manager err = %v, want RejectedError", err)
 	}
 
-	// Regular thread rejects scheduling sweeps.
 	regID := api.NewID()
 	regEvs, _, err := Decide(Thread{}, api.Command{
 		ID:     api.NewID(),
@@ -74,7 +72,6 @@ func TestManagerCreateAndConfigureSweep(t *testing.T) {
 		t.Fatalf("non-manager sweep configure err = %v, want RejectedError", err)
 	}
 
-	// Clearing sweep on Manager sets Sweep to nil.
 	cfgEvs, _, err := Decide(th, api.Command{
 		ID:     api.NewID(),
 		Target: mgrID,
@@ -91,8 +88,6 @@ func TestManagerCreateAndConfigureSweep(t *testing.T) {
 	}
 }
 
-// mgr is a thread under test: its state, and the clock its commands and
-// observations land at.
 type mgr struct {
 	t  *testing.T
 	th Thread
@@ -142,7 +137,6 @@ func (m *mgr) observe(o Observation) ([]Event, []Effect) {
 	return m.fold(evs), effs
 }
 
-// sweep starts a due sweep, an interval after the thread last changed.
 func (m *mgr) sweep() api.ID {
 	m.t.Helper()
 	at, ok := NextSweep(m.th)
@@ -156,7 +150,6 @@ func (m *mgr) sweep() api.ID {
 	return run
 }
 
-// report is a worker's report: done, or blocked on an approval.
 func (m *mgr) report(kind api.ReportKind) api.ChildReported {
 	m.t.Helper()
 	r := api.ChildReported{Child: api.NewID(), Run: api.NewID(), Kind: kind, Title: "worker"}
@@ -183,8 +176,6 @@ func emitted[B api.EventBody](evs []Event) bool {
 	return false
 }
 
-// A dismissed sweep leaves the thread where it was in the list, with no
-// turn to read, and survives the log's replay as it was decided.
 func TestADismissedSweepLeavesTheThreadAsItWas(t *testing.T) {
 	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
 	before := m.th.UpdatedAt
@@ -207,8 +198,6 @@ func TestADismissedSweepLeavesTheThreadAsItWas(t *testing.T) {
 	}
 }
 
-// Only a Manager's wake is dismissed: a plain or child thread's run, or
-// a turn the user asked for or joined, is the user's to read.
 func TestOnlyAManagersWakeIsDismissed(t *testing.T) {
 	refused := func(t *testing.T, m *mgr) {
 		t.Helper()
@@ -244,8 +233,6 @@ func TestOnlyAManagersWakeIsDismissed(t *testing.T) {
 	})
 }
 
-// A dismissed wake still runs as its Manager's turn: it steers its
-// workers, and a request it opens is the user's to see and answer.
 func TestADismissedWakeKeepsWorkingAndAsksTheUser(t *testing.T) {
 	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
 	before := m.th.UpdatedAt
@@ -268,8 +255,6 @@ func TestADismissedWakeKeepsWorkingAndAsksTheUser(t *testing.T) {
 	}
 }
 
-// An engine restart during a dismissed wake leaves it uncertain, as any
-// turn of the user's: it is no compaction.
 func TestARestartDuringADismissedWakeLeavesItUncertain(t *testing.T) {
 	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
 	run := m.sweep()
@@ -280,15 +265,13 @@ func TestARestartDuringADismissedWakeLeavesItUncertain(t *testing.T) {
 	}
 }
 
-// Dismissing a wake dismisses only the reports it took: a sweep's none,
-// and a report's wake never a blocked worker's or a newer report.
 func TestDismissingAWakeKeepsTheReportsItDidNotTake(t *testing.T) {
 	t.Run("sweep", func(t *testing.T) {
 		m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
 		m.report(api.ReportBlocked)
 		alerted := m.th.Reported
 		m.sweep()
-		m.report(api.ReportDone) // waits for the sweep
+		m.report(api.ReportDone)
 		reported := m.th.Reported
 		m.dismiss()
 		if !m.th.Reported.Equal(reported) || reported.Equal(alerted) {
@@ -320,7 +303,7 @@ func TestDismissingAWakeKeepsTheReportsItDidNotTake(t *testing.T) {
 	t.Run("newer report", func(t *testing.T) {
 		m := newManager(t, nil)
 		m.report(api.ReportDone)
-		m.report(api.ReportDone) // waits for the wake
+		m.report(api.ReportDone)
 		reported := m.th.Reported
 		m.dismiss()
 		if !m.th.Reported.Equal(reported) {
@@ -329,8 +312,6 @@ func TestDismissingAWakeKeepsTheReportsItDidNotTake(t *testing.T) {
 	})
 }
 
-// A snoozed Manager's wake decides whether the user sees the report: the
-// thread stays snoozed while it runs, and as it is when dismissed.
 func TestASnoozedManagersWakeDecidesWhetherItComesBack(t *testing.T) {
 	snoozed := func(t *testing.T) (*mgr, api.Disposition) {
 		m := newManager(t, nil)
@@ -399,7 +380,6 @@ func TestASnoozedManagersWakeDecidesWhetherItComesBack(t *testing.T) {
 	})
 }
 
-// A sweep waits out the continue of a turn a usage limit ended.
 func TestASweepWaitsForALimitsContinue(t *testing.T) {
 	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
 	m.must(api.MessageDispatch{Text: "go", Mode: api.StartNow})

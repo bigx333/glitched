@@ -409,11 +409,6 @@ CREATE INDEX IF NOT EXISTS threads_by_parent ON threads (parent, deleted, id) WH
 DROP INDEX IF EXISTS commands_by_seq;
 DELETE FROM meta WHERE key = 'commands_pruned';
 `,
-	// Manager threads: a role, a sweep schedule, when the last sweep
-	// started and, as its log has it, a child's last report it was blocked
-	// on the user (kind 2); and on runs, the wake that
-	// started one and whether its Manager dismissed it. No build before
-	// had a Manager.
 	19: `
 ALTER TABLE threads ADD COLUMN role TEXT NOT NULL DEFAULT '';
 ALTER TABLE threads ADD COLUMN sweep TEXT;

@@ -28,7 +28,6 @@ func narrowHeader(t *testing.T, title string, child bool, add func(dir string), 
 	return headerFixture(t, title, child, nil, add, script...)
 }
 
-// headerFixture is narrowHeader's, its thread's create changed by as.
 func headerFixture(t *testing.T, title string, child bool, as func(*api.ThreadCreate), add func(dir string), script ...provider.Event) *harness {
 	t.Helper()
 	work := githubBranch(t)
@@ -162,8 +161,6 @@ func TestANarrowHeaderGivesWayAndKeepsEachControlClickable(t *testing.T) {
 	}
 }
 
-// A Manager's header gives its pill way with the project's, and its Sweep
-// button with the plan's pill: the pull request's pill still fits.
 func TestANarrowHeaderGivesWayForAManagersPills(t *testing.T) {
 	const title = "Header fixture for the narrow window"
 	h := headerFixture(t, title, false, func(c *api.ThreadCreate) {

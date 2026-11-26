@@ -108,7 +108,6 @@ func TestManagerSharedWorkspaceDocsInjected(t *testing.T) {
 		}
 	}
 
-	// Second turn in bound session should NOT re-inject workspace docs.
 	if _, err := h.Submit(ctx, api.Command{
 		ID:     api.NewID(),
 		Target: mgr,
@@ -146,7 +145,6 @@ func TestManagerScheduledSweepFiresAndDismissesSilently(t *testing.T) {
 		mu  sync.Mutex
 		now = time.Unix(10_000, 0).UTC()
 	)
-	// Use fake.Turn(true) so run stays waiting in approval/live state long enough to dismiss wake.
 	h, err := New(ctx, st, provider.Mux{"fake": fake.New(fake.Turn(true))}, WithClock(func() time.Time {
 		mu.Lock()
 		defer mu.Unlock()
@@ -172,7 +170,6 @@ func TestManagerScheduledSweepFiresAndDismissesSilently(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Advance past 60s and poke sweeps.
 	mu.Lock()
 	now = now.Add(65 * time.Second)
 	mu.Unlock()
@@ -209,8 +206,6 @@ func TestManagerScheduledSweepFiresAndDismissesSilently(t *testing.T) {
 	}
 }
 
-// A plain thread of the user's starts with its own words only: the
-// coordinator's docs are a Manager's and its workers'.
 func TestAPlainThreadGetsNoWorkspaceDocs(t *testing.T) {
 	ctx := context.Background()
 	ws := t.TempDir()
@@ -252,8 +247,6 @@ func TestAPlainThreadGetsNoWorkspaceDocs(t *testing.T) {
 	}
 }
 
-// Only a Manager's change wakes the sweep scheduler, which then reads
-// the scheduled Managers alone.
 func TestOnlyAManagersChangeMovesSweeps(t *testing.T) {
 	plain := api.Thread{ID: api.NewID(), Title: "plain"}
 	manager := api.Thread{ID: api.NewID(), Role: api.RoleManager}
@@ -265,9 +258,6 @@ func TestOnlyAManagersChangeMovesSweeps(t *testing.T) {
 	}
 }
 
-// A snoozed Manager's sweep is due once the snooze runs out, and one that
-// waits to continue a turn a usage limit ended once that continue is
-// overdue.
 func TestASweepWaitsForASnoozeAndALimitsContinue(t *testing.T) {
 	now := time.Unix(10_000, 0).UTC()
 	idle := api.Thread{Role: api.RoleManager, Sweep: &api.SweepSchedule{IntervalSeconds: 60}, UpdatedAt: now, Run: api.RunIdle}
@@ -291,8 +281,6 @@ func TestASweepWaitsForASnoozeAndALimitsContinue(t *testing.T) {
 	}
 }
 
-// A snoozed Manager sweeps once the snooze runs out, with nothing else
-// committed to wake the scheduler.
 func TestASnoozedManagerSweepsWhenItsSnoozeRunsOut(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "host.db"))

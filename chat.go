@@ -344,7 +344,6 @@ func nextSweepSchedule(cur *api.SweepSchedule) *api.SweepSchedule {
 	if secs == 0 {
 		return &api.SweepSchedule{}
 	}
-	// The interval changes, and the Manager's own sweep prompt stays.
 	next := &api.SweepSchedule{IntervalSeconds: secs}
 	if cur != nil {
 		next.Prompt = cur.Prompt
@@ -367,10 +366,9 @@ const (
 )
 
 // What the header gives way, in order, while its row doesn't fit: the
-// actions to their icons, the plan's pill to its count, the project's,
-// the machine's and a Manager's pills, the branch's, the plugins' copies
-// to their smallest, the plan's pill with a Manager's Sweep button, then
-// those copies. Under 700 points it
+// actions to their icons, the plan's pill to its count, the project's and
+// the machine's pills, the branch's, the plugins' copies to their
+// smallest, the plan's pill, then those copies. Under 700 points it
 // starts with the pills gone, the actions as icons and the plan as its
 // count.
 const (
@@ -386,9 +384,7 @@ const (
 
 // headerPills are the widths, gaps included, of what the header draws
 // itself and its steps take away, the project's pill with the machine's
-// and the branch's, and of the sidebar's button. A Manager's pill goes
-// with the project's, and its Sweep button with the plan's pill, before
-// the plugins' copies.
+// and the branch's, and of the sidebar's button.
 type headerPills struct{ project, branch, sidebar, manager, sweep float32 }
 
 // headerGive is what the header gives way. It picks the step in the frame

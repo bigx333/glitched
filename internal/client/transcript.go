@@ -27,8 +27,7 @@ type Transcript struct {
 	wakes    map[api.ID]*wake
 	silent   map[api.ID]*CompactionEntry // silent idle-compaction runs, by run id
 	dropped  map[api.ID]bool
-	// dismissed are the wakes their Manager dismissed and the user wasn't
-	// asked to see since: their ends are no news.
+
 	dismissed map[api.ID]bool
 	// edits are the indexes of Entries changed in place, in the order
 	// they changed, but for the first editsBase, dropped: Edits reads

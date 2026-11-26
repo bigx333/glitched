@@ -103,8 +103,6 @@ type Run struct {
 	Dismissed bool
 }
 
-// quiet is whether r shows nothing to the user: a maintenance run, or a
-// wake its Manager dismissed.
 func (r Run) quiet() bool { return r.Silent || r.Dismissed }
 
 // Remote is a placeholder's: the machine its child was placed on, as
@@ -217,7 +215,6 @@ func (t Thread) Live() *Run {
 	return nil
 }
 
-// lastTurn is the thread's last finished run that isn't quiet.
 func (t Thread) lastTurn() (Run, bool) {
 	for i := len(t.Runs) - 1; i >= 0; i-- {
 		if r := t.Runs[i]; r.State == RunFinished && !r.quiet() {

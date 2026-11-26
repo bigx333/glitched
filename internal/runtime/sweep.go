@@ -10,8 +10,6 @@ import (
 	"glitched/internal/engine"
 )
 
-// movesSweeps is whether a commit of threads can move when a sweep is
-// due: only a Manager's change can.
 func movesSweeps(threads []api.Thread) bool {
 	return slices.ContainsFunc(threads, func(t api.Thread) bool { return t.Role == api.RoleManager })
 }
@@ -23,10 +21,6 @@ func (h *Host) pokeSweeps() {
 	}
 }
 
-// sweepDueAt is when v's next scheduled sweep is due, or ok false when it
-// has none: not a scheduled Manager, settled, or busy. A snoozed one's
-// waits for the snooze to run out, and one waiting to continue a turn a
-// usage limit ended waits for that continue, or for it to be overdue.
 func sweepDueAt(v api.Thread, now time.Time) (time.Time, bool) {
 	if v.Role != api.RoleManager || v.Sweep == nil || v.Sweep.IntervalSeconds <= 0 ||
 		v.Deleted || v.Remote != nil || v.Origin != nil || v.Disposition.State == api.Settled {
@@ -47,7 +41,6 @@ func sweepDueAt(v api.Thread, now time.Time) (time.Time, bool) {
 		due = v.Disposition.Until
 	}
 	if resets, ok := v.LimitResume(now); ok {
-		// LimitResume holds through LimitOverdue past the reset.
 		if after := resets.Add(api.LimitOverdue + time.Nanosecond); after.After(due) {
 			due = after
 		}
@@ -55,9 +48,6 @@ func sweepDueAt(v api.Thread, now time.Time) (time.Time, bool) {
 	return due, true
 }
 
-// runSweeps triggers periodic scheduled sweeps on Manager threads when due.
-// It reads only the scheduled Managers, when one changes or its timer
-// fires.
 func (h *Host) runSweeps() {
 	defer h.wg.Done()
 	timer := time.NewTimer(0)

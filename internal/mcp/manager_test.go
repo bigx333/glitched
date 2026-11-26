@@ -14,8 +14,6 @@ import (
 	"glitched/internal/runtime"
 )
 
-// workingManager is a Manager whose live run waits on the user: a turn
-// the user asked for with text, or else its first scheduled sweep.
 func workingManager(t *testing.T, h *runtime.Host, text string) mcp.Origin {
 	t.Helper()
 	thread := api.NewID()
@@ -47,7 +45,6 @@ func workingManager(t *testing.T, h *runtime.Host, text string) mcp.Origin {
 func TestDismissWakeExposedOnlyToManagersAndSilencesRun(t *testing.T) {
 	h := engineOf(t, provider.Mux{"fake": fake.New(fake.Turn(true))})
 
-	// Regular thread must NOT advertise dismiss_wake and calling it must fail.
 	reg := working(t, h)
 	var regBuf bytes.Buffer
 	if err := mcp.Serve(ctx, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`+"\n"), &regBuf, &mcp.Tools{Engine: h, Origin: reg}); err != nil {
@@ -63,20 +60,17 @@ func TestDismissWakeExposedOnlyToManagersAndSilencesRun(t *testing.T) {
 		t.Fatalf("expected non-manager dismiss_wake call to fail cleanly")
 	}
 
-	// A plain thread claiming to be a Manager is refused by the engine.
 	forged := reg
 	forged.Role = api.RoleManager
 	if out := serve(t, h, forged, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"dismiss_wake","arguments":{}}}`); !out[3].Result.IsError {
 		t.Fatalf("a plain thread's dismiss_wake under a forged role succeeded: %+v", out[3].Result)
 	}
 
-	// A turn the user asked of a Manager is theirs to read.
 	asked := workingManager(t, h, "Coordinate")
 	if out := serve(t, h, asked, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"dismiss_wake","arguments":{}}}`); !out[4].Result.IsError {
 		t.Fatalf("dismiss_wake on the user's turn succeeded: %+v", out[4].Result)
 	}
 
-	// Manager thread advertises dismiss_wake and quiets its sweep.
 	mgr := workingManager(t, h, "")
 	var mgrBuf bytes.Buffer
 	if err := mcp.Serve(ctx, strings.NewReader(`{"jsonrpc":"2.0","id":9,"method":"tools/list"}`+"\n"), &mgrBuf, &mcp.Tools{Engine: h, Origin: mgr}); err != nil {
@@ -110,7 +104,6 @@ func TestDismissWakeExposedOnlyToManagersAndSilencesRun(t *testing.T) {
 		t.Fatalf("expected live turn Silent=true, got %+v", snap.Threads[0])
 	}
 
-	// Verify Launcher.ForRole sets Role and Manager instructions.
 	s := (mcp.Launcher{Command: "glitched", Engine: "/tmp/sock"}).ForRole(mgr.Thread, api.AccessAutoEdits, api.RoleManager)
 	if s.Env[mcp.EnvRole] != string(api.RoleManager) || !strings.Contains(s.Instructions, "dismiss_wake") {
 		t.Fatalf("unexpected manager MCP server config: env=%+v instructions=%q", s.Env, s.Instructions)

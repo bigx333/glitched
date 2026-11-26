@@ -717,8 +717,6 @@ const managersV19 = `
 	ALTER TABLE threads DROP COLUMN alerted;
 `
 
-// The runs table up to version 19, before a run kept the wake that
-// started it.
 const runsV19 = `
 	ALTER TABLE runs DROP COLUMN wake;
 	ALTER TABLE runs DROP COLUMN woke;
@@ -1656,8 +1654,6 @@ func TestACancelledWriteStops(t *testing.T) {
 	}
 }
 
-// A database at version 18 or 19, from before Managers, upgrades to keep
-// its threads and to persist a Manager's role, schedule and wake runs.
 func TestAPreManagerDatabaseUpgradesForManagers(t *testing.T) {
 	for _, version := range []int{18, 19} {
 		t.Run(fmt.Sprint(version), func(t *testing.T) { upgradesForManagers(t, version) })

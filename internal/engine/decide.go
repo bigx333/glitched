@@ -386,9 +386,7 @@ type decision struct {
 	resumed bool   // the user resumed the queue: settle starts the wakes after a stop
 	by      api.ID // the thread whose agent sent the command; zero for the user
 	env     Env
-	// prior is the thread's UpdatedAt before a child's report this
-	// decision logs, which a wake it starts goes back to if dismissed.
-	prior time.Time
+	prior   time.Time
 }
 
 // ceiling is the most the thread may run at now: any access for a
@@ -1368,11 +1366,6 @@ func (d *decision) configure(b api.ThreadConfigure) error {
 	return d.emit(api.ThreadConfigured{Model: m, Access: access, Sweep: newSweep, SweepSet: sweepChanged})
 }
 
-// dismissWake quiets a Manager's live wake. The thread goes back to the
-// UpdatedAt it had before the wake. A report's wake dismisses the reports
-// it took, unless one came after it started: the thread's unread mark
-// goes back to its last alert only the user can act on. A sweep took no
-// report, and leaves the mark as it is.
 func (d *decision) dismissWake(b api.WakeDismiss) error {
 	if d.t.Role != api.RoleManager || d.t.child() {
 		return rejected("only a Manager thread dismisses its wakes")
@@ -1397,8 +1390,6 @@ func (d *decision) dismissWake(b api.WakeDismiss) error {
 	return d.emit(e)
 }
 
-// raise has the user see r after all, as it asks them something or they
-// send it a message: a wake is the user's turn from then on.
 func (d *decision) raise(r Run) error {
 	if r.Wake == api.NotWake {
 		return nil
@@ -1406,13 +1397,10 @@ func (d *decision) raise(r Run) error {
 	return d.emit(api.WakeRaised{Run: r.ID})
 }
 
-// snoozing is whether the thread is snoozed and the snooze hasn't run out.
 func (d *decision) snoozing() bool {
 	return d.t.Disposition.State == api.Snoozed && d.at.Before(d.t.Disposition.Until)
 }
 
-// unsnooze brings a snoozed Manager back to the inbox as its wake shows
-// the user something: a request, or an end it didn't dismiss.
 func (d *decision) unsnooze(r Run) error {
 	if r.Wake == api.NotWake || d.t.Role != api.RoleManager || !d.snoozing() {
 		return nil
@@ -1522,8 +1510,6 @@ func (d *decision) observe(o Observation) error {
 			return d.stop(*live)
 		}
 		if isLive(o.Run) && !dup {
-			// A wake that asks the user something is theirs to see and
-			// answer: it comes back to the inbox and can no longer be dismissed.
 			if err := d.unsnooze(*live); err != nil {
 				return err
 			}
@@ -1716,14 +1702,11 @@ func (d *decision) idleCompact(o IdleCompact) error {
 	return nil
 }
 
-// sweepDue starts a scheduled Manager sweep when the thread is idle and due.
 func (d *decision) sweepDue(o SweepDue) error {
 	at, ok := NextSweep(d.t)
 	if !ok || d.at.Before(at) || d.snoozing() {
 		return fmt.Errorf("%w: thread is not due for a sweep", ErrRefused)
 	}
-	// The engine continues a turn a usage limit ended once it resets: a
-	// sweep would take its place.
 	if _, ok := View(d.t).LimitResume(d.at); ok {
 		return fmt.Errorf("%w: the thread waits to continue a turn a usage limit ended", ErrRefused)
 	}
@@ -1780,9 +1763,6 @@ func (d *decision) reported(o Reported) error {
 		return err
 	}
 	wakes := !(o.Report.Kind == api.ReportBlocked && o.Question.IsZero() || d.t.settled())
-	// A snoozed Manager's wake decides for itself whether the user is to
-	// see the report: the thread stays snoozed while it runs, and comes
-	// back when it ends undismissed or asks the user something.
 	quiet := wakes && d.t.Role == api.RoleManager && d.snoozing()
 	if d.t.Disposition.State == api.Snoozed && !quiet {
 		if err := d.emit(api.DispositionChanged{Disposition: api.Disposition{}}); err != nil {
@@ -1797,8 +1777,6 @@ func (d *decision) reported(o Reported) error {
 	}); err != nil || !quiet {
 		return err
 	}
-	// A wake that can't start now, behind a turn or a stop, waits on the
-	// user: the report brings the thread back.
 	if err := d.settle(); err != nil {
 		return err
 	}
