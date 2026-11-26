@@ -469,9 +469,6 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 			return
 		}
 		a.rowTitle(c, t)
-		if t.View.Role == api.RoleManager {
-			ui.Text(c, "M").FontSize(10).Bold().TextColor(palette.accent).Padding(1, 5).Radius(4).Background(palette.accent.Alpha(0.14)).Shrink(0)
-		}
 		a.pluginSlot(c, "thread.row", t.id().String(), &t, false, true)
 		if len(a.backend.Envs()) > 1 {
 			a.machineBadge(c, t.env)
@@ -494,8 +491,22 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 }
 
 // rowTitle is a row's thread's title, bold while unread; a child lifted
-// into Working has the way to its parent under it.
+// into Working has the way to its parent under it. A Manager's has its
+// badge after it, which the title gives way to.
 func (a *app) rowTitle(c *ui.Context, t thread) {
+	if t.View.Role != api.RoleManager {
+		a.rowName(c, t)
+		return
+	}
+	ui.Row(c).Grow(1).Shrink(1).Gap(6).AlignItems(ui.Center).Children(func() {
+		a.rowName(c, t)
+		a.tip(c, ui.Text(c, "M").FontSize(10).Bold().TextColor(palette.accent).Padding(1, 5).Radius(4).
+			Background(palette.accent.Alpha(0.14)).Shrink(0), "Manager thread")
+	})
+}
+
+// rowName is rowTitle's title, which takes the row's room.
+func (a *app) rowName(c *ui.Context, t thread) {
 	var name ui.Element
 	if p, ok := a.parentOf(t); ok {
 		ui.Column(c).Grow(1).Shrink(1).Children(func() {

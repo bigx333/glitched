@@ -2,10 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
@@ -43,29 +48,142 @@ func TestManagerUIHeaderSweepAndWakeDismiss(t *testing.T) {
 		t.Fatalf("expected updated Sweep 1h pill, got %q", h.tt.Texts())
 	}
 
-	// Send a message so run stays live (waiting at approval), then dismiss its wake.
+	// A turn the user asked of the Manager is theirs to read: its wake
+	// can't be dismissed.
 	runID := h.a.backend.Send(h.local(), mgrID, "sweep turn", api.StartNow)
 	h.until("manager turn waiting", func() bool {
 		th := h.local().Threads[mgrID]
 		return th != nil && th.View.Turn != nil && th.View.Run == api.RunWaiting
 	})
-
-	cli := h.a.backend.Envs()[0]
-	h.a.backend.MarkRead(cli.Threads[mgrID])
 	ep := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
 	defer ep.Close()
-	if _, err := ep.Submit(context.Background(), api.Command{
-		ID:     api.NewID(),
-		Target: mgrID,
-		Body:   api.WakeDismiss{Run: runID, Reason: "quiet"},
-	}); err != nil {
-		t.Fatalf("WakeDismiss: %v", err)
+	_, err := ep.Submit(context.Background(), api.Command{ID: api.NewID(), Target: mgrID, Body: api.WakeDismiss{Run: runID, Reason: "quiet"}})
+	if !errors.As(err, new(*api.RejectedError)) {
+		t.Fatalf("WakeDismiss of the user's turn = %v, want RejectedError", err)
 	}
-	h.until("silent wake reflected in client", func() bool {
-		th := cli.Threads[mgrID]
-		return th != nil && th.View.Turn != nil && th.View.Turn.Silent
+}
+
+// A Manager's row shows its badge right after its title, in Glitched's
+// own sidebar and in the fallback with no sidebar plugin; another's none.
+func TestManagerRowsShowTheirBadge(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	seed(t, d, "/work/mygo", "A plain thread")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := d.Endpoint().Submit(ctx, api.Command{ID: api.NewID(), Target: api.NewID(), Body: api.ThreadCreate{
+		Workspace: "/work/mygo", Title: "The coordinator", Model: fakeModel, Role: api.RoleManager,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, dir)
+	h.thread("The coordinator")
+	h.thread("A plain thread")
+	badge := func(where string) {
+		t.Helper()
+		settlePlugins(t, h.a, h.tt, h.p)
+		h.tt.Advance(time.Second)
+		if n := slices.Index(h.tt.Texts(), "M"); n < 0 || slices.Index(h.tt.Texts()[n+1:], "M") >= 0 {
+			t.Fatalf("%s: the badges are %q, want one", where, h.tt.Texts())
+		}
+		name, _ := h.tt.Find("The coordinator")
+		m, _ := h.tt.Find("M")
+		if gap := m.X - (name.X + name.W); gap < 0 || gap > 12 || m.Y > name.Y+name.H || name.Y > m.Y+m.H {
+			t.Fatalf("%s: the badge %+v isn't right after its title %+v", where, m, name)
+		}
+	}
+	badge("Glitched's own sidebar")
+	if err := h.a.plugins.SetEnabled("sidebar", false); err != nil {
+		t.Fatal(err)
+	}
+	h.a.pluginsChanged(nil)
+	badge("the fallback")
+}
+
+// Cmd+K's New manager thread runs in the project of the thread shown, not
+// its worktree, at the model a new thread takes: the program's own when
+// the pickers follow it.
+func TestCmdKNewManagerTakesTheProjectAndTheNewThreadsModel(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	repo, worktree := t.TempDir(), t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := d.Endpoint().Submit(ctx, api.Command{ID: api.NewID(), Target: api.NewID(), Body: api.ThreadCreate{
+		Workspace: worktree, Project: repo, Branch: "feature", Title: "In a worktree", Model: fakeModel,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, dir)
+	h.a.select_(h.thread("In a worktree"))
+	h.a.show(choice{Model: modelKey{Provider: fakeModel.Provider}, Follow: true})
+	mgr := h.newManager()
+	if mgr.View.Workspace != repo {
+		t.Errorf("the Manager runs in %q, want the project %q", mgr.View.Workspace, repo)
+	}
+	if mgr.View.Model.Model != "" || mgr.View.Model.Provider != fakeModel.Provider {
+		t.Errorf("the Manager's model is %+v, want the program's own", mgr.View.Model)
+	}
+}
+
+// With no project, Cmd+K's New manager thread runs in a scratch folder of
+// its own, which only choosing it makes.
+func TestCmdKNewManagerWithNoProjectHasItsOwnFolder(t *testing.T) {
+	h := start(t, tempDir(t))
+	h.a.startIn(draft{env: h.local(), workspace: h.a.scratchRoot()})
+	before, _ := os.ReadDir(h.a.scratchRoot())
+	h.a.actions()
+	if listed, _ := os.ReadDir(h.a.scratchRoot()); len(listed) != len(before) {
+		t.Fatalf("listing the actions made folders: %v, was %v", listed, before)
+	}
+	mgr := h.newManager()
+	ws := mgr.View.Workspace
+	if filepath.Dir(ws) != h.a.scratchRoot() {
+		t.Fatalf("the Manager runs in %q, want a folder of its own under %q", ws, h.a.scratchRoot())
+	}
+	if fi, err := os.Stat(ws); err != nil || !fi.IsDir() {
+		t.Fatalf("the Manager's folder %q: %v", ws, err)
+	}
+}
+
+// newManager chooses Cmd+K's New manager thread, and is the Manager it
+// made once the engine has it.
+func (h *harness) newManager() *client.Thread {
+	h.t.Helper()
+	before := h.a.selected
+	i := slices.IndexFunc(h.a.actions(), func(c command) bool { return c.id == "manager.new" })
+	if i < 0 {
+		h.t.Fatal("Cmd+K lists no New manager thread")
+	}
+	h.a.actions()[i].run()
+	id := h.a.selected
+	if id == before || id.IsZero() {
+		h.t.Fatalf("New manager thread showed %s, not a new thread", id)
+	}
+	h.until("the Manager", func() bool {
+		th := h.local().Threads[id]
+		return th != nil && th.View.Role == api.RoleManager && th.View.Revision > 0
 	})
-	if h.a.backend.Unread(cli.Threads[mgrID]) {
-		t.Fatal("dismissed Manager wake unexpectedly marked thread unread")
+	return h.local().Threads[id]
+}
+
+// The Sweep button changes a Manager's interval and keeps its prompt.
+func TestManagerSweepButtonKeepsItsPrompt(t *testing.T) {
+	const prompt = "Check CI and report only red builds."
+	at := &api.SweepSchedule{IntervalSeconds: 1800, Prompt: prompt}
+	for at.IntervalSeconds != 0 {
+		next := nextSweepSchedule(at)
+		if next.IntervalSeconds == at.IntervalSeconds || next.IntervalSeconds != 0 && next.Prompt != prompt {
+			t.Fatalf("from %+v the button goes to %+v", at, next)
+		}
+		at = next
+	}
+}
+
+// A failed sweep schedule's row says what failed.
+func TestManagerFailedSweepSaysSo(t *testing.T) {
+	p := client.Pending{Body: api.ThreadConfigure{Sweep: &api.SweepSchedule{IntervalSeconds: 3600}}, Err: errors.New("boom")}
+	if got, want := failure(p), "Couldn't change the thread's sweep schedule: boom"; got != want {
+		t.Fatalf("the row says %q, want %q", got, want)
 	}
 }

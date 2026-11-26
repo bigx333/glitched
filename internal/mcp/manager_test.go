@@ -14,17 +14,23 @@ import (
 	"glitched/internal/runtime"
 )
 
-func workingManager(t *testing.T, h *runtime.Host) mcp.Origin {
+// workingManager is a Manager whose live run waits on the user: a turn
+// the user asked for with text, or else its first scheduled sweep.
+func workingManager(t *testing.T, h *runtime.Host, text string) mcp.Origin {
 	t.Helper()
 	thread := api.NewID()
-	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{
+	create := api.ThreadCreate{
 		Workspace: t.TempDir(),
 		Title:     "Coord",
 		Model:     api.ModelRef{Provider: "fake", Model: "fake"},
 		Access:    api.AccessAutoEdits,
 		Role:      api.RoleManager,
-		Text:      "Coordinate",
-	}}); err != nil {
+		Text:      text,
+	}
+	if text == "" {
+		create.Sweep = &api.SweepSchedule{IntervalSeconds: 1}
+	}
+	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: create}); err != nil {
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(2 * time.Millisecond) {
@@ -57,8 +63,21 @@ func TestDismissWakeExposedOnlyToManagersAndSilencesRun(t *testing.T) {
 		t.Fatalf("expected non-manager dismiss_wake call to fail cleanly")
 	}
 
-	// Manager thread advertises dismiss_wake and silences its live run.
-	mgr := workingManager(t, h)
+	// A plain thread claiming to be a Manager is refused by the engine.
+	forged := reg
+	forged.Role = api.RoleManager
+	if out := serve(t, h, forged, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"dismiss_wake","arguments":{}}}`); !out[3].Result.IsError {
+		t.Fatalf("a plain thread's dismiss_wake under a forged role succeeded: %+v", out[3].Result)
+	}
+
+	// A turn the user asked of a Manager is theirs to read.
+	asked := workingManager(t, h, "Coordinate")
+	if out := serve(t, h, asked, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"dismiss_wake","arguments":{}}}`); !out[4].Result.IsError {
+		t.Fatalf("dismiss_wake on the user's turn succeeded: %+v", out[4].Result)
+	}
+
+	// Manager thread advertises dismiss_wake and quiets its sweep.
+	mgr := workingManager(t, h, "")
 	var mgrBuf bytes.Buffer
 	if err := mcp.Serve(ctx, strings.NewReader(`{"jsonrpc":"2.0","id":9,"method":"tools/list"}`+"\n"), &mgrBuf, &mcp.Tools{Engine: h, Origin: mgr}); err != nil {
 		t.Fatal(err)

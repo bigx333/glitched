@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -206,4 +207,126 @@ func TestManagerScheduledSweepFiresAndDismissesSilently(t *testing.T) {
 	if snap.Threads[0].Turn == nil || !snap.Threads[0].Turn.Silent || snap.Threads[0].Working() {
 		t.Fatalf("expected silent non-working turn after WakeDismiss, got %+v", snap.Threads[0])
 	}
+}
+
+// A plain thread of the user's starts with its own words only: the
+// coordinator's docs are a Manager's and its workers'.
+func TestAPlainThreadGetsNoWorkspaceDocs(t *testing.T) {
+	ctx := context.Background()
+	ws := t.TempDir()
+	for _, name := range managerDocFiles {
+		if err := os.WriteFile(filepath.Join(ws, name), []byte(name+" says hello"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, err := store.Open(filepath.Join(t.TempDir(), "host.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	capAd := &captureAdapter{Adapter: fake.New(fake.Turn(false))}
+	h, err := New(ctx, st, provider.Mux{"fake": capAd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Close() })
+	plain := api.NewID()
+	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: plain, Body: api.ThreadCreate{
+		Workspace: ws, Title: "Plain", Model: api.ModelRef{Provider: "fake", Model: "fake"}, Text: "Fix the typo",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if snap, err := h.Read(ctx, api.Query{Thread: plain}); err == nil && snap.Threads[0].LastTurn != nil {
+			break
+		}
+	}
+	capAd.mu.Lock()
+	starts := slices.Clone(capAd.starts)
+	capAd.mu.Unlock()
+	if len(starts) != 1 || starts[0] != "Fix the typo" {
+		t.Fatalf("the plain thread's first prompts = %q, want only its own words", starts)
+	}
+	if docs := loadManagerDocs(ws, "", api.RoleDefault, true); !strings.Contains(docs, "<workspace_context>") {
+		t.Fatalf("a worker's docs = %q, want the workspace context", docs)
+	}
+}
+
+// Only a Manager's change wakes the sweep scheduler, which then reads
+// the scheduled Managers alone.
+func TestOnlyAManagersChangeMovesSweeps(t *testing.T) {
+	plain := api.Thread{ID: api.NewID(), Title: "plain"}
+	manager := api.Thread{ID: api.NewID(), Role: api.RoleManager}
+	if movesSweeps([]api.Thread{plain, plain}) {
+		t.Fatal("a commit of plain threads woke the sweep scheduler")
+	}
+	if !movesSweeps([]api.Thread{plain, manager}) {
+		t.Fatal("a Manager's commit left the sweep scheduler asleep")
+	}
+}
+
+// A snoozed Manager's sweep is due once the snooze runs out, and one that
+// waits to continue a turn a usage limit ended once that continue is
+// overdue.
+func TestASweepWaitsForASnoozeAndALimitsContinue(t *testing.T) {
+	now := time.Unix(10_000, 0).UTC()
+	idle := api.Thread{Role: api.RoleManager, Sweep: &api.SweepSchedule{IntervalSeconds: 60}, UpdatedAt: now, Run: api.RunIdle}
+	if at, ok := sweepDueAt(idle, now); !ok || !at.Equal(now.Add(time.Minute)) {
+		t.Fatalf("an idle Manager's sweep is due at %v (%v), want %v", at, ok, now.Add(time.Minute))
+	}
+	snoozed := idle
+	snoozed.Disposition = api.Disposition{State: api.Snoozed, Until: now.Add(time.Hour)}
+	if at, ok := sweepDueAt(snoozed, now); !ok || !at.Equal(now.Add(time.Hour)) {
+		t.Fatalf("a snoozed Manager's sweep is due at %v (%v), want when the snooze runs out", at, ok)
+	}
+	limited := idle
+	resets := now.Add(2 * time.Hour)
+	limited.LastTurn = &api.TurnResult{Ended: now, Outcome: api.OutcomeFailed, Limit: &api.UsageLimit{Resets: resets}}
+	at, ok := sweepDueAt(limited, now)
+	if !ok || !at.After(resets.Add(api.LimitOverdue)) {
+		t.Fatalf("a sweep behind a limit's continue is due at %v (%v), want after %v", at, ok, resets.Add(api.LimitOverdue))
+	}
+	if _, waits := limited.LimitResume(at); waits {
+		t.Fatalf("the limit's continue still waits at %v, when the sweep is due", at)
+	}
+}
+
+// A snoozed Manager sweeps once the snooze runs out, with nothing else
+// committed to wake the scheduler.
+func TestASnoozedManagerSweepsWhenItsSnoozeRunsOut(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "host.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	h, err := New(ctx, st, provider.Mux{"fake": fake.New(fake.Turn(false))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Close() })
+	mgr := api.NewID()
+	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: mgr, Body: api.ThreadCreate{
+		Workspace: t.TempDir(), Title: "Sweeper", Model: api.ModelRef{Provider: "fake", Model: "fake"},
+		Role: api.RoleManager, Sweep: &api.SweepSchedule{IntervalSeconds: 1},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().UTC().Add(1200 * time.Millisecond)
+	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: mgr, Body: api.InboxSet{Disposition: api.Disposition{State: api.Snoozed, Until: until}}}); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		snap, err := h.Read(ctx, api.Query{Thread: mgr})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v := snap.Threads[0]; !v.LastSweep.IsZero() {
+			if v.LastSweep.Before(until) {
+				t.Fatalf("the Manager swept at %v, during its snooze until %v", v.LastSweep, until)
+			}
+			return
+		}
+	}
+	t.Fatalf("the Manager never swept after its snooze ran out at %v", until)
 }

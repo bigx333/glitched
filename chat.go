@@ -196,6 +196,11 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 		if !a.sidebarVisible() {
 			pills.sidebar = headerIconW + headerGap
 		}
+		manager := t.View.Role == api.RoleManager
+		if manager {
+			pills.manager = text("Manager", 11) + 2*pillPadX + 2 + headerGap
+			pills.sweep = text(sweepLabel(t.View.Sweep), 11) + 2*pillPadX + 2 + headerGap
+		}
 		natural, _ := c.MeasureText(0, ui.Span{Text: title(t), Weight: 600})
 		g := &a.headerGive
 		give := g.choose(t.id(), narrow, chat-left-right, min(natural, headerTitleRoom), pills)
@@ -214,8 +219,10 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 		if !narrow {
 			a.usagePill(c, t)
 		}
-		if t.View.Role == api.RoleManager {
+		if manager && give < giveProject {
 			pill(c, "Manager").Key("header-manager").Shrink(0)
+		}
+		if manager && give < givePlan {
 			if ui.ButtonBase(c.Key("header-sweep")).Padding(2, pillPadX).Radius(999).
 				Background(palette.hover).Border(1, palette.border).Shrink(0).Cursor(ui.CursorPointer).
 				Children(func() { ui.Text(c, sweepLabel(t.View.Sweep)).FontSize(11).TextColor(palette.muted).NoWrap() }).Clicked() {
@@ -327,17 +334,22 @@ func nextSweepSchedule(cur *api.SweepSchedule) *api.SweepSchedule {
 	if cur != nil {
 		curSecs = cur.IntervalSeconds
 	}
-	var next int64 = sweepPresets[1]
+	var secs int64 = sweepPresets[1]
 	for i, p := range sweepPresets {
 		if p == curSecs {
-			next = sweepPresets[(i+1)%len(sweepPresets)]
+			secs = sweepPresets[(i+1)%len(sweepPresets)]
 			break
 		}
 	}
-	if next == 0 {
+	if secs == 0 {
 		return &api.SweepSchedule{}
 	}
-	return &api.SweepSchedule{IntervalSeconds: next}
+	// The interval changes, and the Manager's own sweep prompt stays.
+	next := &api.SweepSchedule{IntervalSeconds: secs}
+	if cur != nil {
+		next.Prompt = cur.Prompt
+	}
+	return next
 }
 
 // The header's gap between its controls, and a pill's padding at its sides.
@@ -355,9 +367,10 @@ const (
 )
 
 // What the header gives way, in order, while its row doesn't fit: the
-// actions to their icons, the plan's pill to its count, the project's and
-// the machine's pills, the branch's, the plugins' copies to their
-// smallest, the plan's pill, then those copies. Under 700 points it
+// actions to their icons, the plan's pill to its count, the project's,
+// the machine's and a Manager's pills, the branch's, the plugins' copies
+// to their smallest, the plan's pill with a Manager's Sweep button, then
+// those copies. Under 700 points it
 // starts with the pills gone, the actions as icons and the plan as its
 // count.
 const (
@@ -373,8 +386,10 @@ const (
 
 // headerPills are the widths, gaps included, of what the header draws
 // itself and its steps take away, the project's pill with the machine's
-// and the branch's, and of the sidebar's button.
-type headerPills struct{ project, branch, sidebar float32 }
+// and the branch's, and of the sidebar's button. A Manager's pill goes
+// with the project's, and its Sweep button with the plan's pill, before
+// the plugins' copies.
+type headerPills struct{ project, branch, sidebar, manager, sweep float32 }
 
 // headerGive is what the header gives way. It picks the step in the frame
 // that draws it, from the chat's width in that frame and from what it has
@@ -423,7 +438,7 @@ func (g *headerGive) widths() *headerWidths { return g.seen[g.thread] }
 func (w *headerWidths) row(k int, narrow bool, p headerPills) float32 {
 	r := max(w.base[b2i(narrow)], 0) + p.sidebar
 	if k < giveProject {
-		r += p.project
+		r += p.project + p.manager
 	}
 	if k < giveBranch {
 		r += p.branch
@@ -432,7 +447,7 @@ func (w *headerWidths) row(k int, narrow bool, p headerPills) float32 {
 		r += max(w.slot[min(k/giveCompactPlaces, 1)], 0)
 	}
 	if k < givePlan {
-		r += max(w.plan[b2i(k >= giveCompactPlan)], 0)
+		r += max(w.plan[b2i(k >= giveCompactPlan)], 0) + p.sweep
 	}
 	return r + max(w.actions[min(k, giveActions)], 0)
 }
@@ -510,7 +525,7 @@ func (g *headerGive) measure(h ui.Rect, title, spacer float32, actions ui.Rect, 
 	}
 	base := end - h.X - d.left - title - spacer - d.pills.sidebar
 	if d.step < giveProject {
-		base -= d.pills.project
+		base -= d.pills.project + d.pills.manager
 	}
 	if d.step < giveBranch {
 		base -= d.pills.branch
@@ -520,6 +535,9 @@ func (g *headerGive) measure(h ui.Rect, title, spacer float32, actions ui.Rect, 
 	}
 	if d.planShown {
 		base -= w.plan[d.planV]
+	}
+	if d.step < givePlan {
+		base -= d.pills.sweep
 	}
 	if d.actionsShown {
 		base -= actions.W + headerGap

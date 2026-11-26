@@ -372,7 +372,7 @@ func (h *Host) committed(c store.Commit) {
 	if slices.ContainsFunc(c.Threads, func(t api.Thread) bool { return t.LastTurn != nil && t.LastTurn.Limit != nil || !t.Live() }) {
 		h.pokeLimits()
 	}
-	if len(c.Threads) > 0 {
+	if movesSweeps(c.Threads) {
 		h.pokeSweeps()
 	}
 	h.poke()
@@ -1000,7 +1000,7 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		err = h.observe(ctx, thread, engine.Bound{Run: b.Run, Session: session}, 0)
 	}
 	if t.Session == "" && b.Generation <= 1 && !b.ResumeOnly && !slashCommand(text) {
-		if docs := loadManagerDocs(b.Workspace, t.Project, t.Role, !t.Parent.IsZero()); docs != "" {
+		if docs := loadManagerDocs(b.Workspace, t.Project, t.Role, !t.Parent.IsZero() || t.Origin != nil); docs != "" {
 			text = docs + text
 		}
 	}

@@ -216,6 +216,10 @@ type TurnAdmitted struct {
 	Run        ID     `json:"run"`
 	Generation uint64 `json:"generation"`
 	Silent     bool   `json:"silent,omitempty"`
+	// Wake is why the engine started the run on its own, and Prior the
+	// thread's UpdatedAt before the wake, which a dismissal restores.
+	Wake  WakeKind  `json:"wake,omitempty"`
+	Prior time.Time `json:"prior,omitzero"`
 }
 
 // TurnStarted: the agent accepted the run's message.
@@ -601,6 +605,7 @@ func init() {
 	register[RemoteSeen]()
 	register[RemoteLost]()
 	register[WakeDismissed]()
+	register[WakeRaised]()
 	register[SweepStarted]()
 }
 

@@ -494,7 +494,7 @@ func TestAnOlderDatabaseUpgrades(t *testing.T) {
 			updated_at INTEGER NOT NULL, CHECK ((disposition = 1) = (until IS NOT NULL))) STRICT;
 		INSERT INTO threads_v1 SELECT id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at FROM threads;
 		DROP TABLE threads;
-		ALTER TABLE threads_v1 RENAME TO threads;` + runsV6 + runsV12 + runsV13 + runsV14 + commandsV7 + `
+		ALTER TABLE threads_v1 RENAME TO threads;` + runsV6 + runsV12 + runsV13 + runsV14 + runsV19 + commandsV7 + `
 		PRAGMA user_version = 1;`); err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +541,7 @@ func TestAnArchivedThreadUpgradesSettled(t *testing.T) {
 			disposition, until, updated_at, deleted FROM threads;
 		DROP TABLE threads;
 		ALTER TABLE threads_v3 RENAME TO threads;
-		UPDATE threads SET disposition = 3;` + runsV6 + runsV12 + runsV13 + runsV14 + commandsV7 + `
+		UPDATE threads SET disposition = 3;` + runsV6 + runsV12 + runsV13 + runsV14 + runsV19 + commandsV7 + `
 		PRAGMA user_version = 3;`); err != nil {
 		t.Fatal(err)
 	}
@@ -696,7 +696,7 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 		sqlText += indexesV17
 	}
 	if version < 20 {
-		sqlText = managersV19 + sqlText
+		sqlText = managersV19 + sqlText + runsV19
 	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
@@ -710,9 +710,20 @@ const indexesV17 = `
 `
 
 const managersV19 = `
+	DROP INDEX threads_sweeping;
 	ALTER TABLE threads DROP COLUMN role;
 	ALTER TABLE threads DROP COLUMN sweep;
 	ALTER TABLE threads DROP COLUMN last_sweep;
+	ALTER TABLE threads DROP COLUMN alerted;
+`
+
+// The runs table up to version 19, before a run kept the wake that
+// started it.
+const runsV19 = `
+	ALTER TABLE runs DROP COLUMN wake;
+	ALTER TABLE runs DROP COLUMN woke;
+	ALTER TABLE runs DROP COLUMN prior;
+	ALTER TABLE runs DROP COLUMN dismissed;
 `
 
 // The runs table up to version 6, before a run kept its model and access.
@@ -1685,27 +1696,42 @@ func upgradesForManagers(t *testing.T, version int) {
 	}, now); err != nil {
 		t.Fatal(err)
 	}
+	alertAt := now.Add(time.Second)
+	if _, err := s.Observe(ctx, mgr, engine.Reported{Report: api.ChildReported{Child: api.NewID(), Run: api.NewID(), Kind: api.ReportBlocked, Title: "worker"}}, alertAt, 0); err != nil {
+		t.Fatal(err)
+	}
 	runID := api.NewID()
-	if _, err := s.Observe(ctx, mgr, engine.SweepDue{Run: runID}, now.Add(901*time.Second), 0); err != nil {
+	sweepAt := now.Add(902 * time.Second)
+	if _, err := s.Observe(ctx, mgr, engine.SweepDue{Run: runID}, sweepAt, 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Submit(ctx, api.Command{
 		ID:     api.NewID(),
 		Target: mgr,
 		Body:   api.WakeDismiss{Run: runID, Reason: "quiet"},
-	}, now.Add(902*time.Second)); err != nil {
+	}, now.Add(903*time.Second)); err != nil {
 		t.Fatal(err)
 	}
+	s.Close()
+	s = open(t, path)
 
 	got, err := s.Thread(ctx, mgr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Role != api.RoleManager || got.Sweep == nil || got.Sweep.IntervalSeconds != 900 || got.LastSweep.IsZero() {
+	if got.Role != api.RoleManager || got.Sweep == nil || got.Sweep.IntervalSeconds != 900 || !got.LastSweep.Equal(sweepAt) || !got.Alerted.Equal(alertAt) {
 		t.Fatalf("unexpected manager thread persisted: %+v", got)
 	}
-	if live := got.Live(); live == nil || !live.Silent {
-		t.Fatalf("expected live run Silent=true persisted in runs table, got %+v", live)
+	live := got.Live()
+	if live == nil || live.Silent || !live.Dismissed || live.Wake != api.WakeSweep || !live.Woke.Equal(sweepAt) || !live.Prior.Equal(alertAt) {
+		t.Fatalf("the dismissed sweep persisted as %+v", live)
+	}
+	if !got.UpdatedAt.Equal(alertAt) {
+		t.Fatalf("UpdatedAt after the dismissal = %v, want the sweep's prior %v", got.UpdatedAt, alertAt)
+	}
+	sweeping, err := s.SweepManagers(ctx)
+	if err != nil || len(sweeping) != 1 || sweeping[0].ID != mgr {
+		t.Fatalf("SweepManagers = %+v, %v; want only the Manager", sweeping, err)
 	}
 }
 

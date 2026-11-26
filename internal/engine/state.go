@@ -58,6 +58,7 @@ type Thread struct {
 	Context     api.Context // how full its context is; zero until an agent says
 	Session     string      // the provider's id for the thread's conversation; "" until a run binds one
 	Reported    time.Time   // when a child last reported back
+	Alerted     time.Time   // when a child last reported it was blocked on the user
 	LastReport  *api.Report // never written through; its Cursor has no Log
 	Confirmed   api.Confirmed
 	Remote      *Remote // set on a remote child's placeholder, which runs nothing here
@@ -92,7 +93,19 @@ type Run struct {
 	// Dropped marks a run a rewind took out of the thread's conversation:
 	// it stays in the timeline, and the agent no longer has it.
 	Dropped bool
+	// Wake is why the engine started the run on its own; NotWake for a
+	// turn the user asked for or joined. Woke is when it was admitted,
+	// and Prior the thread's UpdatedAt before it. Dismissed is a wake
+	// its Manager quieted: the thread shows it as it does a silent run.
+	Wake      api.WakeKind
+	Woke      time.Time
+	Prior     time.Time
+	Dismissed bool
 }
+
+// quiet is whether r shows nothing to the user: a maintenance run, or a
+// wake its Manager dismissed.
+func (r Run) quiet() bool { return r.Silent || r.Dismissed }
 
 // Remote is a placeholder's: the machine its child was placed on, as
 // api.Remote, and where that child stands there, as far as this engine
@@ -204,10 +217,10 @@ func (t Thread) Live() *Run {
 	return nil
 }
 
-// lastTurn is the thread's last finished run that isn't silent.
+// lastTurn is the thread's last finished run that isn't quiet.
 func (t Thread) lastTurn() (Run, bool) {
 	for i := len(t.Runs) - 1; i >= 0; i-- {
-		if r := t.Runs[i]; r.State == RunFinished && !r.Silent {
+		if r := t.Runs[i]; r.State == RunFinished && !r.quiet() {
 			return r, true
 		}
 	}
@@ -242,9 +255,9 @@ func (t Thread) slot() RunState {
 
 func (t Thread) runAt(id api.ID) int { return index(t.Runs, func(r Run) bool { return r.ID == id }) }
 
-func (t Thread) silentRun(id api.ID) bool {
+func (t Thread) quietRun(id api.ID) bool {
 	i := t.runAt(id)
-	return i >= 0 && t.Runs[i].Silent
+	return i >= 0 && t.Runs[i].quiet()
 }
 
 func (t Thread) messageAt(id api.ID) int {
@@ -386,7 +399,7 @@ func View(t Thread) api.Thread {
 		v.Origin = &o
 	}
 	if r := t.Live(); r != nil {
-		v.Turn = &api.Turn{Run: r.ID, Model: r.Model, Access: r.Access, Silent: r.Silent}
+		v.Turn = &api.Turn{Run: r.ID, Model: r.Model, Access: r.Access, Silent: r.quiet()}
 	}
 	if t.LastReport != nil {
 		r := *t.LastReport

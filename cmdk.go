@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/widget"
 )
@@ -92,24 +93,17 @@ func (a *app) actions() []command {
 		rm.also = "workspace delete"
 		cmds = append(cmds, rm)
 	}
+	// A Manager runs in the project of the thread shown, not in a
+	// worktree of it; with none, in a scratch folder of its own, which this
+	// machine makes only as it's chosen.
 	if cur := a.current(); cur.env != nil {
-		ws := cur.View.Workspace
-		if ws == "" {
-			ws = a.scratchRoot()
+		root := cur.project()
+		scratch := root == "" || root == a.scratchRoot()
+		if !scratch || cur.local() {
+			mgr := action("manager.new", "New manager thread", "", "checklist", func() { a.newManager(cur.env, root, scratch) })
+			mgr.also = "manager workers sweep"
+			cmds = append(cmds, mgr)
 		}
-		mgr := action("manager.new", "New manager thread", "", "checklist", func() {
-			id := a.backend.CreateManager(cur.env, ws, "Manager", a.modelRef(), accessOf[a.access], &api.SweepSchedule{IntervalSeconds: 1800})
-			if !id.IsZero() {
-				a.selected = id
-				a.backend.OpenThread(cur.env, id)
-				if a.router.Path() != "/" {
-					a.router.Push("/")
-				}
-				a.focusBack()
-			}
-		})
-		mgr.also = "manager workers sweep"
-		cmds = append(cmds, mgr)
 	}
 	cmds = append(cmds,
 		action("model.switch", "Switch model", "", "sparkles", a.openModelPicker),
@@ -378,4 +372,28 @@ func alsoMatches(cmd command, query string) bool {
 		}
 	}
 	return true
+}
+
+// newManager starts a Manager thread in root on env, or in a new scratch
+// folder, at the model a new thread takes and a sweep every half hour,
+// and shows it.
+func (a *app) newManager(env *client.Env, root string, scratch bool) {
+	if scratch {
+		dir, err := a.scratchFolder("manager")
+		if err != nil {
+			a.pluginNotice(ui.Toast{Title: "Couldn't make the Manager's folder", Description: err.Error()})
+			return
+		}
+		root = dir
+	}
+	id := a.backend.CreateManager(env, root, "Manager", a.newThreadRef(thread{env, &client.Thread{}}), accessOf[a.access], &api.SweepSchedule{IntervalSeconds: 1800})
+	if id.IsZero() {
+		return
+	}
+	a.selected = id
+	a.backend.OpenThread(env, id)
+	if a.router.Path() != "/" {
+		a.router.Push("/")
+	}
+	a.focusBack()
 }

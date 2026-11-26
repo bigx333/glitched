@@ -194,10 +194,12 @@ CREATE TABLE threads (
 	role        TEXT NOT NULL DEFAULT '',
 	sweep       TEXT,
 	last_sweep  INTEGER,
+	alerted     INTEGER,
 	CHECK ((disposition = 1) = (until IS NOT NULL))
 ) STRICT;
 CREATE INDEX threads_live_updated ON threads (deleted, updated_at DESC, id);
 CREATE INDEX threads_by_parent ON threads (parent, deleted, id) WHERE parent IS NOT NULL;
+CREATE INDEX threads_sweeping ON threads (id) WHERE deleted = 0 AND role = 'manager' AND sweep IS NOT NULL;
 
 CREATE TABLE runs (
 	thread     BLOB NOT NULL REFERENCES threads (id),
@@ -215,6 +217,10 @@ CREATE TABLE runs (
 	limit_resets     INTEGER,
 	resume_cancelled INTEGER NOT NULL DEFAULT 0 CHECK (resume_cancelled IN (0, 1)),
 	dropped    INTEGER NOT NULL DEFAULT 0 CHECK (dropped IN (0, 1)),
+	wake       INTEGER NOT NULL DEFAULT 0 CHECK (wake BETWEEN 0 AND 2),
+	woke       INTEGER,
+	prior      INTEGER,
+	dismissed  INTEGER NOT NULL DEFAULT 0 CHECK (dismissed IN (0, 1)),
 	PRIMARY KEY (thread, ord),
 	CHECK ((state = 'finished') = (outcome IS NOT NULL)),
 	CHECK ((state = 'finished') = (ended IS NOT NULL))
@@ -403,11 +409,25 @@ CREATE INDEX IF NOT EXISTS threads_by_parent ON threads (parent, deleted, id) WH
 DROP INDEX IF EXISTS commands_by_seq;
 DELETE FROM meta WHERE key = 'commands_pruned';
 `,
-	// Persistent Manager role and sweep schedule fields.
+	// Manager threads: a role, a sweep schedule, when the last sweep
+	// started and, as its log has it, a child's last report it was blocked
+	// on the user (kind 2); and on runs, the wake that
+	// started one and whether its Manager dismissed it. No build before
+	// had a Manager.
 	19: `
 ALTER TABLE threads ADD COLUMN role TEXT NOT NULL DEFAULT '';
 ALTER TABLE threads ADD COLUMN sweep TEXT;
 ALTER TABLE threads ADD COLUMN last_sweep INTEGER;
+ALTER TABLE threads ADD COLUMN alerted INTEGER;
+UPDATE threads SET alerted = (
+	SELECT e.at FROM events e
+	WHERE e.thread = threads.id AND e.type = 'child.reported' AND json_extract(CAST(e.payload AS TEXT), '$.kind') = 2
+	ORDER BY e.seq DESC LIMIT 1);
+CREATE INDEX threads_sweeping ON threads (id) WHERE deleted = 0 AND role = 'manager' AND sweep IS NOT NULL;
+ALTER TABLE runs ADD COLUMN wake INTEGER NOT NULL DEFAULT 0 CHECK (wake BETWEEN 0 AND 2);
+ALTER TABLE runs ADD COLUMN woke INTEGER;
+ALTER TABLE runs ADD COLUMN prior INTEGER;
+ALTER TABLE runs ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0 CHECK (dismissed IN (0, 1));
 `,
 }
 

@@ -354,7 +354,8 @@ func replaces(p Pending, body api.Intent) bool {
 	case api.ThreadConfigure:
 		b, ok := p.Body.(api.ThreadConfigure)
 		return ok && (b.Model != nil && c.Model != nil || b.Effort != nil && c.Effort != nil ||
-			(b.Fast != nil || b.Ultrafast != nil) && (c.Fast != nil || c.Ultrafast != nil) || b.Access != nil && c.Access != nil)
+			(b.Fast != nil || b.Ultrafast != nil) && (c.Fast != nil || c.Ultrafast != nil) || b.Access != nil && c.Access != nil ||
+			b.Sweep != nil && c.Sweep != nil)
 	case api.InboxSet:
 		_, ok := p.Body.(api.InboxSet)
 		return ok
