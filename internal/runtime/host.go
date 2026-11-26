@@ -580,6 +580,11 @@ func (h *Host) boot(ctx context.Context) error {
 	return nil
 }
 
+// Search queries the full-text transcript index over non-deleted threads.
+func (h *Host) Search(ctx context.Context, q api.SearchQuery) (api.SearchResult, error) {
+	return h.store.Search(ctx, q)
+}
+
 // ErrBusy is Hold's error while a run of the provider is live.
 var ErrBusy = errors.New("runtime: a run of the provider is live")
 

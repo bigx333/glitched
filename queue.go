@@ -157,6 +157,10 @@ func (a *app) queueRow(c *ui.Context, t thread, q []*client.UserEntry, i int, u 
 			if moved && e.FocusWithin() {
 				e.ScrollIntoView()
 			}
+			if a.findOpen && a.findThread == t.id() && a.findQueueSeq != 0 && a.findQueueSeq == u.Seq {
+				e.ScrollIntoView()
+				a.findQueueSeq = 0
+			}
 			return e
 		},
 		context: func(plugins.ThreadRecord) any { return r },

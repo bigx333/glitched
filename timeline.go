@@ -57,9 +57,30 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) (laid bool) {
 	if a.stepsSayWorking(t, rs, row) {
 		at = -1
 	}
+	var matchSet map[int]bool
+	activeMatch := -1
+	if !leaving && a.findOpen {
+		if ms := a.findMatches(t, rs); len(ms) > 0 {
+			matchSet = make(map[int]bool, len(ms))
+			for _, h := range ms {
+				if h.row >= 0 {
+					matchSet[v.pos(h.row)] = true
+				}
+			}
+			if h := ms[max(0, min(a.findIndex, len(ms)-1))]; h.row >= 0 {
+				activeMatch = v.pos(h.row)
+			}
+		}
+	}
 	list := ui.List(c.Key(t.id()), l, v.len(), func(j int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
-			ui.Column(c).Grow(1).MinWidth(0).MaxWidth(contentWidth).Gap(22).Children(func() {
+			col := ui.Column(c).Grow(1).MinWidth(0).MaxWidth(contentWidth).Gap(22)
+			if j == activeMatch {
+				col.Background(palette.accent.Alpha(0.10)).Border(1, palette.accent.Alpha(0.45)).Radius(10).Padding(6, 8)
+			} else if matchSet[j] {
+				col.Background(palette.accent.Alpha(0.05)).Border(1, palette.border).Radius(10).Padding(6, 8)
+			}
+			col.Children(func() {
 				if f := v.fold(j); f != nil {
 					a.zenLine(c, t, f)
 				} else {

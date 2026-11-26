@@ -61,6 +61,8 @@ type Server struct {
 	// Replies says what a run said last, for a link following a thread it
 	// started here, or any client the server admits.
 	Replies Replies
+	// Search queries the full-text transcript index for any admitted client.
+	Search Searcher
 	// Terminals serves engine-owned workspace PTYs for any admitted client.
 	Terminals Terminals
 	// Authorize admits a socket whose client proved, in the handshake, that
@@ -415,6 +417,11 @@ type Plugins interface {
 // its parent.
 type Replies interface {
 	ChildReply(ctx context.Context, q api.ChildReplyQuery) (api.ChildReply, error)
+}
+
+// Searcher searches indexed user and assistant messages across threads.
+type Searcher interface {
+	Search(ctx context.Context, q api.SearchQuery) (api.SearchResult, error)
 }
 
 // Terminals serves engine-owned PTYs for admitted clients.
@@ -811,6 +818,9 @@ func (s *Server) methods() map[string]handler {
 	}
 	if r := s.Replies; r != nil {
 		m["child.reply"] = callHandler(r.ChildReply)
+	}
+	if sr := s.Search; sr != nil {
+		m["search"] = callHandler(sr.Search)
 	}
 	if tm := s.Terminals; tm != nil {
 		m["terminal.open"] = streamHandler(func(ctx context.Context, req api.TerminalOpen) (source[api.TerminalItem], error) {

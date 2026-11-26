@@ -596,6 +596,9 @@ func (s *Store) write(ctx context.Context, tx *sql.Tx, thread api.ID, decide dec
 			head, w.Thread[:], w.Type, w.Schema, e.At.UnixNano(), payload); err != nil {
 			return Commit{}, 0, err
 		}
+		if err := indexEventFTS(ctx, tx, e.Thread, head, e.Body); err != nil {
+			return Commit{}, 0, err
+		}
 		e.Seq = head
 		t = engine.Apply(t, e)
 		wire = append(wire, w)

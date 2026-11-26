@@ -502,6 +502,7 @@ var keybindings = []struct {
 }{
 	{"New thread", []string{"⌘", "N"}},
 	{"Search threads and commands", []string{"⌘", "K"}},
+	{"Find in thread", []string{"⌘", "F"}},
 	{"Send message", []string{"↩"}},
 	{"New line in the message", []string{"⇧", "↩"}},
 	{"Send, or stop the agent when empty", []string{"⌘", "↩"}},

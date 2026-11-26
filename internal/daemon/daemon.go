@@ -568,10 +568,10 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	d.clis = newCLIs(ctx, cfg.Dir, cfg.Providers, h, cliupdate.NewChecker(cfg.Versions, filepath.Join(cfg.Dir, "cli-versions.json")))
 	cmds := newCommandLists(ctx, cfg.Providers)
 	ls := &launches{dir: cfg.Dir, mux: cfg.Providers, commands: cmds}
-	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: cmds, Launches: ls, CLIs: d.clis, Asks: h, Secrets: h, Projects: endpoint{h, d, false}, Skills: h, Terminals: d.ptys}}
+	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: cmds, Launches: ls, CLIs: d.clis, Asks: h, Secrets: h, Projects: endpoint{h, d, false}, Skills: h, Search: h, Terminals: d.ptys}}
 	g := &grants{dir: cfg.Dir, base: ctx}
 	tailnetServer := func(tn transport.Transport) *transport.Server {
-		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Launches: ls, CLIs: d.clis, Secrets: h, Projects: endpoint{h, d, true}, Skills: h, Replies: h, Terminals: d.ptys, Authorize: g.authorize}
+		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Launches: ls, CLIs: d.clis, Secrets: h, Projects: endpoint{h, d, true}, Skills: h, Replies: h, Search: h, Terminals: d.ptys, Authorize: g.authorize}
 	}
 	for _, tn := range tns[1:] {
 		servers = append(servers, tailnetServer(tn))
@@ -712,6 +712,11 @@ func (d *Daemon) release() error {
 
 // Endpoint is the engine in this process, for a caller that embeds it.
 func (d *Daemon) Endpoint() api.Endpoint { return endpoint{d.host, d, false} }
+
+// Search queries the full-text transcript index on this engine.
+func (d *Daemon) Search(ctx context.Context, q api.SearchQuery) (api.SearchResult, error) {
+	return d.host.Search(ctx, q)
+}
 
 // OpenTerminal opens or reattaches to an engine-owned PTY for workspace.
 func (d *Daemon) OpenTerminal(ctx context.Context, req api.TerminalOpen) (api.TerminalStream, error) {

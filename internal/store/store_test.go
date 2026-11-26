@@ -698,6 +698,9 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 	if version < 20 {
 		sqlText = managersV19 + sqlText + runsV19
 	}
+	if version < 22 {
+		sqlText += ftsV21
+	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
 	}
@@ -722,6 +725,10 @@ const runsV19 = `
 	ALTER TABLE runs DROP COLUMN woke;
 	ALTER TABLE runs DROP COLUMN prior;
 	ALTER TABLE runs DROP COLUMN dismissed;
+`
+
+const ftsV21 = `
+	DROP TABLE IF EXISTS transcript_fts;
 `
 
 // The runs table up to version 6, before a run kept its model and access.
@@ -1749,8 +1756,8 @@ func TestAVersion17DatabaseUpgradesWithIndexes(t *testing.T) {
 	}
 	defer db.Close()
 	var version int
-	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 21 {
-		t.Fatalf("user_version = %d (%v), want 21", version, err)
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 22 {
+		t.Fatalf("user_version = %d (%v), want 22", version, err)
 	}
 	for _, idx := range []string{"events_by_thread_type", "threads_live_updated", "threads_by_parent"} {
 		var count int
@@ -2115,8 +2122,8 @@ func TestAVersion18DatabaseLosesTheReceiptPruningLeftovers(t *testing.T) {
 		(SELECT COUNT(*) FROM meta WHERE key = 'commands_pruned')`).Scan(&version, &index, &mark); err != nil {
 		t.Fatal(err)
 	}
-	if version != 21 || index != 0 || mark != 0 {
-		t.Fatalf("after the upgrade: user_version %d, commands_by_seq %d, watermark %d; want 21, 0, 0", version, index, mark)
+	if version != 22 || index != 0 || mark != 0 {
+		t.Fatalf("after the upgrade: user_version %d, commands_by_seq %d, watermark %d; want 22, 0, 0", version, index, mark)
 	}
 }
 

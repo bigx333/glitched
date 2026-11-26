@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/widget"
 )
@@ -36,6 +37,7 @@ func (a *app) openCommandPalette() {
 		return
 	}
 	a.cmdkOpen, a.cmdkQuery, a.cmdkIndex = true, "", 0
+	a.cmdkHits, a.cmdkHitsQuery, a.cmdkSearched = nil, "", ""
 	a.cmdkOpens++
 }
 
@@ -94,6 +96,7 @@ func (a *app) actions() []command {
 	}
 	cmds = append(cmds,
 		action("model.switch", "Switch model", "", "sparkles", a.openModelPicker),
+		action("thread.find", "Find in thread", "⌘F", "magnifer", func() { a.router.Push("/"); a.openFind() }),
 		action("diff.toggle", "Toggle diff panel", "⌘D", "pull-request", func() { a.showDiff = !a.showDiff }),
 		action("terminal.toggle", "Toggle terminal", "⌘J", "terminal", func() { a.showTerminal = !a.showTerminal }),
 		action("preview.toggle", "Toggle preview", "⇧⌘P", "global", a.togglePreview),
@@ -144,7 +147,101 @@ func (a *app) commands() []command {
 			shown = append(shown, cmd)
 		}
 	}
+	if !actionsOnly && a.cmdkHitsQuery == query {
+		shown = append(shown, a.messageCommands(query)...)
+	}
 	return shown
+}
+
+// triggerCmdkSearch searches the messages for query, unless it is what
+// was searched last. The hits of the query before go at once.
+func (a *app) triggerCmdkSearch(query string) {
+	q := strings.TrimSpace(query)
+	if q == a.cmdkSearched {
+		return
+	}
+	a.cmdkHits, a.cmdkHitsQuery, a.cmdkSearched = nil, "", q
+	a.cmdkSearchGen++
+	if len(q) < 2 {
+		return
+	}
+	gen := a.cmdkSearchGen
+	a.backend.Search(q, 20, func(hits []client.SearchMatch) {
+		if a.cmdkSearchGen == gen && a.cmdkOpen {
+			a.cmdkHits, a.cmdkHitsQuery = hits, q
+		}
+	})
+}
+
+// messageCommands are the palette's messages found for query, each
+// opening its thread with the find bar on it.
+func (a *app) messageCommands(query string) []command {
+	var out []command
+	for _, m := range a.cmdkHits {
+		t, _, ok := a.hitThread(m)
+		if !ok {
+			continue
+		}
+		seq := m.Hit.Seq
+		out = append(out, command{section: "Messages", label: title(t), hint: hitSnippet(m.Hit), run: func() { a.openHit(t, query, seq) }, t: &t})
+	}
+	return out
+}
+
+// openHit shows t, with the find bar on the message search found at seq
+// when find names the query.
+func (a *app) openHit(t thread, find string, seq uint64) {
+	a.select_(t)
+	a.revealing = t.id()
+	if find != "" {
+		a.openFindAt(find, seq)
+	}
+}
+
+// hitThread is the thread a hit is in, and its project's name.
+func (a *app) hitThread(m client.SearchMatch) (thread, string, bool) {
+	for _, p := range a.projects {
+		for _, t := range p.threads {
+			if t.id() == m.Hit.Thread && (m.Env == nil || t.env == m.Env) {
+				return t, p.name(), true
+			}
+		}
+	}
+	return thread{}, "", false
+}
+
+// hitSnippet is a hit's words around the match on one line, at most 160
+// letters.
+func hitSnippet(h api.SearchHit) string {
+	s := strings.Join(strings.Fields(h.Snippet), " ")
+	if s == "" {
+		return h.Role + " match"
+	}
+	if r := []rune(s); len(r) > 160 {
+		s = string(r[:159]) + "…"
+	}
+	return s
+}
+
+// searchHit is a message threads.search found, as a plugin reads it.
+type searchHit struct {
+	Thread  string `json:"thread"`
+	Title   string `json:"title"`
+	Project string `json:"project"`
+	Snippet string `json:"snippet"`
+	Seq     uint64 `json:"seq"`
+	Role    string `json:"role"`
+	Ago     string `json:"ago"`
+}
+
+func (a *app) searchHits(ms []client.SearchMatch) []searchHit {
+	out := []searchHit{}
+	for _, m := range ms {
+		if t, project, ok := a.hitThread(m); ok {
+			out = append(out, searchHit{t.id().String(), title(t), project, hitSnippet(m.Hit), m.Hit.Seq, m.Hit.Role, ago(t.View.UpdatedAt, a.now)})
+		}
+	}
+	return out
 }
 
 // threadCommands are the palette's threads, the most recently active
@@ -245,6 +342,9 @@ func (a *app) commandPalette(c *ui.Context) {
 // nativePalette is Glitched's own drawing of the palette, which shows
 // where no plugin draws it.
 func (a *app) nativePalette(c *ui.Context) {
+	if query, actionsOnly := strings.CutPrefix(a.cmdkQuery, ">"); !actionsOnly {
+		a.triggerCmdkSearch(query)
+	}
 	cmds := a.commands()
 	a.cmdkIndex = max(0, min(a.cmdkIndex, len(cmds)-1))
 	// The arrows move the choice from the search field, which keeps
@@ -289,7 +389,7 @@ func (a *app) nativePalette(c *ui.Context) {
 	l := &a.cmdkList
 	l.Key = func(i int) any {
 		if t := cmds[i].t; t != nil {
-			return t.id()
+			return cmds[i].section + "/" + t.id().String()
 		}
 		return cmds[i].section + "/" + cmds[i].label
 	}

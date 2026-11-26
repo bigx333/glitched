@@ -553,6 +553,12 @@ type app struct {
 	cmdkOpen  bool
 	cmdkQuery string
 	cmdkIndex int
+	// cmdkHits are the messages found for cmdkHitsQuery; cmdkSearched is
+	// the query searched last, its search the cmdkSearchGen-th.
+	cmdkHits      []client.SearchMatch
+	cmdkHitsQuery string
+	cmdkSearched  string
+	cmdkSearchGen int
 	// cmdkOpens counts the palette's openings, each a copy of its own of
 	// the palette component, which none of the last one's state shows in.
 	cmdkOpens int
@@ -571,6 +577,21 @@ type app struct {
 	// svcHandOver: the switch installed the service, so the engine
 	// embedded here goes to it once no agent runs here.
 	svcHandOver bool
+
+	findOpen   bool
+	findQuery  string
+	findThread api.ID
+	findIndex  int
+	findFocus  bool
+	findJump   bool
+	// findWords: the bar opened at a search hit, and matches each word of
+	// the query, as search did; findTarget is the hit's seq, till the
+	// rows show it.
+	findWords    bool
+	findTarget   uint64
+	findQueueSeq uint64
+	findKey      findKey
+	findRows     []findHit
 
 	glassOffset ui.Point
 	checkUntil  time.Time
@@ -948,6 +969,9 @@ func (a *app) pages(c *ui.Context) {
 func (a *app) shortcuts(c *ui.Context) {
 	if c.Shortcut(ui.Cmd, ui.KeyK) {
 		a.openCommandPalette()
+	}
+	if c.Shortcut(ui.Cmd, ui.KeyF) && a.router.Path() == "/" && !a.terminalFocused {
+		a.openFind()
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyN) {
 		a.newThread()

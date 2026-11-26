@@ -123,9 +123,11 @@ const (
 
 type UserEntry struct {
 	Message api.ID
-	Text    string
-	State   MessageState
-	Reason  string // why it was cancelled, when the engine said
+	// Seq is where the log queued it, as search's hits say.
+	Seq    uint64
+	Text   string
+	State  MessageState
+	Reason string // why it was cancelled, when the engine said
 	// At is when it was sent.
 	At time.Time
 	// End is how the message's own run ended, when it ended saying
@@ -136,7 +138,9 @@ type UserEntry struct {
 }
 
 type AssistantEntry struct {
-	Run       api.ID
+	Run api.ID
+	// Seq is where the log has its first words, as search's hits say.
+	Seq       uint64
 	Text      string
 	Streaming bool      // more text may follow
 	At        time.Time // when its first words came
@@ -366,7 +370,7 @@ func (t *Transcript) apply(e api.Event) {
 		if b.Held {
 			state = Held
 		}
-		t.enqueue(&UserEntry{Message: b.Message, Text: b.Text, State: state, At: e.At, pos: b.Pos})
+		t.enqueue(&UserEntry{Message: b.Message, Seq: e.Cursor.Seq, Text: b.Text, State: state, At: e.At, pos: b.Pos})
 	case api.MessageClaimed:
 		if i := t.waiting(b.Message); i >= 0 {
 			t.Queue[i].State, t.Queue[i].run = Claimed, b.Run
@@ -447,7 +451,7 @@ func (t *Transcript) apply(e api.Event) {
 		}
 		a, ok := t.last().(*AssistantEntry)
 		if !ok || a.Run != b.Run {
-			a = &AssistantEntry{Run: b.Run, Streaming: true, At: e.At}
+			a = &AssistantEntry{Run: b.Run, Seq: e.Cursor.Seq, Streaming: true, At: e.At}
 			t.add(a)
 		}
 		a.write(b.Text)

@@ -264,11 +264,11 @@ CREATE TABLE effects (
 	state   TEXT NOT NULL CHECK (state IN ('pending', 'leased', 'done'))
 ) STRICT;
 CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
-`
+` + transcriptFTS
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 21
+const schemaVersion = 22
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -427,6 +427,8 @@ ALTER TABLE runs ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0 CHECK (dismisse
 	20: `
 UPDATE threads SET disposition = 0, until = NULL WHERE role = 'manager' AND disposition <> 0;
 `,
+	// Full-text search over the transcript: backfillTranscriptFTS fills it.
+	21: transcriptFTS,
 }
 
 func (s *Store) migrate() error {
@@ -530,6 +532,11 @@ func upgradeOnce(ctx context.Context, conn *sql.Conn, version int) error {
 	}
 	if _, err := tx.ExecContext(ctx, upgrades[version]+fmt.Sprintf(`PRAGMA user_version = %d;`, version+1)); err != nil {
 		return err
+	}
+	if version == 21 {
+		if err := backfillTranscriptFTS(ctx, tx); err != nil {
+			return err
+		}
 	}
 	rows, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check`)
 	if err != nil {

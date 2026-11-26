@@ -84,6 +84,7 @@ func (a *app) chatPage(c *ui.Context) {
 				// Before the composer, whose ⌘⏎ would send or stop.
 				a.approvalKeys(c, pane, t, rs)
 				a.composer(c, t, rs)
+				a.findBar(c, t, rs)
 			})
 			if a.showTerminal {
 				dir := t.View.Workspace
