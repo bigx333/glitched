@@ -587,7 +587,7 @@ func (a *app) managerDialog(c *ui.Context) {
 		ui.Column(c).Gap(6).Children(func() {
 			field("STANDING INSTRUCTIONS")
 			ui.TextArea(c.Key("manager-prompt"), &d.prompt).Label("Standing sweep prompt").
-				Placeholder("Optional standing brief for sweeps (defaults to checking workers, WORKERS.md, and NOTES.md)").
+				Placeholder("Optional standing brief for sweeps. By default a sweep verifies finished workers, steers stalled ones, updates WORKERS.md and NOTES.md, and stays quiet unless you must act.").
 				FontSize(12.5).Padding(6, 9).Radius(7).MinHeight(64).MaxHeight(140)
 		})
 		ui.Row(c).Gap(8).Justify(ui.End).Margin(4, 0, 0, 0).Children(func() {
@@ -745,7 +745,7 @@ func (a *app) sweepControls(c *ui.Context, t thread, inPanel bool) {
 		saved = cur.Prompt
 	}
 	ui.TextArea(c.Key("sweep-prompt"), &a.mgr.promptDraft).Label("Standing sweep prompt").
-		Placeholder("Default: review workers, WORKERS.md and NOTES.md; stay quiet when all is on track.").
+		Placeholder("Default: verify finished workers, steer stalled ones, update WORKERS.md and NOTES.md, and stay quiet unless you must act.").
 		FontSize(12).Padding(6, 9).Radius(7).MinHeight(56).MaxHeight(140)
 	ui.Row(c).Key("sweep-actions").Gap(6).AlignItems(ui.Center).Children(func() {
 		draft := strings.TrimSpace(a.mgr.promptDraft)

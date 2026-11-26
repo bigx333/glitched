@@ -17,7 +17,7 @@ type SweepSchedule struct {
 	Prompt          string `json:"prompt,omitempty"`
 }
 
-const DefaultSweepPrompt = "Scheduled sweep: review your active and recently finished workers, check NOTES.md and WORKERS.md for pending items, take any needed follow-up actions, or call dismiss_wake if everything is on track and needs no user attention."
+const DefaultSweepPrompt = "Scheduled sweep: check your active and recently finished workers. Verify each finished worker's branch, diff and checks against its brief. Steer or cancel stalled or off-scope work with task_send or task_cancel, and answer routine worker questions with task_answer. Update WORKERS.md and NOTES.md. Then call dismiss_wake unless the user must act: a decision, secret or legitimate approval only the user can give, an unresolved blocker or failure, or a verified deliverable ready for review."
 
 // WakeKind is why the engine, not the user, started a run: a child's
 // report or a Manager's scheduled sweep.
