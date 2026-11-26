@@ -111,6 +111,7 @@ func TestAMessagesActionsStayOnTheWayDownToThem(t *testing.T) {
 // what it printed, and an edit's step opens its file in the diff.
 func TestWorkLogSteps(t *testing.T) {
 	h, th := checked(t)
+	h.openWork("Ran 2 commands", "Edit "+sidebarPath)
 	for _, s := range []string{"✓ 0", "✗ 1", " FAIL  Sidebar > sorts threads by updatedAt\n Test Files  1 failed (1)", "3 steps"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("no %q in the work log; texts %q", s, h.tt.Texts())

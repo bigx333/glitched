@@ -197,6 +197,7 @@ func TestPreviewDragsLive(t *testing.T) {
 		to := x - float32(i)*12
 		tt.Move(to, y)
 		tt.Advance(16 * time.Millisecond) // a frame's time, as the window's
+		tt.Frame()                        // the frame the chat's new width asks for
 		edge, _ := tt.Find("Resize preview")
 		if !near(edge.X+edge.W/2, to) {
 			t.Errorf("step %d: the edge is at %v, the pointer at %v", i, edge.X+edge.W/2, to)

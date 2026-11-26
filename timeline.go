@@ -29,8 +29,9 @@ func (a *app) listFor(id api.ID) *ui.ListState {
 
 // timeline lists the thread's entries, as MyGo's markdown-chat does: the
 // list builds only those in view, starts at the end and follows it as a
-// reply streams in, gliding, until the user scrolls up; scrolling back to
-// the end follows it again. Each entry is in the middle of a row as wide
+// reply streams in, frame for frame, until the user scrolls up; scrolling
+// back to the end follows it again. A thread shorter than the pane starts
+// at its top and grows down. Each entry is in the middle of a row as wide
 // as the pane, so that the wheel scrolls it wherever the pointer is. It
 // fades in as the composer docks from the hero; into a hero, the thread
 // left fades out, sliding up, out of the pointer's way.
@@ -49,10 +50,13 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) (laid bool) {
 	a.keepPlace(t.id(), l, v)
 	l.Key = func(j int) any { return v.key(j) }
 	l.FollowEnd = true
-	l.FollowAnimation = &ui.Smooth
 	// The agents strip sits over the composer: the end clears it too.
 	room := composerRoom + a.agentsRoom(t) + a.queueRoom(t)
-	at := v.thinkingPos(thinkingAt(t, rs))
+	row := thinkingAt(t, rs)
+	at := v.thinkingPos(row)
+	if a.stepsSayWorking(t, rs, row) {
+		at = -1
+	}
 	list := ui.List(c.Key(t.id()), l, v.len(), func(j int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).MaxWidth(contentWidth).Gap(22).Children(func() {
@@ -70,7 +74,7 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) (laid bool) {
 	if leaving {
 		list.Translate(0, -32*(1-tr)).PassThrough()
 	}
-	list.Fill().Padding(20, columnRight, room, columnLeft).Gap(22).Justify(ui.End).
+	list.Fill().Padding(20, columnRight, room, columnLeft).Gap(22).
 		ScrollbarInsets(0, 0, room-40, 0).Opacity(tr).Children(func() {
 		// The hero has its own greeting, over its composer.
 		if len(es) == 0 && remote(t) != nil {
@@ -108,10 +112,21 @@ func thinkingAt(t thread, rs rows) int {
 
 var thinkingLabels = map[api.RunState]string{api.RunStarting: "Thinking…", api.RunRunning: "Thinking…", api.RunStopping: "Stopping…"}
 
+// stepsSayWorking is whether row, the row the thinking row would go under,
+// is a work log that shows the run's live state itself (running step,
+// thinking between steps, or stopping), so no separate thinking row pops
+// in and out beneath it. Zen mode keeps its own thinking row.
+func (a *app) stepsSayWorking(t thread, rs rows, row int) bool {
+	if row < 0 || row >= len(rs.es) || a.settings.zen {
+		return false
+	}
+	return rs.es[row].kind == entryWork
+}
+
 // thinkingRow says the agent is at work: the steps card's working mark and
 // shimmering label, without the card, at the card header's inset.
 func (a *app) thinkingRow(c *ui.Context, t thread) {
-	ui.Row(c).Key("thinking").Gap(6).AlignItems(ui.Center).Padding(0, 13).Transition(riseIn).Children(func() {
+	ui.Row(c).Key("thinking").Gap(6).AlignItems(ui.Center).Padding(0, 13).Children(func() {
 		a.statusMark(c, statusWorking)
 		shimmerText(c, thinkingLabels[t.View.Run], 12, palette.muted, palette.text)
 	})
@@ -402,7 +417,7 @@ func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 	a.pluginComponent(c, "timeline.message", &t, componentCopy{
 		key: e.key,
 		box: func() ui.Element {
-			return ui.Column(c).Key(e.key).Transition(riseIn)
+			return ui.Column(c).Key(e.key)
 		},
 		context: func(plugins.ThreadRecord) any { return m },
 		native:  func(body *widget.Node) { acted = a.transcriptBody(c, t, rs, i, body) },
@@ -571,7 +586,7 @@ func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body *widg
 			a.messageActions(c, t, rs.es, i, col.Hovered() && !e.streaming)
 		})
 	case entryWork:
-		a.workLog(c, t, e.key, e, rs.files)
+		a.workLog(c, t, rs, i, e.key, e, rs.files)
 	case entryPlan:
 		a.planCard(c, t, e)
 	case entryFailed, entryError:
@@ -620,128 +635,6 @@ func (a *app) failedActions(c *ui.Context, t thread, p client.Pending) {
 		ui.Text(c, "Dismiss").FontSize(11.5)
 	}).Clicked() {
 		a.backend.Dismiss(t.env, t.id(), p.Command)
-	}
-}
-
-func (a *app) workLog(c *ui.Context, t thread, key string, e entry, files []fileChange) {
-	working := e.working
-	open := !a.collapsed[key]
-	ui.Column(c).Key(key).Radius(12).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Clip().
-		Children(func() {
-			ui.Row(c).Key("bar").AlignItems(ui.Center).Children(func() {
-				if ghost(c, "head", false).Radius(0).Padding(8, 12).Grow(1).Children(func() {
-					switch {
-					case e.paused != "":
-						ui.Icon(c, icClock).FontSize(12).TextColor(palette.amber)
-						ui.Text(c, e.paused).FontSize(12).Grow(1)
-					case working:
-						a.statusMark(c, statusWorking)
-						shimmerText(c, e.took, 12, palette.muted, palette.text)
-					default:
-						ui.Text(c, e.took).FontSize(12).Grow(1)
-					}
-					ui.Text(c, plural(len(e.work), "step")).FontSize(11).TextColor(palette.faint)
-					chevron(c, open)
-				}).Clicked() {
-					a.collapsed[key] = open
-				}
-			})
-			if !open {
-				return
-			}
-			ui.Column(c).Key("steps").Padding(6, 8, 10).Gap(2).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).
-				ClipY().Transition(fold).Children(func() {
-				for _, w := range e.work {
-					// Each step the agent takes unfolds below the last.
-					a.step(c, t, files, e.run, w)
-				}
-			})
-		})
-}
-
-// step is one of the agent's steps. A command that finished shows its
-// exit code and how long it took, and what it printed when it failed. An
-// edit of a file the diff lists opens it there.
-func (a *app) step(c *ui.Context, t thread, files []fileChange, run api.ID, w client.WorkStep) {
-	icon := icFile
-	switch w.Kind {
-	case "command":
-		icon = icTerminal
-	case "edit":
-		icon = icPencil
-	case "search":
-		icon = icSearch
-	}
-	file := -1
-	if w.Kind == "edit" && w.Path != "" {
-		file = slices.IndexFunc(files, func(f fileChange) bool { return f.path == w.Path })
-	}
-	sub := w.Subagent != nil
-	if sub {
-		icon = icChild
-	}
-	var r ui.Element
-	if file >= 0 || sub {
-		r = ghost(c, w.Item, false).Padding(2, 4).Radius(5).Gap(8).ClipY().Transition(fold)
-	} else {
-		r = ui.Row(c).Key(w.Item).Padding(2, 4).Radius(5).Gap(8).AlignItems(ui.Center).ClipY().Transition(fold)
-	}
-	if r.Children(func() {
-		ui.Icon(c, icon).FontSize(12).TextColor(palette.faint)
-		// An edit's path reads from the workspace and gives way at its
-		// start, so the file's name shows.
-		if verb, ok := strings.CutSuffix(w.Title, " "+w.Path); ok && w.Path != "" {
-			path := shownPath(t.View.Workspace, w.Path)
-			name := ui.Row(c).Gap(4).Shrink(1)
-			if file >= 0 {
-				name.Label(verb + " " + path) // the button's name
-			}
-			name.Children(func() {
-				ui.Text(c, verb).FontSize(12).SingleLine().Shrink(0).TextColor(palette.text)
-				ui.Text(c, path).FontSize(12).SingleLine().TruncateStart().Shrink(1).TextColor(palette.text)
-			})
-		} else {
-			ui.Text(c, w.Title).FontSize(12).SingleLine().Shrink(1).TextColor(palette.text)
-		}
-		if file >= 0 {
-			add, del := a.diffStats(t, files[file])
-			counts(c, add, del)
-		}
-		if sub {
-			ui.Text(c, plural(w.Subagent.Steps(), "step")).FontSize(11.5).SingleLine().Shrink(0).TextColor(palette.faint)
-		}
-		ui.Spacer(c)
-		switch {
-		case w.Status == api.WorkStarted:
-			a.statusMark(c, statusWorking)
-		case w.Exit != nil:
-			mark, color := "✓", palette.green
-			if *w.Exit != 0 {
-				mark, color = "✗", palette.red
-			}
-			ui.Textf(c, "%s %d", mark, *w.Exit).FontSize(11.5).Font("monospace").TextColor(color)
-			ui.Text(c, "· "+tookFor(w.Ended.Sub(w.Started))).FontSize(11.5).Font("monospace").TextColor(palette.faint)
-		case w.Status == api.WorkFailed:
-			a.tip(c, ui.Icon(c, icX).FontSize(12).TextColor(palette.red), "Failed")
-		case file >= 0 && r.Hovered():
-			ui.Text(c, "Open in diff").FontSize(11.5).TextColor(palette.muted)
-			ui.Icon(c, icExternal).FontSize(11).TextColor(palette.muted)
-		case sub && r.Hovered():
-			ui.Text(c, "Open").FontSize(11.5).TextColor(palette.muted)
-			ui.Icon(c, icExternal).FontSize(11).TextColor(palette.muted)
-		}
-	}).Clicked() {
-		switch {
-		case file >= 0:
-			a.showDiff, a.showPreview, a.panelsJump = true, false, false
-			a.diffFile[t.id()] = w.Path
-		case sub:
-			a.openSubagent(t, run, w)
-		}
-	}
-	if w.Output != "" && (w.Status == api.WorkFailed || w.Exit != nil && *w.Exit != 0) {
-		ui.Text(c, w.Output).Key(w.Item+"/output").Selectable().FontSize(11.5).Font("monospace").LineHeight(1.5).TextColor(palette.muted).
-			Margin(2, 0, 4, 24).Padding(6, 10).Radius(6).Background(palette.bg).Border(1, palette.border)
 	}
 }
 

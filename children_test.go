@@ -453,6 +453,9 @@ func TestCmdEnterStopsFromTheCompactComposer(t *testing.T) {
 	for i := range 30 {
 		script = append(script, provider.Work{Item: fmt.Sprint("r", i), Kind: "read", Title: fmt.Sprintf("Read file%d.go", i), Status: api.WorkCompleted})
 	}
+	// The reads fold to a line: the reply makes the thread taller than the
+	// window, to scroll up from its end.
+	script = append(script, provider.TextDelta{Text: strings.Repeat("A line of what the reads found.\n\n", 40)})
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, stalled{fake.New(script), len(script)})
 	id := seed(t, d, "/work/t3code", "Read everything")
@@ -462,7 +465,9 @@ func TestCmdEnterStopsFromTheCompactComposer(t *testing.T) {
 	h := start(t, dir)
 	th := h.thread("Read everything")
 	h.a.select_(th)
-	h.until("the reads", func() bool { return h.tt.HasText("Read file29.go") && th.View.Working() })
+	h.until("the reads", func() bool {
+		return h.tt.HasText("Used 30 tools") && h.tt.HasText("A line of what the reads found.") && th.View.Working()
+	})
 	h.tt.Advance(time.Second)
 	h.a.listFor(th.id()).ScrollTo(0, ui.Start)
 	h.tt.Frame()

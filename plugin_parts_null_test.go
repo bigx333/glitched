@@ -72,6 +72,7 @@ func TestPartsNamesNoDrawerOfAPartAnsweredNull(t *testing.T) {
 // A panel closed on the thread shown leaves no null behind it in Settings.
 func TestAClosedPanelLeavesNoNullInSettings(t *testing.T) {
 	h, th := checked(t)
+	h.openWork("Ran 2 commands", "Edit "+sidebarPath)
 	h.click("Edit " + sidebarPath)
 	h.diffsRead()
 	a, tt := h.a, h.tt

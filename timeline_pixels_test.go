@@ -60,7 +60,7 @@ func TestTimelinePixels(t *testing.T) {
 		shot(fmt.Sprintf("%05d-wheel", n))
 		h.a.listFor(long.id()).ScrollToEnd()
 		h.tt.Frame()
-		if r, ok := h.tt.Find("Worked for 40s"); ok {
+		if r, ok := h.tt.Find("Ran 1 command · made 1 edit · searched 1 time"); ok {
 			h.tt.Move(r.X+r.W/2, r.Y+r.H/2)
 		}
 		shot(fmt.Sprintf("%05d-hover", n))
