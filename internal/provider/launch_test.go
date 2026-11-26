@@ -146,3 +146,22 @@ func TestArgumentsSplitAsAShellSplitsThem(t *testing.T) {
 		}
 	}
 }
+
+// A program named from the home folder, as ~/bin/demo-cli, is found
+// there, and only when it is a program.
+func TestAProgramNamedFromHomeIsFound(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	p := provider.Placement{Names: []string{"~/bin/demo-cli"}}
+	if _, err := p.Program(provider.Launch{}); !errors.Is(err, provider.ErrNoProgram) {
+		t.Errorf("with none there: %v, want ErrNoProgram", err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := program(t, filepath.Join(home, "bin"), "demo-cli")
+	if prog, err := p.Program(provider.Launch{}); err != nil || prog.Path != want {
+		t.Errorf("in ~/bin: %+v, %v, want %s", prog, err, want)
+	}
+}
