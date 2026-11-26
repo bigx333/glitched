@@ -7,8 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider"
@@ -357,32 +359,123 @@ func (a *app) providers(c *ui.Context) {
 	a.customACPCard(c)
 }
 
+// customACPRead is a server's custom ACP providers, as its engine last
+// said. rev counts the changes since asked, as launchRead's.
+type customACPRead struct {
+	asking bool
+	at     time.Time
+	rev    int
+	list   []acp.CustomProfile
+	err    error
+}
+
+// askCustomACP is e's engine's answer, asked again once it's old.
+func (a *app) askCustomACP(e *client.Env) *customACPRead {
+	if e.ID.IsZero() {
+		return &customACPRead{}
+	}
+	if a.customACPReads == nil {
+		a.customACPReads = map[api.ID]*customACPRead{}
+	}
+	r := a.customACPReads[e.ID]
+	if r == nil {
+		r = &customACPRead{}
+		a.customACPReads[e.ID] = r
+	}
+	if r.asking || time.Since(r.at) < launchesFresh {
+		return r
+	}
+	r.asking = true
+	rev := r.rev
+	a.backend.CustomACP(e, e.ID, func(list []acp.CustomProfile, err error) {
+		r.asking = false
+		if r.rev != rev {
+			return // a change answered since; the next frame asks again
+		}
+		r.at, r.err = time.Now(), err
+		if err == nil {
+			r.list = list
+		}
+	})
+	return r
+}
+
+// chooseBinary opens the system's file picker over the window, and is a
+// variable so tests can answer for it.
+var chooseBinary = func(a *app) string {
+	if a.win == nil {
+		return ""
+	}
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "Choose the agent's binary", ButtonLabel: "Choose"})
+	if err != nil || len(paths) == 0 {
+		return ""
+	}
+	return paths[0]
+}
+
+// customACPCard is the chosen machine's own ACP agents: this one's
+// engine.json, edited here, or a server's, through its engine.
 func (a *app) customACPCard(c *ui.Context) {
 	m := a.backend.Machine()
 	if time.Since(m.Read) >= inspectEvery {
 		a.backend.Inspect()
 	}
 	c.After(inspectEvery)
+	envs := a.launchMachines()
+	e := a.machineNamed(a.customACPMachine)
+	local := e == nil || e.Kind == client.Local
 	card(c, "CUSTOM ACP PROVIDERS", func() {
-		if m.Read.IsZero() {
-			ui.Row(c).Key("custom-acp-reading").Padding(14, 16).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Spinner(c)
-				ui.Text(c, "Reading the engine's status…").TextColor(palette.muted)
+		if len(envs) > 1 {
+			optionRow(c, "Machine", "Each machine's engine keeps its own custom ACP providers. These are the chosen one's.", func() {
+				was := a.customACPMachine
+				machineChoice(c, envs, e, &a.customACPMachine)
+				if a.customACPMachine != was {
+					a.customACPErr = ""
+				}
 			})
-			return
 		}
-		busy := m.Embedded && a.localRuns() > 0
-		switch {
-		case busy:
-			ui.Text(c, stopFirst).Key("custom-acp-busy").FontSize(12).TextColor(palette.muted).Padding(14, 16, 0)
-		case !m.Embedded && m.Engine != nil:
-			ui.Text(c, "glitched serve applies a change here when it next starts.").Key("custom-acp-serve").FontSize(12).TextColor(palette.muted).Padding(14, 16, 0)
+		var list []acp.CustomProfile
+		busy := false
+		if local {
+			if m.Read.IsZero() {
+				ui.Row(c).Key("custom-acp-reading").Padding(14, 16).Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Spinner(c)
+					ui.Text(c, "Reading the engine's status…").TextColor(palette.muted)
+				})
+				return
+			}
+			busy = m.Embedded && a.localRuns() > 0
+			switch {
+			case busy:
+				ui.Text(c, stopFirst).Key("custom-acp-busy").FontSize(12).TextColor(palette.muted).Padding(14, 16)
+			case !m.Embedded && m.Engine != nil:
+				ui.Text(c, "glitched serve applies a change here when it next starts.").Key("custom-acp-serve").FontSize(12).TextColor(palette.muted).Padding(14, 16)
+			}
+			list = m.Config.CustomACP
+		} else {
+			read := a.askCustomACP(e)
+			c.After(launchesFresh)
+			switch {
+			case read.list == nil && read.err != nil:
+				ui.Text(c, machineWords(e)+" didn't say its custom ACP providers: "+read.err.Error()).Key("custom-acp-err").Selectable().FontSize(12).TextColor(palette.red).Padding(14, 16)
+				return
+			case read.list == nil:
+				ui.Text(c, "Asking "+machineWords(e)+"…").Key("custom-acp-asking").FontSize(12).TextColor(palette.muted).Padding(14, 16)
+				return
+			}
+			busy = a.customACPSaving[e.ID]
+			ui.Text(c, capitalized(machineWords(e))+"'s engine applies a change when it next starts.").Key("custom-acp-remote").FontSize(12).TextColor(palette.muted).Padding(14, 16)
+			list = read.list
 		}
-		if len(m.Config.CustomACP) == 0 {
+		why := stopFirst
+		if !local {
+			why = "Saving to " + machineWords(e) + "…"
+		}
+		if len(list) == 0 {
 			ui.Text(c, "No custom ACP providers configured. Add any ACP-compatible coding agent CLI below.").
 				Key("custom-acp-none").FontSize(12).TextColor(palette.muted).Padding(14, 16)
 		}
-		for i, p := range m.Config.CustomACP {
+		for i, p := range list {
 			ui.Row(c).Key(fmt.Sprintf("custom-acp:%d:%s", i, p.Provider)).Padding(12, 16).Gap(12).AlignItems(ui.Center).Children(func() {
 				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
 					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -392,10 +485,10 @@ func (a *app) customACPCard(c *ui.Context) {
 					ui.Text(c, shellLine(nil, append([]string{p.Binary}, p.Args...))).FontSize(12).Font("monospace").TextColor(palette.muted).SingleLine()
 				})
 				b := ui.Button(c.Key("remove"), "Remove").TextColor(palette.red).Disabled(busy).OnClick(func() {
-					a.removeCustomACP(p.Provider)
+					a.removeCustomACP(e, p.Provider)
 				})
 				if busy {
-					a.tip(c, b, stopFirst)
+					a.tip(c, b, why)
 				}
 			})
 		}
@@ -415,7 +508,16 @@ func (a *app) customACPCard(c *ui.Context) {
 			ui.Row(c).Gap(12).Children(func() {
 				ui.Column(c).Grow(1).Children(func() {
 					ui.Field(c, "Binary", func() {
-						ui.TextInput(c.Key("acp-bin"), &a.customACP.Binary).Placeholder("/usr/local/bin/my-agent").Font("monospace")
+						ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+							ui.TextInput(c.Key("acp-bin"), &a.customACP.Binary).Placeholder("/usr/local/bin/my-agent").Font("monospace").Grow(1)
+							if local {
+								ui.Button(c.Key("acp-browse"), "Browse…").OnClick(func() {
+									if bin := chooseBinary(a); bin != "" {
+										a.customACP.Binary = bin
+									}
+								})
+							}
+						})
 					})
 				})
 				ui.Column(c).Grow(1).Children(func() {
@@ -428,16 +530,18 @@ func (a *app) customACPCard(c *ui.Context) {
 				FontSize(12).TextColor(palette.muted)
 			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, a.customACPErr).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
-				b := ui.Button(c.Key("add-acp"), "Add ACP provider").Disabled(busy).OnClick(a.addCustomACP)
+				b := ui.Button(c.Key("add-acp"), "Add ACP provider").Disabled(busy).OnClick(func() { a.addCustomACP(e) })
 				if busy {
-					a.tip(c, b, stopFirst)
+					a.tip(c, b, why)
 				}
 			})
 		})
 	})
 }
 
-func (a *app) addCustomACP() {
+// addCustomACP adds the form's provider to e's engine.json: this
+// machine's here, a server's through its engine, which checks its binary.
+func (a *app) addCustomACP(e *client.Env) {
 	args, err := provider.Split(a.customACPArgs)
 	if err != nil {
 		a.customACPErr = "Arguments: " + err.Error()
@@ -451,6 +555,15 @@ func (a *app) addCustomACP() {
 	}
 	if _, err := cand.ToProfile(); err != nil {
 		a.customACPErr = err.Error()
+		return
+	}
+	if e != nil && e.Kind != client.Local {
+		a.markCustomACPSaving(e.ID)
+		a.backend.AddCustomACP(e, e.ID, cand, func(err error) {
+			if a.customACPSaved(e, err) {
+				a.customACP, a.customACPArgs = acp.CustomProfile{}, ""
+			}
+		})
 		return
 	}
 	dup := false
@@ -474,7 +587,12 @@ func (a *app) addCustomACP() {
 	a.customACPChanged()
 }
 
-func (a *app) removeCustomACP(id string) {
+func (a *app) removeCustomACP(e *client.Env, id string) {
+	if e != nil && e.Kind != client.Local {
+		a.markCustomACPSaving(e.ID)
+		a.backend.RemoveCustomACP(e, e.ID, id, func(err error) { a.customACPSaved(e, err) })
+		return
+	}
 	err := a.backend.Configure(func(cfg *daemon.Config) {
 		cfg.CustomACP = slices.DeleteFunc(cfg.CustomACP, func(cur acp.CustomProfile) bool { return cur.Provider == id })
 		delete(cfg.Launch, id)
@@ -485,6 +603,29 @@ func (a *app) removeCustomACP(id string) {
 	}
 	a.customACPErr = ""
 	a.customACPChanged()
+}
+
+func (a *app) markCustomACPSaving(id api.ID) {
+	if a.customACPSaving == nil {
+		a.customACPSaving = map[api.ID]bool{}
+	}
+	a.customACPSaving[id] = true
+}
+
+// customACPSaved is a server's answer to a change, which has the card
+// ask it again. It says whether the change was kept.
+func (a *app) customACPSaved(e *client.Env, err error) bool {
+	delete(a.customACPSaving, e.ID)
+	if r := a.customACPReads[e.ID]; r != nil {
+		r.rev++
+		r.at = time.Time{}
+	}
+	if err != nil {
+		a.customACPErr = "Couldn't save to " + machineWords(e) + ": " + err.Error()
+		return false
+	}
+	a.customACPErr = ""
+	return true
 }
 
 func (a *app) customACPChanged() {

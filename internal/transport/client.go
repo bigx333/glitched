@@ -633,6 +633,22 @@ func (e *EndpointClient) SetLaunch(ctx context.Context, provider string, l provi
 	return out, e.c.call(ctx, "provider.launch", launchQuery{Provider: provider, Launch: l}, &out)
 }
 
+// CustomACP is the user's own ACP agents the engine's engine.json keeps.
+func (e *EndpointClient) CustomACP(ctx context.Context) ([]CustomACP, error) {
+	var out []CustomACP
+	return out, e.c.call(ctx, "provider.custom", struct{}{}, &out)
+}
+
+// AddCustomACP has the engine keep p, which it runs from its next start.
+func (e *EndpointClient) AddCustomACP(ctx context.Context, p CustomACP) error {
+	return e.c.call(ctx, "provider.custom.add", p, &struct{}{})
+}
+
+// RemoveCustomACP has the engine drop provider's agent.
+func (e *EndpointClient) RemoveCustomACP(ctx context.Context, provider string) error {
+	return e.c.call(ctx, "provider.custom.remove", customQuery{Provider: provider}, &struct{}{})
+}
+
 // AskCredentials opens a credentials request for an agent and waits for
 // its answer.
 func (e *EndpointClient) AskCredentials(ctx context.Context, a api.Ask) (api.Asked, error) {

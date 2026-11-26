@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +15,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
+	"glitched/internal/provider/acp"
 	"glitched/internal/provider/codex"
 	"glitched/internal/provider/codex/codextest"
 	"glitched/internal/transport"
@@ -326,5 +328,36 @@ func TestTheArgumentsAreSavedAsTyped(t *testing.T) {
 	info, err := ep.SetLaunch(t.Context(), "codex", provider.Launch{Path: self, Args: `--enable suffix\ `})
 	if err != nil || !info.Saved || !slices.Equal(info.Command[len(info.Command)-2:], []string{"--enable", "suffix "}) {
 		t.Errorf("SetLaunch = %+v, %v", info, err)
+	}
+}
+
+// A custom ACP agent is kept when its binary is on this machine and its
+// ID is free: one a provider this engine runs has isn't, one removed
+// since this start is again.
+func TestACustomACPAgentIsCheckedAndKept(t *testing.T) {
+	self, _ := os.Executable()
+	t.Setenv("PATH", filepath.Dir(self))
+	mux := provider.Mux{"other": &unanswering{}, "gone": &acp.Adapter{}}
+	s := &launches{dir: stateDir(t), mux: mux, commands: newCommandLists(t.Context(), mux)}
+	for _, tc := range []struct {
+		p    transport.CustomACP
+		want string
+	}{
+		{transport.CustomACP{Provider: "mine", Binary: "no-such-agent"}, "binary: no no-such-agent on PATH or in ~/.local/bin"},
+		{transport.CustomACP{Provider: "mine", Binary: "agents/mine"}, `binary: "agents/mine" is relative: give the whole path, from / or ~`},
+		{transport.CustomACP{Provider: "other", Binary: filepath.Base(self)}, `custom ACP provider "other" already exists`},
+		{transport.CustomACP{Provider: "mine", Binary: " " + filepath.Base(self) + " "}, ""},
+		{transport.CustomACP{Provider: "mine", Binary: self}, `custom ACP provider "mine" already exists`},
+		{transport.CustomACP{Provider: "gone", Binary: self}, ""},
+	} {
+		err := s.AddCustomACP(t.Context(), tc.p)
+		if got := fmt.Sprint(err); (tc.want == "" && err != nil) || (tc.want != "" && got != tc.want) {
+			t.Errorf("AddCustomACP(%+v) = %v, want %q", tc.p, err, tc.want)
+		}
+	}
+	got, err := s.CustomACP(t.Context())
+	want := []transport.CustomACP{{Provider: "mine", Binary: filepath.Base(self)}, {Provider: "gone", Binary: self}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("CustomACP = %+v, %v; want %+v", got, err, want)
 	}
 }

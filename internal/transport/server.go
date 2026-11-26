@@ -639,6 +639,29 @@ type Launches interface {
 	// SetLaunch checks l and, when nothing is wrong with it, keeps it in
 	// engine.json and starts the provider's next launches as it says.
 	SetLaunch(ctx context.Context, provider string, l provider.Launch) (LaunchInfo, error)
+	// CustomACP is the user's own ACP agents engine.json keeps, which the
+	// engine runs from its next start.
+	CustomACP(ctx context.Context) ([]CustomACP, error)
+	// AddCustomACP keeps p in engine.json, when it is valid, its ID is
+	// free, and its binary is on the engine's machine.
+	AddCustomACP(ctx context.Context, p CustomACP) error
+	// RemoveCustomACP drops provider's agent and its launch settings.
+	RemoveCustomACP(ctx context.Context, provider string) error
+}
+
+// CustomACP is one of the user's own ACP agents, as acp.CustomProfile,
+// which this package can't import.
+type CustomACP struct {
+	Provider string            `json:"provider"`
+	Name     string            `json:"name,omitempty"`
+	Binary   string            `json:"binary"`
+	Args     []string          `json:"args,omitempty"`
+	Env      map[string]string `json:"env,omitempty"`
+}
+
+// customQuery names one custom ACP agent.
+type customQuery struct {
+	Provider string `json:"provider"`
 }
 
 // LaunchInfo is how one provider's program starts on the engine's
@@ -776,6 +799,13 @@ func (s *Server) methods() map[string]handler {
 		m["provider.launches"] = callHandler(func(ctx context.Context, _ struct{}) ([]LaunchInfo, error) { return l.Launches(ctx) })
 		m["provider.launch"] = callHandler(func(ctx context.Context, q launchQuery) (LaunchInfo, error) {
 			return l.SetLaunch(ctx, q.Provider, q.Launch)
+		})
+		m["provider.custom"] = callHandler(func(ctx context.Context, _ struct{}) ([]CustomACP, error) { return l.CustomACP(ctx) })
+		m["provider.custom.add"] = callHandler(func(ctx context.Context, p CustomACP) (struct{}, error) {
+			return struct{}{}, l.AddCustomACP(ctx, p)
+		})
+		m["provider.custom.remove"] = callHandler(func(ctx context.Context, q customQuery) (struct{}, error) {
+			return struct{}{}, l.RemoveCustomACP(ctx, q.Provider)
 		})
 	}
 	if c := s.CLIs; c != nil {

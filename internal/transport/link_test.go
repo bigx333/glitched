@@ -90,6 +90,7 @@ func TestALinksSocketMayCallOnlyItsMethods(t *testing.T) {
 	refused := []string{
 		"plugins.tools", "plugins.tool", "plugins.call",
 		"provider.commands", "provider.describe", "provider.default", "provider.ask", "provider.launches", "provider.launch",
+		"provider.custom", "provider.custom.add", "provider.custom.remove",
 		"providers", "provider.update", "credentials.ask", "credentials.provide", "credentials.forget",
 		"projects.folders", "projects.repos", "projects.clone",
 		"skills.list", "skills.sync", "skills.put", "skills.drop",

@@ -9,6 +9,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/daemon"
 	"glitched/internal/provider"
+	"glitched/internal/provider/acp"
 	"glitched/internal/transport"
 )
 
@@ -17,6 +18,9 @@ import (
 type launcher interface {
 	Launches(ctx context.Context) ([]transport.LaunchInfo, error)
 	SetLaunch(ctx context.Context, provider string, l provider.Launch) (transport.LaunchInfo, error)
+	CustomACP(ctx context.Context) ([]transport.CustomACP, error)
+	AddCustomACP(ctx context.Context, p transport.CustomACP) error
+	RemoveCustomACP(ctx context.Context, provider string) error
 }
 
 var errNoLaunches = errors.New("client: this engine doesn't say how its providers start")
@@ -40,6 +44,37 @@ func (m *Manager) SetLaunch(e *Env, engine api.ID, name string, l provider.Launc
 	m.launches(e, engine, func(err error) { done(transport.LaunchInfo{}, err) }, func(ctx context.Context, c launcher) {
 		out, err := c.SetLaunch(ctx, name, l)
 		m.post(e.ctx, func() { done(out, err) })
+	})
+}
+
+// CustomACP asks e's engine, when it is still engine, for the user's own
+// ACP agents its engine.json keeps. done gets them on the UI thread.
+func (m *Manager) CustomACP(e *Env, engine api.ID, done func([]acp.CustomProfile, error)) {
+	m.launches(e, engine, func(err error) { done(nil, err) }, func(ctx context.Context, l launcher) {
+		ws, err := l.CustomACP(ctx)
+		out := make([]acp.CustomProfile, len(ws))
+		for i, w := range ws {
+			out[i] = acp.CustomProfile(w)
+		}
+		m.post(e.ctx, func() { done(out, tooOld(err)) })
+	})
+}
+
+// AddCustomACP has e's engine, when it is still engine, keep p for its
+// next start, when p is valid there. done gets why not, on the UI thread.
+func (m *Manager) AddCustomACP(e *Env, engine api.ID, p acp.CustomProfile, done func(error)) {
+	m.launches(e, engine, done, func(ctx context.Context, l launcher) {
+		err := l.AddCustomACP(ctx, transport.CustomACP(p))
+		m.post(e.ctx, func() { done(tooOld(err)) })
+	})
+}
+
+// RemoveCustomACP has e's engine, when it is still engine, drop id's
+// agent from its next start. done gets why not, on the UI thread.
+func (m *Manager) RemoveCustomACP(e *Env, engine api.ID, id string, done func(error)) {
+	m.launches(e, engine, done, func(ctx context.Context, l launcher) {
+		err := l.RemoveCustomACP(ctx, id)
+		m.post(e.ctx, func() { done(tooOld(err)) })
 	})
 }
 
