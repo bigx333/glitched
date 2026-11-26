@@ -28,19 +28,24 @@ type Agent struct {
 	once sync.Once
 	kept bool
 
-	// prompt ends the turn's session/prompt; only Close calls it.
+	// prompt ends the turn's session/prompts; only Close calls it.
 	prompt context.Context
 	cancel context.CancelFunc
-	sent   chan struct{} // closes once the prompt is written
-	done   chan struct{} // closes once the prompt is answered
+
+	steerMu sync.Mutex // one steer at a time
 
 	mu          sync.Mutex
 	more        chan struct{} // has a value while out has news for Next
 	out         []provider.Event
 	started     bool
 	interrupted bool
-	ended       bool  // TurnEnded is queued; nothing is queued after it
-	failed      error // the turn's prompt failed
+	active      *promptCall // the turn's last session/prompt
+	steering    bool        // a steer waits for active's end, which ends no turn
+	tokens      int64       // what the turn's answered prompts used
+	ended       bool        // TurnEnded is queued; nothing is queued after it
+	cancelled   bool        // the turn ended interrupted, so its agent is not kept
+	failed      error       // the turn's prompt failed
+	cancelling  bool        // a session/cancel went for active, and its grace runs
 	deadline    *time.Timer
 	steps       map[acpsdk.ToolCallId]*step
 	order       []acpsdk.ToolCallId
@@ -55,9 +60,13 @@ type Agent struct {
 }
 
 var (
-	_ provider.Agent     = (*Agent)(nil)
-	_ provider.Sessioned = (*Agent)(nil)
+	_ provider.Agent       = (*Agent)(nil)
+	_ provider.Sessioned   = (*Agent)(nil)
+	_ provider.SteerMarker = (*Agent)(nil)
 )
+
+// MarksSteer is that each steer that went sends provider.Steered.
+func (g *Agent) MarksSteer() bool { return true }
 
 // ask is a request the agent waits on: a permission request, or a
 // question it asks with a form. It gets one reply: the first answer, in the
@@ -79,8 +88,17 @@ const (
 
 var errNoAsk = errors.New("acp: the agent made no such request")
 
+// promptCall is one session/prompt of the turn's. A turn sends one, and
+// one more for each message steered into it.
+type promptCall struct {
+	sent chan struct{} // closes once the prompt is written
+	done chan struct{} // closes once the agent answered it
+	resp acpsdk.PromptResponse
+	err  error // with resp, set before done closes
+}
+
 func newAgent(spec provider.SessionSpec, p *proc, keep func(*proc)) *Agent {
-	g := &Agent{p: p, spec: spec, keep: keep, more: make(chan struct{}, 1), sent: make(chan struct{}), done: make(chan struct{}),
+	g := &Agent{p: p, spec: spec, keep: keep, more: make(chan struct{}, 1),
 		steps: map[acpsdk.ToolCallId]*step{}, asks: map[string]*ask{}}
 	g.prompt, g.cancel = context.WithCancel(context.Background())
 	p.attach(g)
@@ -189,73 +207,95 @@ func (g *Agent) queueLocked(events ...provider.Event) {
 func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 	switch a := act.(type) {
 	case provider.Start:
-		if isCompact(a.Text) {
-			ok, err := g.p.offers(ctx, "compact")
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return fmt.Errorf("%s does not offer /compact in this session", g.p.profile.Name)
-			}
-		}
-		if err := g.start(a.Text); err != nil {
+		if err := g.compactable(ctx, a.Text); err != nil {
 			return err
 		}
-		// The prompt goes on a call of its own: Start ends once it is
-		// written, or once the call ended without writing it. ctx bounds
-		// the write, as Claude's: an agent that stopped reading would hold
-		// it for good, and a stop or a delete with it.
-		// The deadline is the file's, so any write it meets may be cut:
-		// the agent takes no other run. A pipe that takes none, as on
-		// Windows, is ended by stopping the agent.
-		ran := make(chan struct{})
-		expire := context.AfterFunc(ctx, func() {
-			g.p.cut.Store(true)
-			if err := g.p.stdin.SetWriteDeadline(time.Now()); err != nil {
-				g.p.halt()
-			}
-			close(ran)
-		})
-		select {
-		case <-g.sent:
-		case <-g.done:
+		call, err := g.start(a.Text)
+		if err != nil {
+			return err
 		}
-		if !expire() {
-			<-ran
-			g.p.stdin.SetWriteDeadline(time.Time{})
-		}
-		select {
-		case <-g.sent:
-			return nil
-		default:
-		}
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("%s never took the prompt: %w", g.p.profile.Name, err)
-		}
-		return fmt.Errorf("%s never got the prompt", g.p.profile.Name)
+		return g.waitSent(ctx, call)
 	case provider.Interrupt:
 		return g.interrupt(ctx)
 	case provider.Respond:
 		return g.respond(a)
 	case provider.Steer:
-		return fmt.Errorf("%w: %s can't take a message mid-turn yet. Send it once the turn ends.", provider.ErrUnsupported, g.p.profile.Name)
+		return g.steer(ctx, a.Text)
 	}
 	return provider.ErrUnsupported
 }
 
+// compactable is nil unless text is /compact and the session doesn't
+// offer it.
+func (g *Agent) compactable(ctx context.Context, text string) error {
+	if !isCompact(text) {
+		return nil
+	}
+	ok, err := g.p.offers(ctx, "compact")
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("%s does not offer /compact in this session", g.p.profile.Name)
+	}
+	return nil
+}
+
+// waitSent returns once call's prompt is written, or once the call ended
+// without writing it. ctx bounds the write, as Claude's: an agent that
+// stopped reading would hold it for good, and a stop or a delete with it.
+// The deadline is the file's, so any write it meets may be cut: the agent
+// takes no other run. A pipe that takes none, as on Windows, is ended by
+// stopping the agent.
+func (g *Agent) waitSent(ctx context.Context, call *promptCall) error {
+	ran := make(chan struct{})
+	expire := context.AfterFunc(ctx, func() {
+		g.p.cut.Store(true)
+		if err := g.p.stdin.SetWriteDeadline(time.Now()); err != nil {
+			g.p.halt()
+		}
+		close(ran)
+	})
+	select {
+	case <-call.sent:
+	case <-call.done:
+	}
+	if !expire() {
+		<-ran
+		g.p.stdin.SetWriteDeadline(time.Time{})
+	}
+	select {
+	case <-call.sent:
+		return nil
+	default:
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%s never took the prompt: %w", g.p.profile.Name, err)
+	}
+	return fmt.Errorf("%s never got the prompt", g.p.profile.Name)
+}
+
 // start sends the turn's prompt. Its answer, at the turn's end, is the
-// run's TurnEnded. The session's first prompt carries the instructions of
-// the run's MCP servers in front, and the list of Glitched's skills, as
-// ACP has no other place for them.
-func (g *Agent) start(text string) error {
+// run's TurnEnded.
+func (g *Agent) start(text string) (*promptCall, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.started {
-		return errors.New("acp: the run already started")
+		return nil, errors.New("acp: the run already started")
 	}
 	g.started = true
-	g.command = isCompact(text)
 	g.reportLocked()
+	return g.promptLocked(text), nil
+}
+
+// promptLocked sends text as the turn's next session/prompt, on a call of
+// its own. The answer to the active one, unless a steer waits for it, ends
+// the turn. The session's first prompt carries the instructions of the
+// run's MCP servers in front, and the list of Glitched's skills, as ACP
+// has no other place for them. g.mu is held.
+func (g *Agent) promptLocked(text string) *promptCall {
+	g.command = isCompact(text)
+	g.spoke, g.compacted, g.uncompacted, g.cancelling = false, false, false, false
 	// The command goes as it is, or the agent would read it as text.
 	if !g.p.briefed && !g.command {
 		g.p.briefed = true
@@ -269,13 +309,150 @@ func (g *Agent) start(text string) error {
 		}
 	}
 	req := acpsdk.PromptRequest{SessionId: g.p.session, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock(text)}}
-	g.p.expectPrompt(g.sent)
+	call := &promptCall{sent: make(chan struct{}), done: make(chan struct{})}
+	g.active = call
+	g.p.expectPrompt(call.sent)
 	go func() {
-		defer close(g.done)
 		r, err := g.p.conn.Prompt(g.prompt, req)
-		g.finish(r, err)
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		call.resp, call.err = r, err
+		close(call.done)
+		if g.active == call && !g.steering {
+			g.finishLocked(r, err)
+		}
 	}()
-	return nil
+	return call
+}
+
+// steer sends text into the turn, as ACP has a client do: it cancels the
+// active prompt and, once the agent ended it, sends text as the next on
+// the same session, after provider.Steered. Requests still open are
+// withdrawn, and one the agent makes meanwhile is answered cancelled. An
+// agent that has not ended the prompt after interruptGrace is stopped. A
+// turn that ends some other way first, by a stop or a failure, takes no
+// message, and a steer whose call already ended changes nothing.
+func (g *Agent) steer(ctx context.Context, text string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := g.compactable(ctx, text); err != nil {
+		return err
+	}
+	g.steerMu.Lock()
+	defer g.steerMu.Unlock()
+	g.mu.Lock()
+	switch {
+	case !g.started:
+		g.mu.Unlock()
+		return errors.New("acp: the run has no turn to steer yet")
+	case g.interrupted:
+		g.mu.Unlock()
+		return errors.New("acp: the turn was stopped")
+	case g.ended:
+		g.mu.Unlock()
+		return errors.New("acp: the turn already ended")
+	}
+	if err := ctx.Err(); err != nil {
+		g.mu.Unlock()
+		return err
+	}
+	prev := g.active
+	g.steering = true
+	g.withdrawLocked("The turn was steered.")
+	// A cancel already sent keeps the grace it started with.
+	if g.deadline == nil {
+		g.deadline = time.AfterFunc(interruptGrace, g.p.halt)
+	}
+	g.mu.Unlock()
+	// A cancel that reached the agent ahead of its prompt would cancel
+	// nothing, and the turn would run on.
+	select {
+	case <-prev.sent:
+	case <-prev.done:
+	case <-ctx.Done():
+		g.abortSteer(prev)
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		g.abortSteer(prev)
+		return err
+	}
+	select {
+	case <-prev.done:
+	default:
+		g.mu.Lock()
+		was := g.cancelling
+		g.cancelling = true
+		g.mu.Unlock()
+		if err := g.p.conn.Cancel(ctx, acpsdk.CancelNotification{SessionId: g.p.session}); err != nil {
+			if ctx.Err() != nil {
+				g.mu.Lock()
+				g.cancelling = was
+				g.mu.Unlock()
+				g.abortSteer(prev)
+				return ctx.Err()
+			}
+			slog.Warn("acp: the agent didn't take the cancel, so it is stopped", "agent", g.p.profile.Name, "err", err)
+			g.p.halt()
+		}
+	}
+	select {
+	case <-prev.done:
+	case <-ctx.Done():
+		g.abortSteer(prev)
+		return ctx.Err()
+	}
+	g.mu.Lock()
+	g.steering = false
+	if g.interrupted || ctx.Err() != nil {
+		g.finishLocked(prev.resp, prev.err)
+		interrupted := g.interrupted
+		g.mu.Unlock()
+		if interrupted {
+			return errors.New("acp: the turn was stopped")
+		}
+		return ctx.Err()
+	}
+	// The agent ended the prompt, cancelled or done before the cancel came:
+	// its steps end with it, and the message goes as the turn's next. One
+	// that failed it, or a /compact it did not do, ends the turn failed.
+	if end := g.endLocked(prev.resp, prev.err); end.Outcome == api.OutcomeFailed {
+		g.finishLocked(prev.resp, prev.err)
+		g.mu.Unlock()
+		if prev.err != nil {
+			return g.p.failure("steer the turn", prev.err)
+		}
+		return errors.New(end.Error)
+	}
+	if g.deadline != nil {
+		g.deadline.Stop()
+		g.deadline = nil
+	}
+	g.countLocked(prev.resp)
+	g.closeStepsLocked(prev.resp.StopReason == acpsdk.StopReasonEndTurn)
+	g.queueLocked(provider.Steered{})
+	next := g.promptLocked(text)
+	g.mu.Unlock()
+	return g.waitSent(ctx, next)
+}
+
+// abortSteer gives up a steer whose call ended before it sent its message.
+// The turn ends as prev's answer says, now or once it comes; an agent
+// already asked to cancel still has its grace.
+func (g *Agent) abortSteer(prev *promptCall) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.steering = false
+	if !g.cancelling && !g.interrupted && g.deadline != nil {
+		g.deadline.Stop()
+		g.deadline = nil
+	}
+	select {
+	case <-prev.done:
+		g.finishLocked(prev.resp, prev.err)
+	default:
+	}
 }
 
 // skillList is Glitched's skills as the agent reads them, by the paths
@@ -293,17 +470,54 @@ func skillList(s provider.Skills) string {
 	return b.String()
 }
 
-// finish ends the turn with the prompt's answer. The SDK handles every
-// update the agent sent before it first, so nothing of the turn follows.
-// Requests still open are withdrawn: the agent no longer waits on them.
-func (g *Agent) finish(r acpsdk.PromptResponse, err error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+// countLocked adds what the prompt r answers used to the turn's tokens.
+// g.mu is held.
+func (g *Agent) countLocked(r acpsdk.PromptResponse) {
+	if r.Usage != nil && g.p.profile.TurnUsage {
+		g.tokens += r.Usage.TotalTokens
+	}
+}
+
+// closeStepsLocked ends the steps still open, done or failed. g.mu is
+// held.
+func (g *Agent) closeStepsLocked(done bool) {
+	for _, id := range g.order {
+		if s := g.steps[id]; s.open() {
+			s.status = map[bool]acpsdk.ToolCallStatus{true: acpsdk.ToolCallStatusCompleted, false: acpsdk.ToolCallStatusFailed}[done]
+			g.queueLocked(s.work(g.spec.Workspace))
+		}
+	}
+}
+
+// finishLocked ends the turn with the last prompt's answer. The SDK
+// handles every update the agent sent before it first, so nothing of the
+// turn follows. Requests still open are withdrawn: the agent no longer
+// waits on them. g.mu is held.
+func (g *Agent) finishLocked(r acpsdk.PromptResponse, err error) {
 	if g.ended {
 		return
 	}
 	g.withdrawLocked("The turn ended before the answer reached " + g.p.profile.Name + ".")
+	end := g.endLocked(r, err)
+	if err == nil {
+		g.countLocked(r)
+	}
+	end.Tokens = g.tokens
+	g.closeStepsLocked(end.Outcome == api.OutcomeCompleted)
+	g.ended, g.cancelled, g.cancelling = true, end.Outcome == api.OutcomeInterrupted, false
+	if g.deadline != nil {
+		g.deadline.Stop()
+		g.deadline = nil
+	}
+	g.queueLocked(end)
+}
+
+// endLocked is how a prompt's answer r, or its failure err, ends the
+// turn. A /compact that ended done compacted, as agy says nothing when
+// it does, and reports that once. g.mu is held.
+func (g *Agent) endLocked(r acpsdk.PromptResponse, err error) provider.TurnEnded {
 	end := provider.TurnEnded{Outcome: api.OutcomeCompleted}
+	name := g.p.profile.Name
 	switch {
 	case g.interrupted:
 		end.Outcome = api.OutcomeInterrupted
@@ -313,41 +527,29 @@ func (g *Agent) finish(r acpsdk.PromptResponse, err error) {
 	case r.StopReason == acpsdk.StopReasonCancelled:
 		end.Outcome = api.OutcomeInterrupted
 	case r.StopReason == acpsdk.StopReasonMaxTokens:
-		end.Outcome, end.Error = api.OutcomeFailed, g.p.profile.Name+" stopped: the reply reached its length limit."
+		end.Outcome, end.Error = api.OutcomeFailed, name+" stopped: the reply reached its length limit."
 	case r.StopReason == acpsdk.StopReasonMaxTurnRequests:
-		end.Outcome, end.Error = api.OutcomeFailed, g.p.profile.Name+" stopped: the turn reached its limit of model requests."
+		end.Outcome, end.Error = api.OutcomeFailed, name+" stopped: the turn reached its limit of model requests."
 	case r.StopReason == acpsdk.StopReasonRefusal:
-		end.Outcome, end.Error = api.OutcomeFailed, g.p.profile.Name+" refused to go on."
+		end.Outcome, end.Error = api.OutcomeFailed, name+" refused to go on."
 	case r.StopReason != acpsdk.StopReasonEndTurn:
 		g.failed = fmt.Errorf("stop reason %q", r.StopReason)
-		end.Outcome, end.Error = api.OutcomeFailed, fmt.Sprintf("%s ended the turn for a reason Glitched doesn't know: %q.", g.p.profile.Name, r.StopReason)
+		end.Outcome, end.Error = api.OutcomeFailed, fmt.Sprintf("%s ended the turn for a reason Glitched doesn't know: %q.", name, r.StopReason)
 	}
 	// agy compacts on /compact and says nothing: a command that ends its
 	// turn with no answer did its work, and one it answered did none.
 	if g.command && end.Outcome == api.OutcomeCompleted && !g.compacted {
 		switch {
 		case g.uncompacted:
-			end.Outcome, end.Error = api.OutcomeFailed, g.p.profile.Name+" could not compact the conversation."
+			end.Outcome, end.Error = api.OutcomeFailed, name+" could not compact the conversation."
 		case g.spoke:
-			end.Outcome, end.Error = api.OutcomeFailed, g.p.profile.Name+" answered /compact instead of compacting."
+			end.Outcome, end.Error = api.OutcomeFailed, name+" answered /compact instead of compacting."
 		default:
+			g.compacted = true
 			g.queueLocked(provider.Context{Compacted: true})
 		}
 	}
-	if err == nil && r.Usage != nil && g.p.profile.TurnUsage {
-		end.Tokens = r.Usage.TotalTokens
-	}
-	for _, id := range g.order {
-		if s := g.steps[id]; s.open() {
-			s.status = map[bool]acpsdk.ToolCallStatus{true: acpsdk.ToolCallStatusCompleted, false: acpsdk.ToolCallStatusFailed}[end.Outcome == api.OutcomeCompleted]
-			g.queueLocked(s.work(g.spec.Workspace))
-		}
-	}
-	g.ended = true
-	if g.deadline != nil {
-		g.deadline.Stop()
-	}
-	g.queueLocked(end)
+	return end
 }
 
 // interrupt cancels the turn. The agent ends it with stopReason cancelled,
@@ -359,15 +561,19 @@ func (g *Agent) interrupt(ctx context.Context) error {
 		g.mu.Unlock()
 		return nil
 	}
-	g.interrupted = true
+	g.interrupted, g.cancelling = true, true
 	g.withdrawLocked("The turn was stopped.")
+	if g.deadline != nil {
+		g.deadline.Stop()
+	}
 	g.deadline = time.AfterFunc(interruptGrace, g.p.halt)
+	active := g.active
 	g.mu.Unlock()
 	// A cancel that reached the agent ahead of its prompt would cancel
 	// nothing, and the turn would run on.
 	select {
-	case <-g.sent:
-	case <-g.done:
+	case <-active.sent:
+	case <-active.done:
 		return nil
 	case <-ctx.Done():
 		g.p.halt()
@@ -401,7 +607,7 @@ func askID(n int) string { return "acp-" + strconv.Itoa(n) }
 // own goroutine, so this one waits for the answer.
 func (g *Agent) permission(ctx context.Context, r acpsdk.RequestPermissionRequest) acpsdk.RequestPermissionOutcome {
 	g.mu.Lock()
-	if g.ended || g.interrupted {
+	if g.ended || g.interrupted || g.steering {
 		g.mu.Unlock()
 		return acpsdk.NewRequestPermissionOutcomeCancelled()
 	}
@@ -451,7 +657,7 @@ func (g *Agent) question(ctx context.Context, f acpsdk.CreateElicitationForm) ac
 		return cancelled
 	}
 	g.mu.Lock()
-	if !g.started || g.ended || g.interrupted {
+	if !g.started || g.ended || g.interrupted || g.steering {
 		g.mu.Unlock()
 		return cancelled
 	}
@@ -687,7 +893,7 @@ func (g *Agent) Next(ctx context.Context) (provider.Event, error) {
 func (g *Agent) Close(ctx context.Context) error {
 	g.once.Do(func() {
 		g.mu.Lock()
-		over := g.started && g.ended && !g.interrupted && g.failed == nil
+		over := g.started && g.ended && !g.interrupted && !g.cancelled && g.failed == nil
 		g.mu.Unlock()
 		g.cancel()
 		if !over || g.keep == nil || g.p.halted.Load() || g.p.cut.Load() {

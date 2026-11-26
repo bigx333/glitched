@@ -22,6 +22,7 @@ const deltaWindow = 50 * time.Millisecond
 // effects again; a closing host leaves the agent running.
 func (h *Host) pump(thread api.ID, lr *liveRun) {
 	defer h.wg.Done()
+	defer close(lr.pumped)
 	run, ag := lr.run, lr.agent
 	events := make(chan provider.Event)
 	var readErr error
@@ -80,6 +81,23 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 	flushAllNested := func() {
 		for _, parent := range nestedOrder {
 			flushNested(parent, true)
+		}
+	}
+	// hold waits for the call settled tracks so the receipt of an answer or
+	// a steer goes in first.
+	hold := func() {
+		h.mu.Lock()
+		settled := lr.settled
+		if lr.steerReady != nil {
+			close(lr.steerReady)
+			lr.steerReady = nil
+		}
+		h.mu.Unlock()
+		if settled != nil {
+			select {
+			case <-settled:
+			case <-h.drain.Done():
+			}
 		}
 	}
 	ended := false
@@ -146,29 +164,32 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				flushText()
 				commit(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: ev.ID, Kind: ev.Kind, Body: secrets.RedactJSON(ev.Body, h.credentials(thread))})
 			case provider.RequestWithdrawn:
-				flushText()
+				// A withdrawn request doesn't end the agent's text stream, so
+				// keep back any tail that could start a credential.
+				flushSome(false)
 				commit(engine.Withdrawn{Run: run, Dedup: ev.ID, Reason: redact(ev.Reason)})
+			case provider.Steered:
+				// What the agent said before the steer shows before the
+				// message, and what it says after, after.
+				flushText()
+				hold()
 			case provider.TurnEnded:
+				// An agent can end its turn before the call that answered
+				// it, or steered it, returns: the receipt is logged first,
+				// so a crash never leaves an ended turn with an answer the
+				// agent took logged as on its way, and the end cancels no
+				// message the agent took.
+				hold()
 				flushAllNested()
 				flushText()
-				// An agent can end its turn before the call that answered
-				// it returns: the answer's receipt is logged first, so a
-				// crash never leaves an ended turn with an answer the
-				// agent took logged as on its way.
-				h.mu.Lock()
-				settled := lr.settled
-				h.mu.Unlock()
-				if settled != nil {
-					select {
-					case <-settled:
-					case <-lr.ctx.Done():
-					}
-				}
 				if ended = commit(engine.Ended{Run: run, Outcome: ev.Outcome, Error: redact(ev.Error), Tokens: ev.Tokens, Limit: limitOf(ev), Head: ev.Head}); ended {
 					h.forget(run)
 				}
 			}
 		}
+	}
+	if !ended && h.ctx.Err() == nil && lr.ctx.Err() == nil {
+		hold()
 	}
 	flushAllNested()
 	flushText()

@@ -12,6 +12,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/engine"
 	"glitched/internal/provider"
+	"glitched/internal/secrets"
 	"glitched/internal/store"
 )
 
@@ -108,10 +109,18 @@ func (h *Host) perform(e store.Effect) {
 		h.record(e.Thread, skip, e.ID)
 		return
 	}
-	// Only an answer that is given holds the turn's end.
+	// Only an answer that is given, or a steer, holds the turn's end.
 	var answering *liveRun
-	if b, ok := e.Body.(engine.DeliverAnswer); ok && !isAsk(b.Dedup) {
-		answering = h.delivering(b.Run)
+	var ready chan struct{}
+	switch b := e.Body.(type) {
+	case engine.DeliverAnswer:
+		if !isAsk(b.Dedup) {
+			answering = h.delivering(b.Run)
+		}
+	case engine.SteerTurn:
+		if answering = h.delivering(b.Run); answering != nil {
+			ready = h.awaitSteer(answering)
+		}
 	}
 	o, ok := h.call(e, t, lr)
 	if !ok {
@@ -120,7 +129,20 @@ func (h *Host) perform(e store.Effect) {
 		}
 		return
 	}
-	if a := answering; a != nil {
+	if _, steer := e.Body.(engine.SteerTurn); steer && answering != nil {
+		// The message is dispatched only once what a marking agent said
+		// before it is shown, and before the turn's end can cancel it.
+		a := answering
+		if _, took := o.(engine.Steered); took && ready != nil {
+			h.untilShown(a, ready)
+		}
+		h.record(e.Thread, o, e.ID)
+		h.mu.Lock()
+		a.steerReady = nil
+		h.mu.Unlock()
+		h.delivered(a)
+		return
+	} else if a := answering; a != nil {
 		// A turn that ended as its answer went waits for the answer's
 		// receipt, tried once, so a store that won't take it doesn't hold
 		// the turn. An answer that failed after the agent ended its turn
@@ -215,7 +237,7 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 		if err = h.act(b.Run, provider.Steer{Text: b.Text}); errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			o = engine.SteerLost{Message: b.Message}
 		} else if err != nil {
-			o = engine.SteerFailed{Message: b.Message, Error: err.Error()}
+			o = engine.SteerFailed{Message: b.Message, Error: secrets.Redact(err.Error(), h.credentials(e.Thread))}
 		}
 
 	case engine.InterruptTurn:
@@ -513,7 +535,8 @@ func (h *Host) closeAgent(ag provider.Agent) bool {
 }
 
 func (h *Host) track(run api.ID, provider string, ag provider.Agent) *liveRun {
-	lr := &liveRun{run: run, provider: provider, agent: ag, started: make(chan struct{})}
+	lr := &liveRun{run: run, provider: provider, agent: ag, started: make(chan struct{}),
+		pumped: make(chan struct{})}
 	if ag != nil {
 		close(lr.started)
 	}
@@ -540,6 +563,29 @@ func (h *Host) delivering(run api.ID) *liveRun {
 	}
 	lr.delivering++
 	return lr
+}
+
+// awaitSteer is what closes once lr's pump showed all that came before
+// the steer on its way, for an agent that marks where it goes; nil for
+// one that doesn't.
+func (h *Host) awaitSteer(lr *liveRun) chan struct{} {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if m, ok := lr.agent.(provider.SteerMarker); !ok || !m.MarksSteer() {
+		return nil
+	}
+	lr.steerReady = make(chan struct{})
+	return lr.steerReady
+}
+
+// untilShown returns once lr's pump showed what a marking agent said
+// before a steer, or once the pump stops.
+func (h *Host) untilShown(lr *liveRun, ready chan struct{}) {
+	select {
+	case <-ready:
+	case <-lr.pumped:
+	case <-h.drain.Done():
+	}
 }
 
 // delivered is that an answer's call is over, and whether lr's agent ended

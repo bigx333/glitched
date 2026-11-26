@@ -5,16 +5,20 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/plugins/guard"
 	"glitched/internal/provider"
 	"glitched/internal/provider/acp"
 	"glitched/internal/provider/acp/acptest"
 	"glitched/internal/provider/codex/codextest"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func TestMain(m *testing.M) {
@@ -189,6 +193,61 @@ func TestAlwaysAllowOnTheCard(t *testing.T) {
 			if !h.tt.HasText("Answer: allow-always") || !h.tt.HasText("Always allowed") {
 				t.Fatalf("after Always allow, the thread shows %q", h.tt.Texts())
 			}
+		})
+	}
+}
+
+// A message sent while an Antigravity turn runs steers it, from the
+// composer or from the queue's Send now: agy's turn takes the message
+// and answers it, and the turn ends done instead of the message being
+// cancelled.
+func TestSteeringAnAntigravityTurn(t *testing.T) {
+	for _, via := range []string{"composer", "Send now"} {
+		t.Run(via, func(t *testing.T) {
+			h := startWith(t, tempDir(t), withAntigravity(t, "steer"))
+			allAnswered(h)
+			h.until("agy's models", func() bool { return len(h.a.models.reported["antigravity"]) == 2 })
+			h.a.model = modelKey{"antigravity", "fake-pro"}
+			h.tt.Frame()
+			sendNew(h, "Work on the notes. [hold]")
+			h.until("the agent at work", func() bool {
+				return h.tt.HasText("Stop") && h.tt.HasText("Working.") && h.a.current().View.Run == api.RunRunning
+			})
+			run := h.a.current().View.Turn.Run
+			h.a.draft = "Use tabs instead."
+			h.tt.Frame()
+			if via == "composer" {
+				h.click("Send")
+			} else {
+				h.tt.Key(ui.Cmd, ui.KeyEnter)
+				h.until("the message queued", func() bool { return h.a.current().View.Queued == 1 && h.tt.HasText("Send now") })
+				h.click("Send now")
+			}
+			h.until("the turn's end", func() bool { v := h.a.current().View; return v.LastTurn != nil && v.LastTurn.Run == run })
+			for range 50 {
+				h.tt.Advance(100 * time.Millisecond)
+			}
+			v := h.a.current().View
+			if v.LastTurn.Outcome != api.OutcomeCompleted || v.Queued != 0 {
+				t.Fatalf("the steered turn ended %+v with %d queued; want it done with the message taken", v.LastTurn, v.Queued)
+			}
+			if !h.tt.HasText("Steered: Use tabs instead.") {
+				t.Fatalf("the thread shows no answer to the steer: %q", h.tt.Texts())
+			}
+			// The message is sent, between the answer before it and the one
+			// to it, which never run together.
+			entries := h.a.current().Transcript.Entries
+			said := func(text string) int {
+				return slices.IndexFunc(entries, func(e client.Entry) bool { a, ok := e.(*client.AssistantEntry); return ok && a.Text == text })
+			}
+			sent := slices.IndexFunc(entries, func(e client.Entry) bool {
+				u, ok := e.(*client.UserEntry)
+				return ok && u.Text == "Use tabs instead." && u.State == client.Sent
+			})
+			if before, after := said("Working."), said("Steered: Use tabs instead."); sent < 0 || before < 0 || before > sent || after < sent {
+				t.Fatalf("the timeline has the answer before at %d, the sent message at %d and the answer to it at %d: %+v", before, sent, after, entriesOf(h.a.current()))
+			}
+			shoot(t, h, "steered-"+strings.ReplaceAll(via, " ", "-"))
 		})
 	}
 }

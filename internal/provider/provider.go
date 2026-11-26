@@ -108,6 +108,10 @@ type ForkLaunch struct{ From, At string }
 
 type NativeFork interface{ Native() bool }
 
+// SteerMarker is an Agent that sends Steered where a steer's message
+// takes the turn over, so the host shows what came before it first.
+type SteerMarker interface{ MarksSteer() bool }
+
 // Grant is how one of Glitched's access levels reaches an agent: the
 // permission mode its session runs in, "" for the agent's own, and what
 // its program starts with besides, as arguments and environment. Else is
@@ -449,6 +453,11 @@ type Context struct {
 	PreTokens, PostTokens int64
 }
 
+// Steered is where a steer's message took the turn over: what the agent
+// sent before it answered what came before, and what follows answers the
+// message. A SteerMarker sends it once per steer that went.
+type Steered struct{}
+
 type TurnEnded struct {
 	Outcome api.Outcome
 	Error   string
@@ -504,4 +513,5 @@ func (Plan) event()             {}
 func (RequestOpened) event()    {}
 func (RequestWithdrawn) event() {}
 func (TurnEnded) event()        {}
+func (Steered) event()          {}
 func (Context) event()          {}
