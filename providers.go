@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/client"
 	"glitched/internal/daemon"
+	"glitched/internal/provider"
 	"glitched/internal/provider/acp"
 	"glitched/internal/transport"
 )
@@ -355,39 +357,50 @@ func (a *app) providers(c *ui.Context) {
 	a.customACPCard(c)
 }
 
+// customACPCard lists the custom ACP providers engine.json sets up on
+// this machine, and adds and removes them. A change restarts the engine
+// embedded here, so it waits while its agents run.
 func (a *app) customACPCard(c *ui.Context) {
 	m := a.backend.Machine()
+	if time.Since(m.Read) >= inspectEvery {
+		a.backend.Inspect()
+	}
+	c.After(inspectEvery)
 	card(c, "CUSTOM ACP PROVIDERS", func() {
+		if m.Read.IsZero() {
+			ui.Row(c).Key("custom-acp-reading").Padding(14, 16).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Spinner(c)
+				ui.Text(c, "Reading the engine's status…").TextColor(palette.muted)
+			})
+			return
+		}
+		busy := m.Embedded && a.localRuns() > 0
+		switch {
+		case busy:
+			ui.Text(c, stopFirst).Key("custom-acp-busy").FontSize(12).TextColor(palette.muted).Padding(14, 16, 0)
+		case !m.Embedded && m.Engine != nil:
+			ui.Text(c, "glitched serve applies a change here when it next starts.").Key("custom-acp-serve").FontSize(12).TextColor(palette.muted).Padding(14, 16, 0)
+		}
 		if len(m.Config.CustomACP) == 0 {
 			ui.Text(c, "No custom ACP providers configured. Add any ACP-compatible coding agent CLI below.").
 				Key("custom-acp-none").FontSize(12).TextColor(palette.muted).Padding(14, 16)
 		}
-		for _, p := range m.Config.CustomACP {
-			desc := p.Binary
-			if len(p.Args) > 0 {
-				desc += " " + strings.Join(p.Args, " ")
-			}
-			label := p.Name
-			if label == "" {
-				label = p.Provider
-			}
-			ui.Row(c).Key("custom-acp:"+p.Provider).Padding(12, 16).Gap(12).AlignItems(ui.Center).Children(func() {
+		// engine.json may hold an id twice, edited by hand.
+		for i, p := range m.Config.CustomACP {
+			ui.Row(c).Key(fmt.Sprintf("custom-acp:%d:%s", i, p.Provider)).Padding(12, 16).Gap(12).AlignItems(ui.Center).Children(func() {
 				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
 					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, label).FontWeight(500)
+						ui.Text(c, cmp.Or(p.Name, p.Provider)).FontWeight(500)
 						ui.Text(c, p.Provider).FontSize(11.5).Font("monospace").TextColor(palette.faint)
 					})
-					ui.Text(c, desc).FontSize(12).Font("monospace").TextColor(palette.muted).SingleLine()
+					ui.Text(c, shellLine(nil, append([]string{p.Binary}, p.Args...))).FontSize(12).Font("monospace").TextColor(palette.muted).SingleLine()
 				})
-				ui.Button(c.Key("remove"), "Remove").TextColor(palette.red).OnClick(func() {
-					id := p.Provider
-					a.configure(func(cfg *daemon.Config) {
-						cfg.CustomACP = slices.DeleteFunc(cfg.CustomACP, func(cur acp.CustomProfile) bool {
-							return cur.Provider == id
-						})
-					})
-					a.checkAgain(c)
+				b := ui.Button(c.Key("remove"), "Remove").TextColor(palette.red).Disabled(busy).OnClick(func() {
+					a.removeCustomACP(p.Provider)
 				})
+				if busy {
+					a.tip(c, b, stopFirst)
+				}
 			})
 		}
 		ui.Column(c).Key("custom-acp-add").Padding(16).Gap(12).Children(func() {
@@ -410,41 +423,90 @@ func (a *app) customACPCard(c *ui.Context) {
 					})
 				})
 				ui.Column(c).Grow(1).Children(func() {
-					ui.Field(c, "Arguments", func() {
+					ui.Field(c, "Arguments (optional)", func() {
 						ui.TextInput(c.Key("acp-args"), &a.customACPArgs).Placeholder("acp").Font("monospace")
 					})
 				})
 			})
+			ui.Text(c, "Arguments split as a shell splits them. Leave them empty for an agent that speaks ACP as it starts.").
+				FontSize(12).TextColor(palette.muted)
 			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, a.customACPErr).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
-				ui.Button(c.Key("add-acp"), "Add ACP provider").OnClick(func() {
-					cand := acp.CustomProfile{
-						Provider: strings.TrimSpace(a.customACP.Provider),
-						Name:     strings.TrimSpace(a.customACP.Name),
-						Binary:   strings.TrimSpace(a.customACP.Binary),
-						Args:     strings.Fields(a.customACPArgs),
-					}
-					if _, err := cand.ToProfile(); err != nil {
-						a.customACPErr = err.Error()
-						return
-					}
-					for _, cur := range a.backend.Machine().Config.CustomACP {
-						if cur.Provider == cand.Provider {
-							a.customACPErr = fmt.Sprintf("custom ACP provider %q already exists", cand.Provider)
-							return
-						}
-					}
-					a.customACPErr = ""
-					a.configure(func(cfg *daemon.Config) {
-						cfg.CustomACP = append(cfg.CustomACP, cand)
-					})
-					a.customACP = acp.CustomProfile{}
-					a.customACPArgs = ""
-					a.checkAgain(c)
-				})
+				b := ui.Button(c.Key("add-acp"), "Add ACP provider").Disabled(busy).OnClick(a.addCustomACP)
+				if busy {
+					a.tip(c, b, stopFirst)
+				}
 			})
 		})
 	})
+}
+
+// addCustomACP adds the provider the card's form sets up to engine.json,
+// unless engine.json has its id already. A failed save keeps the form.
+func (a *app) addCustomACP() {
+	args, err := provider.Split(a.customACPArgs)
+	if err != nil {
+		a.customACPErr = "Arguments: " + err.Error()
+		return
+	}
+	cand := acp.CustomProfile{
+		Provider: strings.TrimSpace(a.customACP.Provider),
+		Name:     strings.TrimSpace(a.customACP.Name),
+		Binary:   strings.TrimSpace(a.customACP.Binary),
+		Args:     args,
+	}
+	if _, err := cand.ToProfile(); err != nil {
+		a.customACPErr = err.Error()
+		return
+	}
+	// The page's snapshot may be older than engine.json, so the id is
+	// checked against the file as it is changed.
+	dup := false
+	err = a.backend.Configure(func(cfg *daemon.Config) {
+		if slices.ContainsFunc(cfg.CustomACP, func(cur acp.CustomProfile) bool { return cur.Provider == cand.Provider }) {
+			dup = true
+			return
+		}
+		cfg.CustomACP = append(cfg.CustomACP, cand)
+	})
+	switch {
+	case err != nil:
+		a.customACPErr = "Couldn't save engine.json: " + err.Error()
+		return
+	case dup:
+		a.customACPErr = fmt.Sprintf("custom ACP provider %q already exists", cand.Provider)
+		return
+	}
+	a.customACPErr = ""
+	a.customACP, a.customACPArgs = acp.CustomProfile{}, ""
+	a.customACPChanged()
+}
+
+// removeCustomACP removes the provider id from engine.json, with its
+// launch settings, which an id used again must not start with.
+func (a *app) removeCustomACP(id string) {
+	err := a.backend.Configure(func(cfg *daemon.Config) {
+		cfg.CustomACP = slices.DeleteFunc(cfg.CustomACP, func(cur acp.CustomProfile) bool { return cur.Provider == id })
+		delete(cfg.Launch, id)
+	})
+	if err != nil {
+		a.customACPErr = "Couldn't save engine.json: " + err.Error()
+		return
+	}
+	a.customACPErr = ""
+	a.customACPChanged()
+}
+
+// customACPChanged asks this machine's engine again what it runs and how
+// each provider starts: a custom provider came or went.
+func (a *app) customACPChanged() {
+	if envs := a.backend.Envs(); len(envs) > 0 {
+		if r := a.launchState().read[envs[0].ID]; r != nil {
+			r.rev++
+			r.at = time.Time{}
+		}
+	}
+	a.checkCLIs()
 }
 
 // remoteEnvs are the paired machines shown, in gui.json's order.
