@@ -20,6 +20,9 @@ func (a *app) projectMenu(m *ui.Menu, p *project) {
 	if m.Item("New thread").Chosen() {
 		a.startThread(p)
 	}
+	if m.Item("New manager…").Chosen() {
+		a.openManagerDialog(p.env, p.key)
+	}
 	a.pluginMenuItems(m, "project.menu", func(plugin string) map[string]any {
 		project := map[string]string{"name": p.name()}
 		if a.plugins.Allowed(plugin, "threads:read") {

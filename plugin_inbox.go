@@ -193,6 +193,9 @@ func (a *app) setDispositionEffect(raw json.RawMessage) (any, error) {
 	default:
 		return nil, errors.New("threads.setDisposition: state is inbox, snoozed or settled")
 	}
+	if isManager(t) && d.State != api.Open {
+		return nil, errors.New("a manager thread cannot be snoozed or settled")
+	}
 	from := a.categoryOf(t)
 	a.backend.SetDisposition(t.env, t.id(), d)
 	if !joking {

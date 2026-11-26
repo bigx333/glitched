@@ -44,6 +44,9 @@ func (a *app) threadRecord(t thread) plugins.ThreadRecord {
 		Tokens:      t.View.Tokens,
 		Local:       t.local(),
 	}
+	if isManager(t) && !a.nested(t) {
+		r.Section = "managers"
+	}
 	if p, ok := a.parentOf(t); ok {
 		r.Parent = p.id().String()
 	}

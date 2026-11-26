@@ -88,6 +88,7 @@ func (a *app) subagentShown(t thread) (subagentSel, client.WorkStep, bool) {
 func (a *app) openSubagent(t thread, run api.ID, w client.WorkStep) {
 	a.subagentStep[t.id()] = subagentSel{run, w.Item}
 	a.showDiff, a.showPreview, a.showPluginTab, a.panelsJump = false, false, false, false
+	a.mgr.showPanel = false
 }
 
 // Limits on what the panel's context carries, so that a copy drawn from

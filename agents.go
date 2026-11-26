@@ -114,6 +114,11 @@ func (a *app) agents(c *ui.Context, t thread, frameW, fade float32) {
 	}
 	id := t.id()
 	open, k := a.agentsOpen[id], a.agentsK
+	// A Manager's are its workers.
+	word := "Agents"
+	if isManager(t) {
+		word = "Workers"
+	}
 	pillW := a.agentsPillW
 	if pillW == 0 {
 		pillW = agentsPillGuess
@@ -135,7 +140,7 @@ func (a *app) agents(c *ui.Context, t thread, frameW, fade float32) {
 		// Closed, or folding, it's the pill: a press opens it, or turns it
 		// back round.
 		if !open {
-			a.tip(c, box.Label("Agents"), plural(len(tree), "child thread")).Cursor(ui.CursorPointer)
+			a.tip(c, box.Label(word), plural(len(tree), "child thread")).Cursor(ui.CursorPointer)
 			if k == 0 && box.Hovered() {
 				box.Shadow(0, 0, 0, 1, palette.text.Alpha(0.12))
 			}
@@ -154,7 +159,7 @@ func (a *app) agents(c *ui.Context, t thread, frameW, fade float32) {
 				label.Children(func() {
 					// Lifted by its margin, not a Translate, which would
 					// lose its ClearType.
-					ui.Text(c, "Agents").FontSize(12).Margin(0, 0, 2*agentsTextLift)
+					ui.Text(c, word).FontSize(12).Margin(0, 0, 2*agentsTextLift)
 					if needsYou(tree) {
 						ui.Box(c).Size(6, 6).Radius(3).Background(palette.amber).Translate(0, agentsDotDrop)
 					}
@@ -184,7 +189,7 @@ func (a *app) agents(c *ui.Context, t thread, frameW, fade float32) {
 				h := stagger(k, 0, shown)
 				ui.Row(c).Key("head").Height(agentsHeadH).Padding(0, 0, 0, agentsInset).AlignItems(ui.Center).
 					Opacity(h).Translate(0, 6*(1-h)).Children(func() {
-					ui.Text(c, "Agents").FontSize(12).TextColor(palette.muted).Grow(1)
+					ui.Text(c, word).FontSize(12).TextColor(palette.muted).Grow(1)
 					// Stopping the thread stops only its own agent: these
 					// stop here, all at once.
 					if n := working(tree); n > 0 {
