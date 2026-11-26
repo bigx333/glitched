@@ -66,6 +66,7 @@ type proc struct {
 	stdin   *os.File
 	stderr  *tail
 	tap     provider.Tap  // sees each line on the agent's pipes, for every run of it
+	legacy  legacy        // bridges a session's legacy models to config options
 	heard   chan struct{} // closed once stderr is read to its end
 	read    chan struct{} // closed once stdout is read to its end and let go
 	// release has the bridge from stdout let go now, sending the SDK
@@ -164,7 +165,7 @@ func launch(ctx context.Context, profile Profile, prog provider.Program, dir, ma
 	wire := openWire()
 	go p.watchStderr(errR, wire)
 	in := p.readStdout(outR, wire)
-	p.conn = acpsdk.NewClientSideConnection(p, tapped{inW, wire, ">> ", tap, p.wrote}, in)
+	p.conn = acpsdk.NewClientSideConnection(p, tapped{w: inW, wire: wire, prefix: ">> ", tap: tap, sent: p.wrote, edit: p.legacy.toAgent}, in)
 	p.conn.SetLogger(slog.New(redacted{slog.Default().Handler()}))
 	// The SDK stops reading at a line it can't take, as one past its size
 	// limit: the bridge to it lets go, so the agent's stdout closes.
@@ -346,6 +347,12 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 		if o.Description != nil {
 			m.Description = *o.Description
 		}
+		// Legacy models have no thought levels to look for, and a set of
+		// one would change the agent's own default model.
+		if model.Id == legacyModelConfigID {
+			out = append(out, m)
+			continue
+		}
 		options := initial
 		if model.CurrentValue != o.Value {
 			r, err := p.conn.SetSessionConfigOption(ctx, acpsdk.SetSessionConfigOptionRequest{ValueId: &acpsdk.SetSessionConfigOptionValueId{
@@ -525,7 +532,7 @@ func (p *proc) readStdout(stdout *os.File, wire io.Writer) *io.PipeReader {
 				p.tap.Line(provider.ACP, provider.Stdout, line)
 				if t := bytes.TrimSpace(line); len(t) > 0 && t[0] != '{' {
 					p.notice(string(t))
-				} else if _, werr := w.Write(line); werr != nil {
+				} else if _, werr := w.Write(p.legacy.fromAgent(line)); werr != nil {
 					return
 				}
 			}
