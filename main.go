@@ -561,6 +561,11 @@ type app struct {
 	customACP     acp.CustomProfile
 	customACPArgs string
 	customACPErr  string
+	// customACPMachine is the server whose custom ACP providers the card
+	// shows, "" for this machine's; customACPReads are servers' answers.
+	customACPMachine string
+	customACPReads   map[api.ID]*customACPRead
+	customACPSaving  map[api.ID]bool // servers' engines taking a change
 
 	svcStatus  service.Status
 	svcRead    time.Time // zero till the first read

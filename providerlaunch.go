@@ -94,10 +94,13 @@ func machineWords(e *client.Env) string {
 
 // launchEnv is the machine the rows show, this one when the chosen one
 // went offline.
-func (a *app) launchEnv() *client.Env {
+func (a *app) launchEnv() *client.Env { return a.machineNamed(a.launchState().machine) }
+
+// machineNamed is the online server called name, or this machine.
+func (a *app) machineNamed(name string) *client.Env {
 	envs := a.launchMachines()
 	for _, e := range envs {
-		if e.Kind != client.Local && e.Name == a.launchState().machine {
+		if e.Kind != client.Local && e.Name == name {
 			return e
 		}
 	}
@@ -105,6 +108,22 @@ func (a *app) launchEnv() *client.Env {
 		return envs[0]
 	}
 	return nil
+}
+
+// machineChoice picks e among envs, and keeps the server's name in
+// chosen, "" for this machine.
+func machineChoice(c *ui.Context, envs []*client.Env, e *client.Env, chosen *string) {
+	names := make([]string, len(envs))
+	i := 0
+	for j, m := range envs {
+		names[j] = machineName(m)
+		if m == e {
+			i = j
+		}
+	}
+	if ui.Segmented(c.Key("machine"), &i, names...).Label("Machine").Changed() {
+		*chosen = map[bool]string{true: envs[i].Name}[envs[i].Kind != client.Local]
+	}
 }
 
 // launchRead is e's engine's answer, asked again once it's old. An
@@ -155,17 +174,7 @@ func (a *app) providerLaunch(c *ui.Context, r providerRow) {
 	inset(c, "LAUNCH", func() {
 		if len(envs) > 1 {
 			optionRow(c, "Machine", "Each machine's engine keeps its own launch settings. These are the chosen one's.", func() {
-				names := make([]string, len(envs))
-				i := 0
-				for j, m := range envs {
-					names[j] = machineName(m)
-					if m == e {
-						i = j
-					}
-				}
-				if ui.Segmented(c.Key("machine"), &i, names...).Label("Machine").Changed() {
-					s.machine = map[bool]string{true: envs[i].Name}[envs[i].Kind != client.Local]
-				}
+				machineChoice(c, envs, e, &s.machine)
 			})
 		}
 		switch {

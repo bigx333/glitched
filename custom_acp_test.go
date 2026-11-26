@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider"
 	"glitched/internal/provider/acp"
@@ -197,4 +198,104 @@ func TestCustomACPOnAnotherProcessesEngineSaysWhenItApplies(t *testing.T) {
 	h := start(t, dir)
 	openCustomACP(h)
 	h.until("the card's note", func() bool { return h.tt.HasText("glitched serve applies a change here when it next starts.") })
+}
+
+// devboxCard is the card on a window with devbox paired and chosen, and
+// devbox's state directory.
+func devboxCard(t *testing.T, change func(*daemon.Config)) (*harness, string) {
+	t.Helper()
+	rdir := tempDir(t)
+	setUp(t, rdir, change)
+	token, err := daemon.Pair(rdir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := startEngine(context.Background(), daemon.Config{Dir: rdir, Hub: true, Listen: []string{"127.0.0.1:0"}, Providers: provider.Mux{"claude": fake.New(nil)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { remote.Close() })
+	h := start(t, tempDir(t))
+	if err := h.addServer(client.Server{Label: "devbox", Addr: remote.Addrs()[0].String(), Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	h.until("devbox online", func() bool { return len(h.a.launchMachines()) == 2 })
+	openCustomACP(h)
+	h.click("devbox")
+	h.until("devbox's custom ACP providers", func() bool {
+		return h.tt.HasText("Devbox's engine applies a change when it next starts.")
+	})
+	h.reveal("Add ACP provider")
+	return h, rdir
+}
+
+// On devbox, the card adds a provider to devbox's engine.json, not this
+// machine's, and removes it with its launch settings.
+func TestCustomACPOnARemoteMachine(t *testing.T) {
+	h, rdir := devboxCard(t, func(cfg *daemon.Config) {
+		cfg.Launch = map[string]provider.Launch{"mine": {Args: "--old"}}
+	})
+	if h.tt.HasText("Browse…") {
+		t.Errorf("devbox chosen, and the card offers this machine's file picker")
+	}
+	bin := demoProgram(t)
+	h.a.customACP = acp.CustomProfile{Provider: "mine", Name: "Mine", Binary: bin}
+	h.a.customACPArgs = "acp"
+	h.tt.Frame()
+	h.click("Add ACP provider")
+	want := []acp.CustomProfile{{Provider: "mine", Name: "Mine", Binary: bin, Args: []string{"acp"}}}
+	h.until("devbox's engine.json with the provider", func() bool { got, _ := customACP(t, rdir); return reflect.DeepEqual(got, want) })
+	h.until("the card's new row", func() bool { return h.tt.HasText(shellLine(nil, []string{bin, "acp"})) })
+	if h.a.customACPErr != "" || h.a.customACP.Provider != "" {
+		t.Errorf("after the add, the form holds %+v, says %q", h.a.customACP, h.a.customACPErr)
+	}
+	if got, _ := customACP(t, h.a.dir); len(got) != 0 {
+		t.Errorf("this machine's engine.json took devbox's provider: %+v", got)
+	}
+
+	h.reveal("Remove")
+	h.click("Remove")
+	h.until("devbox's engine.json without the provider", func() bool { got, _ := customACP(t, rdir); return len(got) == 0 })
+	if _, launch := customACP(t, rdir); len(launch) != 0 {
+		t.Errorf("devbox's engine.json keeps launch settings %+v", launch)
+	}
+	h.until("the card without the row", func() bool {
+		return h.tt.HasText("No custom ACP providers configured. Add any ACP-compatible coding agent CLI below.")
+	})
+}
+
+// A binary devbox doesn't have is devbox's engine's to refuse, and the
+// card says why.
+func TestCustomACPOnARemoteMachineRefusesABinaryItLacks(t *testing.T) {
+	h, rdir := devboxCard(t, func(*daemon.Config) {})
+	h.a.customACP = acp.CustomProfile{Provider: "mine", Binary: "/nowhere/mine"}
+	h.tt.Frame()
+	h.click("Add ACP provider")
+	h.until("the engine's refusal", func() bool { return h.a.customACPErr != "" })
+	if want := "Couldn't save to devbox: binary: there is no file at /nowhere/mine"; h.a.customACPErr != want {
+		t.Errorf("the card says %q, want %q", h.a.customACPErr, want)
+	}
+	if got, _ := customACP(t, rdir); len(got) != 0 {
+		t.Errorf("devbox's engine.json holds %+v", got)
+	}
+	if h.a.customACP.Binary != "/nowhere/mine" {
+		t.Errorf("the form lost the binary: %+v", h.a.customACP)
+	}
+	h.tt.Frame()
+	if !h.tt.HasText(h.a.customACPErr) {
+		t.Errorf("the page doesn't show %q", h.a.customACPErr)
+	}
+}
+
+func TestCustomACPBrowseFillsTheBinary(t *testing.T) {
+	was := chooseBinary
+	chooseBinary = func(*app) string { return "/opt/tools/my agent" }
+	t.Cleanup(func() { chooseBinary = was })
+	h := start(t, tempDir(t))
+	openCustomACP(h)
+	h.a.customACP.Provider = "mine"
+	h.click("Browse…")
+	if want := (acp.CustomProfile{Provider: "mine", Binary: "/opt/tools/my agent"}); !reflect.DeepEqual(h.a.customACP, want) {
+		t.Errorf("after Browse, the form holds %+v", h.a.customACP)
+	}
 }
