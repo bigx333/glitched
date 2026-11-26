@@ -62,7 +62,7 @@ func (a *app) messageActions(c *ui.Context, t thread, es []entry, i int, pointed
 				asked, ok := askedBefore(es, i)
 				if action(c, "retry", icRotate, "Retry", !ok || t.View.Live()).Clicked() {
 					a.backend.Send(t.env, t.id(), asked, api.SteerActive)
-					a.listFor(t.id()).ScrollToEnd()
+					a.scrollToEnd(t.id())
 				}
 			case "message.fork":
 				if action(c, "fork", icBranch, "Fork from here", false).Clicked() {

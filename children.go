@@ -149,6 +149,7 @@ func (a *app) pruneThreadState() {
 	}
 	maps.DeleteFunc(a.childrenOpen, gone)
 	maps.DeleteFunc(a.composerSeen, gone)
+	maps.DeleteFunc(a.toEnd, gone)
 	maps.DeleteFunc(a.rows, func(id api.ID, c *rowsCache) bool {
 		t, ok := a.find(id)
 		return !id.IsZero() && (!ok || t.Transcript != c.tr)

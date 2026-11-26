@@ -105,7 +105,7 @@ func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState, v 
 	if !found {
 		active = max(0, active-1)
 	}
-	if l.AtEnd() {
+	if a.atEnd(id) {
 		active = len(turns) - 1
 	}
 

@@ -27,6 +27,22 @@ func (a *app) listFor(id api.ID) *ui.ListState {
 	return l
 }
 
+func (a *app) scrollToEnd(id api.ID) {
+	a.listFor(id).ScrollToEnd()
+	if a.toEnd == nil {
+		a.toEnd = map[api.ID]bool{}
+	}
+	a.toEnd[id] = true
+}
+
+func (a *app) atEnd(id api.ID) bool {
+	if a.listFor(id).AtEnd() {
+		delete(a.toEnd, id)
+		return true
+	}
+	return a.toEnd[id]
+}
+
 // timeline lists the thread's entries, as MyGo's markdown-chat does: the
 // list builds only those in view, starts at the end and follows it as a
 // reply streams in, frame for frame, until the user scrolls up; scrolling
@@ -184,7 +200,6 @@ func (a *app) jumpToLatest(c *ui.Context, t thread) {
 	if j == 0 {
 		return
 	}
-	l := a.listFor(t.id())
 	// Over the composer as it is in this frame, which is laid out after.
 	bottom := composerBarBottom + a.composerHeight(c, t) + 26
 	if hero(t) {
@@ -208,7 +223,7 @@ func (a *app) jumpToLatest(c *ui.Context, t thread) {
 			ui.Icon(c, icArrowDown).FontSize(13)
 			ui.Text(c, "Jump to latest").FontSize(12)
 		}).Clicked() {
-			l.ScrollToEnd()
+			a.scrollToEnd(t.id())
 		}
 	})
 }

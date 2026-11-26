@@ -299,7 +299,7 @@ func (a *app) keepPlace(id api.ID, l *ui.ListState, v timelineView) {
 		top = was.top(l)
 	}
 	m.listed, m.top, m.noted = v, place{}, false
-	if sameItems(was, v) || l.AtEnd() || !top.ok {
+	if sameItems(was, v) || a.atEnd(id) || !top.ok {
 		return
 	}
 	i := top.at

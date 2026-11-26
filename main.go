@@ -450,6 +450,7 @@ type app struct {
 	// composerSeen the threads it has been shown over.
 	composerRest bool
 	composerSeen map[api.ID]bool
+	toEnd        map[api.ID]bool
 	// The hero (hero.go): dockK is how far the composer is from the hero
 	// (0) to its dock (1) in this frame, dockJump makes it jump there, for
 	// ⌘N, and paneAt is the chat pane, as last laid out; leaving
