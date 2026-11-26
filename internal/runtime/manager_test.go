@@ -430,40 +430,48 @@ func TestAManagerWhoseFirstSendFailsAfterSessionBindGetsTheDocsNext(t *testing.T
 	}
 }
 
-func TestASnoozedManagerSweepsWhenItsSnoozeRunsOut(t *testing.T) {
+func TestARunSweepSweepsAnIdleManagerNow(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "host.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	h, err := New(ctx, st, provider.Mux{"fake": fake.New(fake.Turn(false))})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	h, err := New(ctx, st, provider.Mux{"fake": &holdAdapter{fake.New(fake.Turn(false)), release}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { h.Close() })
 	mgr := api.NewID()
 	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: mgr, Body: api.ThreadCreate{
-		Workspace: t.TempDir(), Title: "Sweeper", Model: api.ModelRef{Provider: "fake", Model: "fake"},
-		Role: api.RoleManager, Sweep: &api.SweepSchedule{IntervalSeconds: 1},
+		Workspace: t.TempDir(), Title: "Sweeper", Model: api.ModelRef{Provider: "fake", Model: "fake"}, Role: api.RoleManager,
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	until := time.Now().UTC().Add(1200 * time.Millisecond)
-	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: mgr, Body: api.InboxSet{Disposition: api.Disposition{State: api.Snoozed, Until: until}}}); err != nil {
+	run := api.NewID()
+	if _, err := h.Submit(ctx, api.Command{ID: run, Target: mgr, Body: api.SweepRun{Prompt: "Check the release blockers"}}); err != nil {
+		t.Fatalf("SweepRun with sweeps off: %v", err)
+	}
+	snap, err := h.Read(ctx, api.Query{Thread: mgr})
+	if err != nil {
 		t.Fatal(err)
 	}
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-		snap, err := h.Read(ctx, api.Query{Thread: mgr})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if v := snap.Threads[0]; !v.LastSweep.IsZero() {
-			if v.LastSweep.Before(until) {
-				t.Fatalf("the Manager swept at %v, during its snooze until %v", v.LastSweep, until)
-			}
-			return
-		}
+	v := snap.Threads[0]
+	if v.LastSweep.IsZero() || v.Turn == nil || v.Turn.Run != run {
+		t.Fatalf("after SweepRun LastSweep %v, turn %+v, want the sweep's run %v live", v.LastSweep, v.Turn, run)
 	}
-	t.Fatalf("the Manager never swept after its snooze ran out at %v", until)
+	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: mgr, Body: api.SweepRun{}}); !errors.As(err, new(*api.RejectedError)) {
+		t.Fatalf("a second SweepRun while the first runs = %v, want RejectedError", err)
+	}
+	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: mgr, Body: api.WakeDismiss{Run: run}}); err != nil {
+		t.Fatalf("WakeDismiss of the sweep: %v", err)
+	}
+	if snap, err = h.Read(ctx, api.Query{Thread: mgr}); err != nil {
+		t.Fatal(err)
+	}
+	if v := snap.Threads[0]; v.Turn == nil || !v.Turn.Silent || v.Working() {
+		t.Fatalf("a dismissed sweep shows %+v, want it silent", v.Turn)
+	}
 }

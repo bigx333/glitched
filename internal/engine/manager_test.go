@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -312,74 +313,6 @@ func TestDismissingAWakeKeepsTheReportsItDidNotTake(t *testing.T) {
 	})
 }
 
-func TestASnoozedManagersWakeDecidesWhetherItComesBack(t *testing.T) {
-	snoozed := func(t *testing.T) (*mgr, api.Disposition) {
-		m := newManager(t, nil)
-		d := api.Disposition{State: api.Snoozed, Until: m.at.Add(4 * time.Hour)}
-		m.must(api.InboxSet{Disposition: d})
-		return m, d
-	}
-	t.Run("dismissed", func(t *testing.T) {
-		m, d := snoozed(t)
-		m.report(api.ReportDone)
-		if m.th.Live() == nil || m.th.Disposition != d {
-			t.Fatalf("the report's wake: run %v, disposition %+v, want it running snoozed", m.th.Live(), m.th.Disposition)
-		}
-		m.dismiss()
-		m.end()
-		if m.th.Disposition != d {
-			t.Fatalf("a dismissed wake left the thread %+v, want %+v", m.th.Disposition, d)
-		}
-	})
-	t.Run("ended", func(t *testing.T) {
-		m, _ := snoozed(t)
-		m.report(api.ReportDone)
-		m.end()
-		if m.th.Disposition.State != api.Open {
-			t.Fatalf("an undismissed wake left the thread %+v, want it back in the inbox", m.th.Disposition)
-		}
-	})
-	t.Run("asked", func(t *testing.T) {
-		m, _ := snoozed(t)
-		m.report(api.ReportDone)
-		m.observe(Started{Run: m.th.Live().ID})
-		m.dismiss()
-		m.observe(Surfaced{Run: m.th.Live().ID, Request: api.NewID(), Dedup: "q", Kind: api.KindApproval, Body: []byte(`{}`)})
-		if m.th.Disposition.State != api.Open {
-			t.Fatalf("a wake's request left the thread %+v, want it back in the inbox", m.th.Disposition)
-		}
-	})
-	t.Run("asked before dismiss", func(t *testing.T) {
-		m, _ := snoozed(t)
-		m.report(api.ReportDone)
-		m.observe(Started{Run: m.th.Live().ID})
-		m.observe(Surfaced{Run: m.th.Live().ID, Request: api.NewID(), Dedup: "q", Kind: api.KindApproval, Body: []byte(`{}`)})
-		if m.th.Disposition.State != api.Open {
-			t.Fatalf("a wake's request left the thread %+v, want it back in the inbox", m.th.Disposition)
-		}
-		if _, err := m.submit(api.WakeDismiss{Run: m.th.Live().ID}); !errors.As(err, new(*api.RejectedError)) {
-			t.Fatalf("WakeDismiss after Surfaced = %v, want RejectedError", err)
-		}
-	})
-	t.Run("approval", func(t *testing.T) {
-		m, _ := snoozed(t)
-		m.report(api.ReportBlocked)
-		if m.th.Disposition.State != api.Open {
-			t.Fatalf("a worker's approval left the thread %+v, want it back in the inbox", m.th.Disposition)
-		}
-	})
-	t.Run("stopped", func(t *testing.T) {
-		m, _ := snoozed(t)
-		m.must(api.MessageDispatch{Text: "go", Mode: api.StartNow})
-		m.must(api.TurnInterrupt{})
-		m.observe(Ended{Run: m.th.Live().ID, Outcome: api.OutcomeInterrupted})
-		m.report(api.ReportDone)
-		if m.th.Live() != nil || m.th.Disposition.State != api.Open {
-			t.Fatalf("a wake a stop holds: run %v, disposition %+v, want the report back in the inbox", m.th.Live(), m.th.Disposition)
-		}
-	})
-}
-
 func TestASweepWaitsForALimitsContinue(t *testing.T) {
 	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
 	m.must(api.MessageDispatch{Text: "go", Mode: api.StartNow})
@@ -396,15 +329,6 @@ func TestASweepWaitsForALimitsContinue(t *testing.T) {
 	}
 	if _, _, err := Observe(m.th, SweepDue{Run: api.NewID()}, resets.Add(api.LimitOverdue+time.Second)); err != nil {
 		t.Fatalf("a sweep once the continue is overdue: %v", err)
-	}
-}
-
-func TestASnoozedManagersSweepWaitsForTheSnooze(t *testing.T) {
-	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
-	until := m.at.Add(time.Hour)
-	m.must(api.InboxSet{Disposition: api.Disposition{State: api.Snoozed, Until: until}})
-	if at, ok := NextSweepAt(m.th, m.at); !ok || !at.Equal(until) {
-		t.Fatalf("a snoozed Manager's sweep is due at %v (%v), want when the snooze runs out, %v", at, ok, until)
 	}
 }
 
@@ -425,38 +349,6 @@ func TestALimitADismissedSweepHitHoldsTheNextSweepUntilItResets(t *testing.T) {
 	if _, _, err := Observe(m.th, SweepDue{Run: api.NewID()}, resets); err != nil {
 		t.Fatalf("a sweep once the limit reset: %v", err)
 	}
-}
-
-func TestAnApprovalInASnoozedManagersTurnBringsItBack(t *testing.T) {
-	approval := func(m *mgr, run api.ID) {
-		m.t.Helper()
-		m.observe(Surfaced{Run: run, Request: api.NewID(), Dedup: "ask", Kind: api.KindApproval, Body: []byte("{}")})
-		if m.th.Disposition.State != api.Open {
-			m.t.Fatalf("an approval left the Manager %v until %v", m.th.Disposition.State, m.th.Disposition.Until)
-		}
-	}
-	t.Run("a wake the user steered", func(t *testing.T) {
-		m := newManager(t, nil)
-		m.must(api.InboxSet{Disposition: api.Disposition{State: api.Snoozed, Until: m.at.Add(time.Hour)}})
-		m.report(api.ReportDone)
-		run := m.th.Live().ID
-		m.observe(Started{Run: run})
-		m.dismiss()
-		m.must(api.MessageDispatch{Mode: api.SteerActive, Text: "Also check the logs"})
-		if m.th.Disposition.State != api.Open {
-			t.Fatalf("steering the wake left the Manager %v", m.th.Disposition.State)
-		}
-		m.must(api.InboxSet{Disposition: api.Disposition{State: api.Snoozed, Until: m.at.Add(time.Hour)}})
-		approval(m, run)
-	})
-	t.Run("the user's own turn", func(t *testing.T) {
-		m := newManager(t, nil)
-		m.must(api.MessageDispatch{Mode: api.StartNow, Text: "Coordinate"})
-		run := m.th.Live().ID
-		m.observe(Started{Run: run})
-		m.must(api.InboxSet{Disposition: api.Disposition{State: api.Snoozed, Until: m.at.Add(time.Hour)}})
-		approval(m, run)
-	})
 }
 
 func TestADismissedSweepKeepsAReportThatCameInIt(t *testing.T) {
@@ -487,28 +379,151 @@ func TestTurningSweepsOffKeepsTheirPrompt(t *testing.T) {
 	}
 }
 
-func TestTwoWorkerCompletionsKeepSnoozedManagerSnoozed(t *testing.T) {
-	m := newManager(t, nil)
-	d := api.Disposition{State: api.Snoozed, Until: m.at.Add(4 * time.Hour)}
-	m.must(api.InboxSet{Disposition: d})
+func TestAManagerStaysInTheInbox(t *testing.T) {
+	for _, d := range []api.Disposition{
+		{State: api.Snoozed, Until: time.Unix(20_000, 0).UTC()},
+		{State: api.Settled},
+	} {
+		m := newManager(t, nil)
+		if _, err := m.submit(api.InboxSet{Disposition: d}); !errors.As(err, new(*api.RejectedError)) {
+			t.Fatalf("InboxSet %v on a Manager = %v, want RejectedError", d.State, err)
+		}
+		if m.th.Disposition.State != api.Open {
+			t.Fatalf("a refused %v left the Manager %v", d.State, m.th.Disposition.State)
+		}
+	}
+	t.Run("open", func(t *testing.T) {
+		m := newManager(t, nil)
+		m.must(api.InboxSet{Disposition: api.Disposition{}})
+		if m.th.Disposition.State != api.Open {
+			t.Fatalf("Open left the Manager %v", m.th.Disposition.State)
+		}
+	})
+	for _, d := range []api.Disposition{
+		{State: api.Snoozed, Until: time.Unix(20_000, 0).UTC()},
+		{State: api.Settled},
+	} {
+		t.Run("stored "+fmt.Sprint(d.State), func(t *testing.T) {
+			m := newManager(t, nil)
+			m.th.Disposition = d // as a store kept it from before Managers stayed open
+			m.must(api.InboxSet{Disposition: api.Disposition{}})
+			if m.th.Disposition.State != api.Open {
+				t.Fatalf("Open left a stored %v Manager %v", d.State, m.th.Disposition.State)
+			}
+		})
+	}
+	t.Run("plain thread", func(t *testing.T) {
+		m := &mgr{t: t, at: time.Unix(10_000, 0).UTC()}
+		m.must(api.ThreadCreate{Workspace: "/repo", Title: "Plain", Model: api.ModelRef{Provider: "claude", Model: "sonnet"}})
+		d := api.Disposition{State: api.Snoozed, Until: m.at.Add(time.Hour)}
+		m.must(api.InboxSet{Disposition: d})
+		if m.th.Disposition != d {
+			t.Fatalf("snooze left a plain thread %+v, want %+v", m.th.Disposition, d)
+		}
+		m.must(api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
+		if m.th.Disposition.State != api.Settled {
+			t.Fatalf("settle left a plain thread %v", m.th.Disposition.State)
+		}
+	})
+}
 
-	m.report(api.ReportDone)
-	if m.th.Live() == nil || m.th.Disposition != d {
-		t.Fatalf("first report: run %v, disposition %+v", m.th.Live(), m.th.Disposition)
-	}
-	m.report(api.ReportDone)
-	if m.th.Disposition != d {
-		t.Fatalf("second report while first wake ran broke snooze: %+v", m.th.Disposition)
-	}
+func (m *mgr) runSweep(prompt string) ([]Event, []Effect, api.ID, error) {
+	m.t.Helper()
+	m.at = m.at.Add(time.Second)
+	id := api.NewID()
+	evs, effs, err := Decide(m.th, api.Command{ID: id, Target: m.th.ID, Body: api.SweepRun{Prompt: prompt}}, m.at)
+	m.fold(evs)
+	return evs, effs, id, err
+}
 
-	m.dismiss()
-	m.end()
-	if m.th.Live() == nil || m.th.Disposition != d {
-		t.Fatalf("second wake after first dismissal: run %v, disposition %+v", m.th.Live(), m.th.Disposition)
+func TestARunSweepStartsASweepWake(t *testing.T) {
+	cases := []struct {
+		name   string
+		sweep  *api.SweepSchedule
+		prompt string
+		want   string
+	}{
+		{"sweeps off, default prompt", nil, "", api.DefaultSweepPrompt},
+		{"sweeps off, configured prompt", &api.SweepSchedule{Prompt: "  Check the release  "}, "", "Check the release"},
+		{"scheduled, prompt given", &api.SweepSchedule{IntervalSeconds: 3600, Prompt: "Check the release"}, "  Only the blockers ", "Only the blockers"},
 	}
-	m.dismiss()
-	m.end()
-	if m.th.Disposition != d {
-		t.Fatalf("after dismissing both wakes disposition = %+v, want %+v", m.th.Disposition, d)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := newManager(t, c.sweep)
+			before := m.th.UpdatedAt
+			evs, effs, id, err := m.runSweep(c.prompt)
+			if err != nil {
+				t.Fatalf("SweepRun: %v", err)
+			}
+			live := m.th.Live()
+			if live == nil || live.ID != id || live.Wake != api.WakeSweep || !live.Prior.Equal(before) {
+				t.Fatalf("the sweep's run = %+v, want wake %v under the command's ID, prior %v", live, api.WakeSweep, before)
+			}
+			if !emitted[api.SweepStarted](evs) || !m.th.LastSweep.Equal(m.at) {
+				t.Fatalf("LastSweep = %v, want %v", m.th.LastSweep, m.at)
+			}
+			if len(effs) != 1 {
+				t.Fatalf("effects = %v, want one StartTurn", effs)
+			}
+			if st, ok := effs[0].(StartTurn); !ok || st.Run != id || st.Text != c.want {
+				t.Fatalf("effect = %+v, want StartTurn of %q", effs[0], c.want)
+			}
+			m.dismiss()
+			m.end()
+			if !m.th.UpdatedAt.Equal(before) || View(m.th).LastTurn != nil {
+				t.Fatalf("a dismissed sweep left UpdatedAt %v (was %v), LastTurn %+v", m.th.UpdatedAt, before, View(m.th).LastTurn)
+			}
+		})
 	}
+	t.Run("stored settled", func(t *testing.T) {
+		m := newManager(t, nil)
+		m.th.Disposition = api.Disposition{State: api.Settled}
+		if _, _, _, err := m.runSweep(""); err != nil {
+			t.Fatalf("SweepRun: %v", err)
+		}
+		if m.th.Disposition.State != api.Open || m.th.Live() == nil {
+			t.Fatalf("a sweep on a stored settled Manager left it %v, run %v", m.th.Disposition.State, m.th.Live())
+		}
+	})
+}
+
+func TestARunSweepIsRefused(t *testing.T) {
+	model := api.ModelRef{Provider: "claude", Model: "sonnet"}
+	refused := func(t *testing.T, m *mgr) {
+		t.Helper()
+		evs, effs, _, err := m.runSweep("")
+		if !errors.As(err, new(*api.RejectedError)) || len(evs) != 0 || len(effs) != 0 {
+			t.Fatalf("SweepRun = %v, %v, %v, want RejectedError", evs, effs, err)
+		}
+	}
+	t.Run("plain thread", func(t *testing.T) {
+		m := &mgr{t: t, at: time.Unix(10_000, 0).UTC()}
+		m.must(api.ThreadCreate{Workspace: "/repo", Title: "Plain", Model: model})
+		refused(t, m)
+	})
+	t.Run("child", func(t *testing.T) {
+		m := &mgr{t: t, at: time.Unix(10_000, 0).UTC()}
+		m.must(api.ThreadCreate{Workspace: "/repo", Title: "Worker", Model: model, Parent: api.NewID()})
+		m.th.Role = api.RoleManager
+		refused(t, m)
+	})
+	t.Run("busy", func(t *testing.T) {
+		m := newManager(t, nil)
+		m.must(api.MessageDispatch{Text: "go", Mode: api.StartNow})
+		refused(t, m)
+	})
+	t.Run("sweeping", func(t *testing.T) {
+		m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
+		m.sweep()
+		refused(t, m)
+	})
+	t.Run("agent", func(t *testing.T) {
+		m := newManager(t, nil)
+		parent := api.NewID()
+		m.at = m.at.Add(time.Second)
+		_, _, err := Decide(m.th, api.Command{ID: api.NewID(), Target: m.th.ID, Body: api.SweepRun{}, Caller: &api.Caller{Thread: parent}}, m.at)
+		if !errors.As(err, new(*api.RejectedError)) {
+			t.Fatalf("an agent's SweepRun = %v, want RejectedError", err)
+		}
+	})
 }
