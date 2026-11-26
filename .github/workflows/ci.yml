@@ -169,9 +169,16 @@ jobs:
   plugins-typecheck:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - uses: voidzero-dev/setup-vp@v1.22.0
         with:
           cache: true
+      - run: go test -count=1 -run '^(TestRepoPluginsAreTypeScript|TestEveryExamplePluginUsesTypeScriptAndCompiles|TestEveryBuiltInPluginUsesTypeScriptAndCompiles)$' ./internal/plugins ./internal/plugins/bundled
       - run: vp check --no-fmt --no-lint internal/plugins/bundled examples/plugins
