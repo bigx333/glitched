@@ -338,7 +338,6 @@ func CheckConfigure(parent, t Thread, c api.ThreadConfigure) error {
 	return nil
 }
 
-// ErrRefused is an observation the tables refuse: it arrived after the
 type decision struct {
 	t       Thread
 	thread  api.ID

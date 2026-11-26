@@ -14,6 +14,7 @@ import (
 	"glitched/internal/api"
 )
 
+// ErrRefused is an observation the tables refuse: it arrived after the
 // thread moved on, so it records nothing.
 var ErrRefused = errors.New("engine: observation refused")
 
