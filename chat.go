@@ -79,12 +79,14 @@ func (a *app) chatPage(c *ui.Context) {
 				a.approvalKeys(c, pane, t, rs)
 				a.composer(c, t, rs)
 			})
-			// A server's workspace isn't here for a shell. The diff panel,
-			// opened from an edit, says its files are there.
-			if a.showTerminal && t.local() {
+			if a.showTerminal {
 				dir := t.View.Workspace
 				if a.folderless(t) {
-					dir = homeDir()
+					if t.local() {
+						dir = homeDir()
+					} else {
+						dir = "~"
+					}
 				}
 				drawer := ui.Column(c).Key("terminal").Height(220).Transition(panel(0, 16))
 				drawer.Children(func() { a.terminal(c, t, dir) })
@@ -159,10 +161,18 @@ type terminalPanel struct {
 }
 
 func (a *app) terminal(c *ui.Context, t thread, workspace string) {
-	s, err := a.shellFor(workspace)
+	s, err := a.shellFor(t.env, workspace)
 	title := "zsh"
 	if s != nil {
 		title = s.Title()
+	}
+	remoteHost := ""
+	if t.env != nil && t.env.Kind != client.Local && t.env.Name != "" {
+		remoteHost = t.env.Name
+	}
+	held := false
+	if s != nil && s.conn != nil {
+		_, held = s.conn.LeaseStatus()
 	}
 	// The drawer is the terminal's colors, which are the theme's.
 	th := a.theme.terminal()
@@ -177,6 +187,20 @@ func (a *app) terminal(c *ui.Context, t thread, workspace string) {
 			key: key + "/header", box: func() ui.Element { return ui.Row(c).Shrink(1) }, context: ctx("header"),
 			native: func(*widget.Node) { a.terminalHeader(c, title) },
 		})
+		if remoteHost != "" || held {
+			ui.Row(c).Padding(2, 12, 4, 12).Gap(6).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
+				if remoteHost != "" {
+					ui.Text(c, remoteHost).FontSize(11).TextColor(palette.muted).Background(palette.surface).Padding(1, 6).Radius(4)
+				}
+				ui.Spacer(c)
+				if held {
+					ui.Text(c, "Watching").FontSize(11).TextColor(palette.faint)
+					if ui.Button(c, "Take control").Key("take-control").FontSize(11).Padding(2, 8).Radius(4).Background(palette.surface).TextColor(palette.text).Clicked() {
+						s.conn.TakeControl()
+					}
+				}
+			})
+		}
 		a.pluginComponent(c, "thread.panel.terminal", &t, componentCopy{
 			key: key + "/body", box: func() ui.Element { return ui.Column(c).Grow(1).Shrink(1).Basis(0).FillWidth() }, context: ctx("body"),
 			native: func(*widget.Node) { a.terminalBody(c, s, err) },

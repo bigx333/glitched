@@ -408,8 +408,8 @@ type app struct {
 	// shows, by item, while it is open.
 	subagentStep map[api.ID]subagentSel
 	subagentMade subagentMade
-	// shells are the terminal drawer's shells, by workspace.
-	shells map[string]*shell
+	// shells are the terminal drawer's shells, by environment and workspace.
+	shells map[shellKey]*shell
 	// windDraw paints the wind's field behind the chat, as the frame's
 	// pane has it.
 	windDraw func(p *ui.Painter, r ui.Rect)
@@ -676,7 +676,7 @@ func newApp(dir string, engine func(*daemon.Config), detect func(context.Context
 		sectionCounts:  map[category]int{},
 		projectFilter:  map[projectKey]bool{},
 		rowFx:          map[api.ID]rowGagFx{},
-		shells:         map[string]*shell{},
+		shells:         map[shellKey]*shell{},
 		diffs:          map[diffKey]*fileDiff{},
 		reading:        map[diffKey]diffRead{},
 		steers:         map[api.ID]steer{},

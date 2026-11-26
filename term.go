@@ -7,17 +7,23 @@ import (
 
 	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
+
+	"glitched/internal/api"
+	"glitched/internal/client"
 )
 
-// The terminal drawer runs a real shell, the user's, in a pseudo-terminal
-// emulated by Ghostty's libghostty-vt (MyGo's terminal plugin): one for
-// each project, started in the project's directory the first time the
-// drawer shows for one of its threads, and kept while the app runs, as
-// T3 Code keeps a terminal per project.
+// The terminal drawer runs a real shell through the engine's PTY manager
+// (replayed and rendered locally by Ghostty's libghostty-vt), one per
+// (environment, project workspace), kept alive in the engine across GUI closes.
+
+type shellKey struct {
+	env       api.ID
+	workspace string
+}
 
 type shell struct {
-	term *terminal.Terminal
-	// themed is the app's theme the shell's colors are from.
+	term   *terminal.Terminal
+	conn   *client.TerminalConn
 	themed string
 	// title is what the shell last set as its title, from the terminal's
 	// goroutine; the drawer's header shows it.
@@ -31,11 +37,16 @@ func (s *shell) Title() string {
 	return s.title
 }
 
-// shellFor returns the workspace's shell, starting it if it has none or
-// its last one exited. It starts none where there is no window, as in
-// tests, which keep to the drawer's canned output unless they hold one.
-func (a *app) shellFor(workspace string) (*shell, error) {
-	if s := a.shells[workspace]; s != nil {
+// shellFor returns the workspace's shell on env, starting or reattaching it if
+// it has none or its last one exited. It starts none where there is no window,
+// as in tests, which keep to the drawer's canned output unless they hold one.
+func (a *app) shellFor(env *client.Env, workspace string) (*shell, error) {
+	var envID api.ID
+	if env != nil {
+		envID = env.ID
+	}
+	key := shellKey{env: envID, workspace: workspace}
+	if s := a.shells[key]; s != nil {
 		select {
 		case <-s.term.Done():
 			s.term.Close() // exited: start another
@@ -51,28 +62,66 @@ func (a *app) shellFor(workspace string) (*shell, error) {
 	if a.win == nil {
 		return nil, nil
 	}
-	s := &shell{title: filepath.Base(workspace), themed: a.theme.name}
-	term, err := terminal.New(terminal.Options{
-		Dir:   projectDir(workspace),
-		Font:  terminal.Font{Family: "ui-monospace, Menlo, monospace", Size: 12},
-		Theme: a.theme.terminal(),
-		OnTitle: func(title string) {
-			s.mu.Lock()
-			s.title = title
-			s.mu.Unlock()
-			a.win.Invalidate()
-		},
-		OnExit: func(int) { a.win.Invalidate() },
-	})
-	if err != nil {
-		return nil, err
+	baseTitle := filepath.Base(workspace)
+	if workspace == "" || workspace == "~" {
+		baseTitle = "~"
 	}
+	s := &shell{title: baseTitle, themed: a.theme.name}
+	var (
+		conn *client.TerminalConn
+		term *terminal.Terminal
+		err  error
+	)
+	if env != nil && a.backend != nil {
+		conn, err = a.backend.OpenTerminal(env, workspace, 80, 24, func() {
+			if a.win != nil {
+				a.win.Invalidate()
+			}
+		})
+		if err != nil {
+			return nil, err
+		}
+		term, err = terminal.New(terminal.Options{
+			Conn:  conn,
+			Font:  terminal.Font{Family: "ui-monospace, Menlo, monospace", Size: 12},
+			Theme: a.theme.terminal(),
+			OnTitle: func(title string) {
+				s.mu.Lock()
+				s.title = title
+				s.mu.Unlock()
+				a.win.Invalidate()
+			},
+			OnExit: func(int) { a.win.Invalidate() },
+		})
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+	} else {
+		term, err = terminal.New(terminal.Options{
+			Dir:   projectDir(workspace),
+			Font:  terminal.Font{Family: "ui-monospace, Menlo, monospace", Size: 12},
+			Theme: a.theme.terminal(),
+			OnTitle: func(title string) {
+				s.mu.Lock()
+				s.title = title
+				s.mu.Unlock()
+				a.win.Invalidate()
+			},
+			OnExit: func(int) { a.win.Invalidate() },
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	s.conn = conn
 	s.term = term
-	a.shells[workspace] = s
+	a.shells[key] = s
 	return s, nil
 }
 
-// closeShells hangs up every project's shell, as the window closes.
+// closeShells detaches every terminal stream as the window closes; engine-owned
+// PTYs stay alive in the daemon.
 func (a *app) closeShells() {
 	for id, s := range a.shells {
 		s.term.Close()
