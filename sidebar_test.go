@@ -79,6 +79,34 @@ func TestShortcutHintsKeepLayout(t *testing.T) {
 	}
 }
 
+// Without ⌘ held, the keycaps' room reads nothing to a screen reader and
+// takes a click as the rest of its row does.
+func TestHiddenShortcutHintsStayOutOfTheWay(t *testing.T) {
+	a := offline(t)
+	tt := ui.NewTester(a.view, 1320, 860)
+	button := func(name string) ui.Rect {
+		t.Helper()
+		b, ok := tt.AccessByRole(ui.RoleButton, name)
+		if !ok {
+			t.Fatalf("no %q button, or its name reads keycaps", name)
+		}
+		return b.Bounds
+	}
+	button("New thread")
+	at := func(r ui.Rect) (float32, float32) { return r.X + r.W - 14, r.Y + r.H/2 }
+
+	tt.ClickAt(at(button("Search")))
+	if !a.cmdkOpen {
+		t.Error("a click on Search's keycaps didn't open the palette")
+	}
+	a.cmdkOpen = false
+	tt.Frame()
+	tt.ClickAt(at(button("Settings")))
+	if p := a.router.Path(); p != "/settings/general" {
+		t.Errorf("a click on Settings' keycaps left the app at %q", p)
+	}
+}
+
 // The sidebar's right edge drags it wider or narrower, within limits.
 func TestSidebarEdge(t *testing.T) {
 	a := offline(t)

@@ -47,17 +47,17 @@ func (a *app) iconButton(c *ui.Context, key any, icon *ui.SVG, label string, on 
 
 // shortcutHint shows a shortcut's keycaps only while ⌘ is held, as the
 // app's commands are found: out of the way otherwise. They show and go at
-// once, as the key does.
+// once, as the key does, and keep their room while hidden so that the row
+// doesn't grow as they show.
 func shortcutHint(c *ui.Context, keys ...string) {
-	if c.Modifiers()&ui.Cmd == 0 {
-		return
+	if k := kbd(c, keys...); c.Modifiers()&ui.Cmd == 0 {
+		k.Invisible()
 	}
-	kbd(c, keys...)
 }
 
 // kbd is a key of a shortcut, as a keycap.
-func kbd(c *ui.Context, keys ...string) {
-	ui.Row(c).Gap(3).Children(func() {
+func kbd(c *ui.Context, keys ...string) ui.Element {
+	return ui.Row(c).Gap(3).Children(func() {
 		for _, k := range keys {
 			ui.Text(c, k).FontSize(10.5).TextColor(palette.muted).MinWidth(18).TextAlign(ui.Center).
 				Padding(1, 4).Radius(4).Border(1, palette.border).Background(palette.hover)
