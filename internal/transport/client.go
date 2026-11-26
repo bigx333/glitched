@@ -736,6 +736,27 @@ func (e *EndpointClient) Open(ctx context.Context, s api.Subscription) (api.Stre
 	return open[api.StreamItem](ctx, e.c, "subscribe", s)
 }
 
+// OpenTerminal opens or reattaches to a workspace PTY on this engine.
+func (e *EndpointClient) OpenTerminal(ctx context.Context, req api.TerminalOpen) (api.TerminalStream, error) {
+	return open[api.TerminalItem](ctx, e.c, "terminal.open", req)
+}
+
+// TerminalInput writes bytes into a workspace PTY on this engine.
+func (e *EndpointClient) TerminalInput(ctx context.Context, req api.TerminalInput) error {
+	return e.c.call(ctx, "terminal.input", req, &struct{}{})
+}
+
+// TerminalResize resizes a workspace PTY on this engine.
+func (e *EndpointClient) TerminalResize(ctx context.Context, req api.TerminalResize) error {
+	return e.c.call(ctx, "terminal.resize", req, &struct{}{})
+}
+
+// TerminalClaim acquires or transfers the terminal input lease.
+func (e *EndpointClient) TerminalClaim(ctx context.Context, req api.TerminalClaim) (api.TerminalLease, error) {
+	var out api.TerminalLease
+	return out, e.c.call(ctx, "terminal.claim", req, &out)
+}
+
 // HubClient reaches the hub replica on another node. It is the uploader's
 // hub.Client.
 type HubClient struct{ c *conn }

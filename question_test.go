@@ -230,7 +230,7 @@ func TestKeysInTheTerminalAreTheShells(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { term.Close() })
-	h.a.shells[th.View.Workspace] = &shell{term: term, themed: h.a.theme.name}
+	h.a.shells[shellKey{th.env.ID, th.View.Workspace}] = &shell{term: term, themed: h.a.theme.name}
 	h.a.showTerminal = true
 	h.until("the shell focused", func() bool { h.tt.Advance(100 * time.Millisecond); return h.a.terminalFocused })
 	h.tt.Type("cat -v")
