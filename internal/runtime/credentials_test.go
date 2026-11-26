@@ -576,3 +576,48 @@ func TestCredentialsParentSecretsAreRedactedInChildOutput(t *testing.T) {
 		t.Errorf("child transcript = %q, want [GLX_PROBE]", text)
 	}
 }
+
+// Rotating or forgetting a parent's credential still redacts the previous
+// values in an active child's output so stale values read earlier never
+// leak into the child transcript.
+func TestCredentialsRotatedOrForgottenParentSecretsStayRedactedInChildOutput(t *testing.T) {
+	st, err := store.Open(dbPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	vault := secrets.New(t.TempDir())
+	const rotated = "rotated-secret-9999"
+	childEvents := []provider.Event{
+		provider.TextDelta{Text: "old=" + probe + " new=" + rotated},
+	}
+	ad := fake.New(childEvents)
+	h, err := runtime.New(ctx, st, provider.Mux{"fake": ad}, runtime.WithVault(vault))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Kill()
+	parent := newThread(t, h)
+	if err := vault.Put(parent, map[string]string{"GLX_PROBE": probe}); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.Put(parent, map[string]string{"GLX_PROBE": rotated}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.ForgetCredentials(ctx, parent); err != nil {
+		t.Fatal(err)
+	}
+	kid, err := newChild(t, h, ad, parent, api.AccessAsk, fake.Child{Title: "deploy", Task: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	until(t, h, kid, "the child turn", idle)
+	for _, e := range events(t, h, kid) {
+		b, _ := json.Marshal(e)
+		for _, secret := range []string{probe, rotated} {
+			if strings.Contains(string(b), secret) {
+				t.Errorf("child event %s leaked rotated/forgotten parent secret %q: %s", e.Type, secret, b)
+			}
+		}
+	}
+}

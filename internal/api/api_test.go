@@ -214,4 +214,11 @@ func TestThreadUserOwnedAndStoppable(t *testing.T) {
 	if compacting.Stoppable() || compacting.Working() {
 		t.Errorf("silent compaction: Stoppable=%v Working=%v, want false/false", compacting.Stoppable(), compacting.Working())
 	}
+
+	if ValidName("ENV") || ValidName("env") {
+		t.Errorf("ValidName allowed ENV/env, which collides with the vault's env script on case-insensitive volumes")
+	}
+	if err := (Credentials{Reason: "r", Fields: []Field{{Name: "ENV"}}}).Check(); err == nil {
+		t.Errorf("Credentials.Check accepted ENV")
+	}
 }

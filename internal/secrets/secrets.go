@@ -150,6 +150,33 @@ func (v *Vault) Values(thread api.ID) map[string]string {
 	return all
 }
 
+// RedactValues returns every value thread currently holds or previously
+// held while the vault was in use (including rotated or forgotten values),
+// for output redaction.
+func (v *Vault) RedactValues(thread api.ID) map[string]string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	cur, _ := v.valuesLocked(thread)
+	ever := v.ever[thread]
+	if len(cur) == 0 && len(ever) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(cur)+len(ever))
+	for k, val := range cur {
+		out[k] = val
+	}
+	for k, vals := range ever {
+		for i, val := range vals {
+			if existing, ok := out[k]; !ok {
+				out[k] = val
+			} else if existing != val {
+				out[fmt.Sprintf("%s#%d", k, i+1)] = val
+			}
+		}
+	}
+	return out
+}
+
 func (v *Vault) valuesLocked(thread api.ID) (map[string]string, error) {
 	if v.deleted[thread] {
 		return nil, ErrDeleted
@@ -163,7 +190,7 @@ func (v *Vault) valuesLocked(thread api.ID) (map[string]string, error) {
 		return nil, err
 	}
 	for _, e := range entries {
-		if !e.Type().IsRegular() || !api.ValidName(e.Name()) || e.Name() == EnvScript {
+		if !e.Type().IsRegular() || !api.ValidName(e.Name()) || strings.EqualFold(e.Name(), EnvScript) {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(v.Dir(thread), e.Name()))

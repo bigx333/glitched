@@ -625,11 +625,20 @@ func (a *app) resumeButton(c *ui.Context, t thread) {
 	}
 }
 
+// activeTurn is whether the thread has a live agent turn the user can queue
+// behind or steer: a normal working turn, or a quiet Manager wake (whose
+// Working() stays false so the sidebar stays quiet). Silent idle compaction
+// and uncertain runs return false.
+func activeTurn(v api.Thread) bool {
+	return v.Run != api.RunIdle && v.Run != api.RunUncertain && (!v.Silent() || v.Turn != nil && v.Turn.Dismissed)
+}
+
 // queues is whether ⌘⏎ queues the draft rather than steering it: while
-// the agent works, not waiting on a request, with no code block open. A
-// run left uncertain is never at work: it doesn't end on its own.
+// the agent works (including a quiet Manager wake), not waiting on a
+// request, with no code block open. A run left uncertain is never at work:
+// it doesn't end on its own.
 func (a *app) queues(t thread) bool {
-	return t.View.Working() && t.View.Run != api.RunWaiting && !a.code.on
+	return activeTurn(t.View) && t.View.Run != api.RunWaiting && !a.code.on
 }
 
 // queueButton sends the draft for after the agent's turn, rather than
@@ -700,7 +709,7 @@ func (a *app) sendControl(c *ui.Context, t thread, keys bool) {
 		nativeStop = drawn.copies[0].plugin == "" || drawn.copies[0].builtin
 	}
 	if t.View.Stoppable() && (a.message(t) != "" || !nativeStop) {
-		if a.message(t) != "" && t.View.Working() {
+		if a.message(t) != "" && activeTurn(t.View) {
 			a.queueButton(c, t)
 		}
 		a.stopButton(c, t).Shrink(0)

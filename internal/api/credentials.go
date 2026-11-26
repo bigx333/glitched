@@ -47,8 +47,9 @@ type Field struct {
 var envName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 // ValidName is whether s may name a credential: an environment variable's
-// name.
-func ValidName(s string) bool { return envName.MatchString(s) }
+// name that does not collide (even case-insensitively) with the vault's
+// aggregate env script.
+func ValidName(s string) bool { return envName.MatchString(s) && !strings.EqualFold(s, "env") }
 
 // ParseCredentials reads a credentials request's body, and refuses one
 // with no reason, no fields or more than MaxCredentials, a name that is no

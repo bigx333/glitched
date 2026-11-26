@@ -62,6 +62,27 @@ func TestPutReplacesAndForgetDeletes(t *testing.T) {
 	if len(v.Values(th)) != 0 {
 		t.Error("a forgotten thread still has values")
 	}
+	// RedactValues retains previously held (rotated and forgotten) values
+	// until Delete so active consumers never leak stale secrets.
+	rv := v.RedactValues(th)
+	var held []string
+	for _, val := range rv {
+		held = append(held, val)
+	}
+	for _, want := range []string{"first-value", "second-value", "kept-value"} {
+		if !slices.Contains(held, want) {
+			t.Errorf("RedactValues after rotate+forget = %v, want %q retained", rv, want)
+		}
+	}
+	if err := v.Put(th, map[string]string{"ENV": "collides-with-env-script"}); err == nil {
+		t.Error("Vault.Put accepted ENV, which collides with EnvScript on case-insensitive volumes")
+	}
+	if err := v.Delete(th); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.RedactValues(th)) != 0 {
+		t.Errorf("RedactValues after Delete = %v, want empty", v.RedactValues(th))
+	}
 }
 
 // scanned is v's Held once the vault has read every thread's folder.

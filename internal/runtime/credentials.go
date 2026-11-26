@@ -256,17 +256,19 @@ func (h *Host) credentialLine(thread api.ID) []api.ID {
 	return line
 }
 
-// credentialsFor is the union of vault values held by line, for redaction.
+// credentialsFor is the union of current and previously held vault values
+// across line, for redaction (so rotating or forgetting a parent's secret
+// still redacts values an active child already read).
 func (h *Host) credentialsFor(line []api.ID) map[string]string {
 	if h.vault == nil || len(line) == 0 {
 		return nil
 	}
 	if len(line) == 1 {
-		return h.vault.Values(line[0])
+		return h.vault.RedactValues(line[0])
 	}
 	var merged map[string]string
 	for i, id := range line {
-		vals := h.vault.Values(id)
+		vals := h.vault.RedactValues(id)
 		if len(vals) == 0 {
 			continue
 		}
@@ -277,7 +279,7 @@ func (h *Host) credentialsFor(line []api.ID) map[string]string {
 			if existing, ok := merged[k]; !ok {
 				merged[k] = v
 			} else if existing != v {
-				merged[fmt.Sprintf("%s#%d", k, i)] = v
+				merged[fmt.Sprintf("%s@%d", k, i)] = v
 			}
 		}
 	}

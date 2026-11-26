@@ -1,11 +1,14 @@
 package mcp_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/mcp"
@@ -149,10 +152,82 @@ func TestAChildAsksItsParentForSecrets(t *testing.T) {
 		t.Fatal("a thread of the user's lacks request_credentials")
 	}
 	s := (mcp.Launcher{Command: "glitched", Engine: "/tmp/sock"}).ForThread(c.ID, api.AccessAsk, api.RoleDefault, true)
-	if s.Env[mcp.EnvChild] != "1" || strings.Contains(s.Instructions, "ask with request_credentials") || strings.Contains(s.Instructions, "env script") {
+	if s.Env[mcp.EnvChild] != "1" || strings.Contains(s.Instructions, "ask with request_credentials") || strings.Contains(s.Instructions, "env script") || !strings.Contains(s.Instructions, "take over this thread on its host") {
 		t.Fatalf("a child's MCP server: env %+v, instructions %q", s.Env, s.Instructions)
 	}
-	if s := (mcp.Launcher{}).For(o.Thread, api.AccessAsk); s.Env[mcp.EnvChild] != "" || !strings.Contains(s.Instructions, "ask with request_credentials") || !strings.Contains(s.Instructions, "never the env script") {
+	if s := (mcp.Launcher{}).For(o.Thread, api.AccessAsk); s.Env[mcp.EnvChild] != "" || !strings.Contains(s.Instructions, "ask with request_credentials") || !strings.Contains(s.Instructions, "never the env script") || !strings.Contains(s.Instructions, "take over that child on its host") {
 		t.Fatalf("a top-level thread's MCP server: env %+v, instructions %q", s.Env, s.Instructions)
+	}
+}
+
+// A live MCP session for a child thread advertises tools.listChanged, emits
+// notifications/tools/list_changed as soon as the user takes the child over,
+// and lists request_credentials on the refreshed tools/list.
+func TestLiveTakeoverEmitsToolsListChanged(t *testing.T) {
+	h := engine(t)
+	o := working(t, h)
+	c := child(t, h, o, "Deploy it")
+
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		done <- mcp.Serve(ctx, inR, outW, &mcp.Tools{
+			Engine:  h,
+			Origin:  mcp.Origin{Thread: c.ID, Access: o.Access, Child: true},
+			Secrets: &asker{out: api.Asked{Status: api.AskDeclined}},
+		})
+		outW.Close()
+	}()
+	lines := make(chan string, 16)
+	go func() {
+		sc := bufio.NewScanner(outR)
+		for sc.Scan() {
+			lines <- sc.Text()
+		}
+		close(lines)
+	}()
+	nextLine := func(what string) string {
+		t.Helper()
+		select {
+		case l, ok := <-lines:
+			if !ok {
+				t.Fatalf("stream closed while waiting for %s", what)
+			}
+			return l
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for %s", what)
+			return ""
+		}
+	}
+
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`+"\n")
+	initLine := nextLine("initialize")
+	if !strings.Contains(initLine, `"listChanged":true`) {
+		t.Fatalf("initialize = %s, want listChanged:true", initLine)
+	}
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`+"\n")
+	listBefore := nextLine("tools/list before takeover")
+	if strings.Contains(listBefore, `"request_credentials"`) {
+		t.Fatalf("tools/list before takeover exposed request_credentials: %s", listBefore)
+	}
+
+	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: c.ID, Body: api.MessageDispatch{Text: "mine now", Mode: api.AfterActive}}); err != nil {
+		t.Fatal(err)
+	}
+	notif := nextLine("notifications/tools/list_changed")
+	if !strings.Contains(notif, `"method":"notifications/tools/list_changed"`) {
+		t.Fatalf("expected notifications/tools/list_changed, got %s", notif)
+	}
+
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":3,"method":"tools/list"}`+"\n")
+	listAfter := nextLine("tools/list after takeover")
+	if !strings.Contains(listAfter, `"request_credentials"`) {
+		t.Fatalf("tools/list after takeover missed request_credentials: %s", listAfter)
+	}
+
+	inW.Close()
+	if err := <-done; err != nil {
+		t.Fatalf("Serve returned %v", err)
 	}
 }

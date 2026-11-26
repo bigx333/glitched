@@ -135,11 +135,11 @@ const instructions = `Glitched runs you in a thread. Its MCP server glitched giv
 
 const credentialsInstructions = `
 
-When you need a secret from the user (an API key, a token, a password), ask with request_credentials, never in chat. The user types the values into a private card; you get back where they are, never the values, and must never print them. When a child reports that it needs a secret, vet the request, call request_credentials once yourself, and pass the child only the individual file path(s) from files for the approved secret names (never the env script, which exports every secret in your vault, and never the values).`
+When you need a secret from the user (an API key, a token, a password), ask with request_credentials, never in chat. The user types the values into a private card; you get back where they are, never the values, and must never print them. When a local child reports that it needs a secret, vet the request, call request_credentials once yourself, and pass the child only the individual file path(s) from files for the approved secret names (never the env script, which exports every secret in your vault, and never the values). When a remote child running on another machine needs a secret, never copy secret values or pass local file paths across hosts: vet the request and tell the user to open and take over that child on its host to provide the secret there.`
 
 const childCredentialsInstructions = `
 
-You run under a parent thread and answer to it, not to the user. If you need a secret (an API key, a token, a password), do not ask the user: report the names of the secrets you need and why to your parent, in your reply as you end your turn. Your parent vets the request, asks the user with request_credentials, and passes you the individual file path(s) for the approved secrets. Never print or echo a secret's value.`
+You run under a parent thread and answer to it, not to the user. If you need a secret (an API key, a token, a password), do not ask the user: report the names of the secrets you need and why to your parent, in your reply as you end your turn. For a local child, your parent vets the request, asks the user with request_credentials, and passes you the individual file path(s) for the approved secrets; for a remote child on another machine, your parent vets the request and asks the user to take over this thread on its host to provide the secret directly. If the user takes this thread over and messages you directly, request_credentials becomes available and you may ask the user directly. Never print or echo a secret's value.`
 
 // Main serves stdin and stdout for the caller its environment names, until
 // stdin closes.

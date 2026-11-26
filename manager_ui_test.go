@@ -139,15 +139,24 @@ func TestDismissedWakeKeepsQueuedSendNowEnabled(t *testing.T) {
 		Run:  api.RunRunning,
 		Turn: &api.Turn{Run: api.NewID(), Silent: true, Dismissed: true},
 	}
-	if !canSteer(dismissed) || !dismissed.Stoppable() {
-		t.Fatalf("dismissed Manager wake: canSteer=%v Stoppable=%v, want true/true", canSteer(dismissed), dismissed.Stoppable())
+	if !canSteer(dismissed) || !dismissed.Stoppable() || !activeTurn(dismissed) {
+		t.Fatalf("dismissed Manager wake: canSteer=%v Stoppable=%v activeTurn=%v, want true/true/true", canSteer(dismissed), dismissed.Stoppable(), activeTurn(dismissed))
+	}
+	a := &app{}
+	if !a.queues(thread{Thread: &client.Thread{View: dismissed}}) {
+		t.Fatal("queues returned false for a quiet Manager wake")
+	}
+	waitingDismissed := dismissed
+	waitingDismissed.Run = api.RunWaiting
+	if a.queues(thread{Thread: &client.Thread{View: waitingDismissed}}) {
+		t.Fatal("queues returned true while waiting on a request")
 	}
 	compacting := api.Thread{
 		Run:  api.RunRunning,
 		Turn: &api.Turn{Run: api.NewID(), Silent: true},
 	}
-	if canSteer(compacting) || compacting.Stoppable() {
-		t.Fatalf("silent compaction run: canSteer=%v Stoppable=%v, want false/false", canSteer(compacting), compacting.Stoppable())
+	if canSteer(compacting) || compacting.Stoppable() || activeTurn(compacting) || a.queues(thread{Thread: &client.Thread{View: compacting}}) {
+		t.Fatalf("silent compaction run: canSteer=%v Stoppable=%v activeTurn=%v, want all false", canSteer(compacting), compacting.Stoppable(), activeTurn(compacting))
 	}
 }
 
