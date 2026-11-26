@@ -65,8 +65,8 @@ type proc struct {
 	conn    *acpsdk.ClientSideConnection
 	stdin   *os.File
 	stderr  *tail
-	tap     provider.Tap  // sees each line on the agent's pipes, for every run of it
-	legacy  legacy        // bridges a session's legacy models to config options
+	tap     provider.Tap // sees each line on the agent's pipes, for every run of it
+	legacy  legacy
 	heard   chan struct{} // closed once stderr is read to its end
 	read    chan struct{} // closed once stdout is read to its end and let go
 	// release has the bridge from stdout let go now, sending the SDK
@@ -112,11 +112,7 @@ var (
 	_ acpsdk.Client = (*proc)(nil)
 )
 
-// launch starts the agent in dir under mark, with grant's arguments after
-// the profile's and its environment over the profile's, and tap seeing its
-// lines, and initializes it. ctx bounds only the start; the process lives
-// until Close.
-func launch(ctx context.Context, profile Profile, prog provider.Program, dir, mark string, grant provider.Grant, tap provider.Tap) (*proc, error) {
+func launch(startCtx context.Context, profile Profile, prog provider.Program, dir, mark string, grant provider.Grant, tap provider.Tap) (*proc, error) {
 	cmd := exec.Command(prog.Path, slices.Concat(profile.Args, prog.Args, grant.Args)...)
 	if err := guard(prog.Path); err != nil {
 		return nil, err
@@ -182,9 +178,9 @@ func launch(ctx context.Context, profile Profile, prog provider.Program, dir, ma
 
 	// The SDK's own calls end with ctx, but a write to an agent that reads
 	// nothing would not: the agent is stopped instead.
-	stop := context.AfterFunc(ctx, p.halt)
+	stop := context.AfterFunc(startCtx, p.halt)
 	defer stop()
-	r, err := p.conn.Initialize(ctx, acpsdk.InitializeRequest{
+	r, err := p.conn.Initialize(startCtx, acpsdk.InitializeRequest{
 		ProtocolVersion: acpsdk.ProtocolVersionNumber,
 		ClientInfo:      &acpsdk.Implementation{Name: "glitched", Version: "1"},
 		// An agent that can ask with a form asks on Glitched's question
@@ -347,17 +343,14 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 	if !ok {
 		return []provider.Model{}, nil
 	}
+	if model.Id == legacyModelConfigID {
+		return legacyModelChoices(model), nil
+	}
 	var out []provider.Model
 	for _, o := range choices(model) {
 		m := provider.Model{ID: string(o.Value), Name: o.Name, Default: o.Value == model.CurrentValue}
 		if o.Description != nil {
 			m.Description = *o.Description
-		}
-		// Legacy models have no thought levels to look for, and a set of
-		// one would change the agent's own default model.
-		if model.Id == legacyModelConfigID {
-			out = append(out, m)
-			continue
 		}
 		options := initial
 		if model.CurrentValue != o.Value {
@@ -380,6 +373,18 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 	return out, nil
 }
 
+func legacyModelChoices(model acpsdk.SessionConfigOptionSelect) []provider.Model {
+	out := make([]provider.Model, 0, len(choices(model)))
+	for _, o := range choices(model) {
+		m := provider.Model{ID: string(o.Value), Name: o.Name, Default: o.Value == model.CurrentValue}
+		if o.Description != nil {
+			m.Description = *o.Description
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 // configure sets the session's model and effort to ref's, and its mode
 // to g's, where they differ: its Else where the session doesn't offer its
 // Mode, saying so. A ref without either, or no mode, leaves the agent's
@@ -394,20 +399,13 @@ func (p *proc) configure(ctx context.Context, ref api.ModelRef, g provider.Grant
 	p.mu.Lock()
 	current, moded, offered := p.mode, p.moded, p.offered
 	p.mu.Unlock()
-	mode := g.Mode
-	switch {
-	case g.Else != "" && !moded:
-		refused = p.profile.Name + "'s session offers no modes"
-	case g.Else != "" && !slices.Contains(offered, mode):
-		refused = p.profile.Name + " doesn't offer its " + mode + " mode"
-		// An Else the session doesn't offer either would be refused: the
-		// session keeps its own mode.
-		mode = ""
-		if slices.Contains(offered, g.Else) {
-			mode = g.Else
+	mode, missing := g.PickMode(offered, moded)
+	if missing {
+		if !moded {
+			refused = p.profile.Name + "'s session offers no modes"
+		} else {
+			refused = p.profile.Name + " doesn't offer its " + g.Mode + " mode"
 		}
-	case g.Optional && moded && mode != "" && !slices.Contains(offered, mode):
-		mode = ""
 	}
 	p.mu.Lock()
 	p.refused = refused

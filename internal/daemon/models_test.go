@@ -109,7 +109,7 @@ func TestWithAgentsLoadsCustomACPProfiles(t *testing.T) {
 	}
 	cfg.CustomACP = []acp.CustomProfile{
 		{Provider: "my-agent", Name: "My Agent", Binary: "/usr/local/bin/my-agent", Args: []string{"--acp"}},
-		{Provider: "claude", Binary: "/bin/false"}, // collides with built-in, skipped
+		{Provider: "claude", Binary: "/bin/false"},
 	}
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)

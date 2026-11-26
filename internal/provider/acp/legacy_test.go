@@ -14,9 +14,6 @@ import (
 	"glitched/internal/provider"
 )
 
-// runLegacyFake is an agent that lists a session's models as Gemini CLI
-// 0.71.1 does, in session/new's "models" with no model config option,
-// and switches them with session/set_model alone.
 func runLegacyFake() {
 	w := json.NewEncoder(os.Stdout)
 	current := "auto"
@@ -79,8 +76,6 @@ func runLegacyFake() {
 		case "session/set_mode":
 			re(req.ID, map[string]any{})
 		case "session/prompt":
-			// An update of the session's other options says nothing of its
-			// models.
 			w.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{
 				"sessionId": req.Params.SessionID, "update": map[string]any{"sessionUpdate": "config_option_update", "configOptions": []any{}},
 			}})
@@ -96,8 +91,6 @@ func runLegacyFake() {
 	}
 }
 
-// legacyFake is an adapter whose agent is runLegacyFake, and the file
-// its wire is captured in.
 func legacyFake(t *testing.T) (*Adapter, string) {
 	t.Helper()
 	a, _ := fake(t, "")
@@ -109,8 +102,6 @@ func legacyFake(t *testing.T) (*Adapter, string) {
 	return a, capture
 }
 
-// captured are the capture's lines with prefix, the client's ">> " or the
-// agent's "<< ".
 func captured(t *testing.T, path, prefix string) []string {
 	t.Helper()
 	b, err := os.ReadFile(path)
@@ -139,9 +130,6 @@ func sentMethods(t *testing.T, path string) []string {
 	return out
 }
 
-// An agent that lists its models only in a session's "models" field, as
-// Gemini CLI 0.71.1 does, lists them all, its current one the default,
-// without a model set on the session to look.
 func TestLegacySessionModelsAreDescribed(t *testing.T) {
 	a, capture := legacyFake(t)
 	info, err := a.Describe(context.Background())
@@ -164,9 +152,6 @@ func TestLegacySessionModelsAreDescribed(t *testing.T) {
 	}
 }
 
-// A run's model reaches a legacy agent by session/set_model, before its
-// prompt, and the run reports it runs that model. The capture holds what
-// the agent sent and got, the agent's own words.
 func TestALegacyAgentRunsTheRunsModel(t *testing.T) {
 	a, capture := legacyFake(t)
 	s := spec(t)
@@ -206,8 +191,6 @@ func TestALegacyAgentRunsTheRunsModel(t *testing.T) {
 	}
 }
 
-// A model a legacy agent doesn't list fails the run before it reaches the
-// agent; one it refuses fails it in the agent's words.
 func TestALegacyAgentsRefusedModelFailsTheRun(t *testing.T) {
 	a, _ := legacyFake(t)
 	s := spec(t)
@@ -222,8 +205,6 @@ func TestALegacyAgentsRefusedModelFailsTheRun(t *testing.T) {
 	}
 }
 
-// A legacy session taken up again, by session/load, whose answer names no
-// session, still has its models.
 func TestALoadedLegacySessionHasItsModels(t *testing.T) {
 	a, _ := legacyFake(t)
 	s := spec(t)
@@ -238,8 +219,6 @@ func TestALoadedLegacySessionHasItsModels(t *testing.T) {
 	}
 }
 
-// An update of a legacy session's config options keeps its models: the
-// thread's next run, on the agent it kept, picks another of them.
 func TestALegacySessionKeepsItsModelsThroughAnOptionsUpdate(t *testing.T) {
 	a, capture := legacyFake(t)
 	s := spec(t)

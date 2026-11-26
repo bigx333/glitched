@@ -357,9 +357,6 @@ func (a *app) providers(c *ui.Context) {
 	a.customACPCard(c)
 }
 
-// customACPCard lists the custom ACP providers engine.json sets up on
-// this machine, and adds and removes them. A change restarts the engine
-// embedded here, so it waits while its agents run.
 func (a *app) customACPCard(c *ui.Context) {
 	m := a.backend.Machine()
 	if time.Since(m.Read) >= inspectEvery {
@@ -385,7 +382,6 @@ func (a *app) customACPCard(c *ui.Context) {
 			ui.Text(c, "No custom ACP providers configured. Add any ACP-compatible coding agent CLI below.").
 				Key("custom-acp-none").FontSize(12).TextColor(palette.muted).Padding(14, 16)
 		}
-		// engine.json may hold an id twice, edited by hand.
 		for i, p := range m.Config.CustomACP {
 			ui.Row(c).Key(fmt.Sprintf("custom-acp:%d:%s", i, p.Provider)).Padding(12, 16).Gap(12).AlignItems(ui.Center).Children(func() {
 				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
@@ -441,8 +437,6 @@ func (a *app) customACPCard(c *ui.Context) {
 	})
 }
 
-// addCustomACP adds the provider the card's form sets up to engine.json,
-// unless engine.json has its id already. A failed save keeps the form.
 func (a *app) addCustomACP() {
 	args, err := provider.Split(a.customACPArgs)
 	if err != nil {
@@ -459,8 +453,6 @@ func (a *app) addCustomACP() {
 		a.customACPErr = err.Error()
 		return
 	}
-	// The page's snapshot may be older than engine.json, so the id is
-	// checked against the file as it is changed.
 	dup := false
 	err = a.backend.Configure(func(cfg *daemon.Config) {
 		if slices.ContainsFunc(cfg.CustomACP, func(cur acp.CustomProfile) bool { return cur.Provider == cand.Provider }) {
@@ -482,8 +474,6 @@ func (a *app) addCustomACP() {
 	a.customACPChanged()
 }
 
-// removeCustomACP removes the provider id from engine.json, with its
-// launch settings, which an id used again must not start with.
 func (a *app) removeCustomACP(id string) {
 	err := a.backend.Configure(func(cfg *daemon.Config) {
 		cfg.CustomACP = slices.DeleteFunc(cfg.CustomACP, func(cur acp.CustomProfile) bool { return cur.Provider == id })
@@ -497,14 +487,9 @@ func (a *app) removeCustomACP(id string) {
 	a.customACPChanged()
 }
 
-// customACPChanged asks this machine's engine again what it runs and how
-// each provider starts: a custom provider came or went.
 func (a *app) customACPChanged() {
 	if envs := a.backend.Envs(); len(envs) > 0 {
-		if r := a.launchState().read[envs[0].ID]; r != nil {
-			r.rev++
-			r.at = time.Time{}
-		}
+		a.launchState().invalidate(envs[0].ID)
 	}
 	a.checkCLIs()
 }

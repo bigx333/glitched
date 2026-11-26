@@ -84,9 +84,7 @@ type tapped struct {
 	prefix string
 	tap    provider.Tap
 	sent   func([]byte)
-	// edit, where set, is a line as the agent gets it: the capture and
-	// the tap see that line.
-	edit func([]byte) []byte
+	edit   func([]byte) []byte
 }
 
 func (t tapped) Write(b []byte) (int, error) {

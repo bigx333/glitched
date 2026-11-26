@@ -25,8 +25,6 @@ func TestCustomProfileToProfile(t *testing.T) {
 		t.Errorf("unexpected profile: %+v", p)
 	}
 
-	// An empty name is the id. No arguments stay none, for an agent that
-	// speaks ACP as it starts, as codex-acp does.
 	def, err := (CustomProfile{Provider: "tool2", Binary: "tool2"}).ToProfile()
 	if err != nil {
 		t.Fatal(err)
@@ -48,8 +46,6 @@ func TestCustomProfileToProfile(t *testing.T) {
 	}
 }
 
-// A custom agent with no arguments starts with none, and one named from
-// the home folder starts from there.
 func TestACustomAgentStartsAsConfigured(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

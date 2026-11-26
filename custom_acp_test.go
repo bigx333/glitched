@@ -16,16 +16,12 @@ import (
 	"glitched/internal/transport"
 )
 
-// servingCustom has the engine serve each custom ACP provider engine.json
-// sets up, as WithAgents does, with one model of its own.
 func servingCustom(c *daemon.Config) {
 	for _, p := range c.CustomACP {
 		c.Providers[p.Provider] = reporting{fake.New(nil), []provider.Model{{ID: p.Provider + "-model", Name: "Own"}}}
 	}
 }
 
-// customACP is what engine.json sets up in dir: its custom ACP providers
-// and launch settings.
 func customACP(t *testing.T, dir string) ([]acp.CustomProfile, map[string]provider.Launch) {
 	t.Helper()
 	cfg, err := daemon.Defaults(dir)
@@ -42,8 +38,6 @@ func setUp(t *testing.T, dir string, change func(*daemon.Config)) {
 	}
 }
 
-// openCustomACP shows Settings › Providers once its custom ACP card has
-// read the engine's status.
 func openCustomACP(h *harness) {
 	h.t.Helper()
 	ticking(h.t, h)
@@ -52,8 +46,6 @@ func openCustomACP(h *harness) {
 	h.reveal("Add ACP provider")
 }
 
-// The card lists what engine.json holds, an id edited in twice included,
-// each with its command line as a shell takes it.
 func TestCustomACPCardShowsWhatEngineJSONHolds(t *testing.T) {
 	dir := tempDir(t)
 	setUp(t, dir, func(cfg *daemon.Config) {
@@ -70,9 +62,6 @@ func TestCustomACPCardShowsWhatEngineJSONHolds(t *testing.T) {
 	}
 }
 
-// A provider added keeps its arguments as a shell splits them, and the
-// engine is asked again at once what it runs: the picker offers the new
-// provider's models without waiting for its next check.
 func TestCustomACPAddSavesShellArgumentsAndAsksTheEngineAgain(t *testing.T) {
 	dir := tempDir(t)
 	h := startWith(t, dir, servingCustom)
@@ -95,7 +84,6 @@ func TestCustomACPAddSavesShellArgumentsAndAsksTheEngineAgain(t *testing.T) {
 	h.until("the card's new row", func() bool { return h.tt.HasText("/opt/mine acp --name 'a b'") })
 }
 
-// Arguments whose quoting doesn't close save nothing, and say why.
 func TestCustomACPAddRefusesArgumentsLeftOpen(t *testing.T) {
 	dir := tempDir(t)
 	h := start(t, dir)
@@ -112,8 +100,6 @@ func TestCustomACPAddRefusesArgumentsLeftOpen(t *testing.T) {
 	}
 }
 
-// An id engine.json gained since the card last read it is refused as it
-// is saved: the file never holds it twice.
 func TestCustomACPAddChecksEngineJSONNotThePagesSnapshot(t *testing.T) {
 	dir := tempDir(t)
 	h := start(t, dir)
@@ -133,8 +119,6 @@ func TestCustomACPAddChecksEngineJSONNotThePagesSnapshot(t *testing.T) {
 	}
 }
 
-// Removing a provider removes its launch settings with it: an id used
-// again starts as its own settings say, not the one removed.
 func TestCustomACPRemoveDropsItsLaunchSettings(t *testing.T) {
 	dir := tempDir(t)
 	setUp(t, dir, func(cfg *daemon.Config) {
@@ -151,8 +135,6 @@ func TestCustomACPRemoveDropsItsLaunchSettings(t *testing.T) {
 	}
 }
 
-// A change engine.json couldn't take says so on the card, and keeps what
-// the form holds to try again.
 func TestCustomACPSaveFailureKeepsTheFormAndSaysSo(t *testing.T) {
 	dir := tempDir(t)
 	h := start(t, dir)
@@ -181,8 +163,6 @@ func TestCustomACPSaveFailureKeepsTheFormAndSaysSo(t *testing.T) {
 	}
 }
 
-// A change restarts the engine embedded here, which would end the turns
-// its agents run: the card says to stop them first, and changes nothing.
 func TestCustomACPChangesWaitForRunningAgents(t *testing.T) {
 	dir := tempDir(t)
 	had := []acp.CustomProfile{{Provider: "mine", Binary: "/opt/mine"}}
@@ -211,8 +191,6 @@ func TestCustomACPChangesWaitForRunningAgents(t *testing.T) {
 	}
 }
 
-// An engine another process runs applies a change when it next starts,
-// which the card says.
 func TestCustomACPOnAnotherProcessesEngineSaysWhenItApplies(t *testing.T) {
 	dir := tempDir(t)
 	engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))

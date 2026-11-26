@@ -138,8 +138,6 @@ func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
 	if err != nil {
 		return provider.Info{}, err
 	}
-	// The probe's session is removed once its agent is gone, which may
-	// hold the history it is kept in.
 	session := ""
 	defer func() {
 		p.discard()
@@ -194,8 +192,6 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	grant := a.Profile.Access[spec.Access]
 	configure := func() error {
 		refused, err := p.configure(ctx, spec.Model, grant)
-		// Only Approve for me runs in the agent's auto mode, so only its
-		// fallback says auto is not on offer.
 		if err == nil && spec.Access == api.AccessAutoEdits && grant.Else != "" {
 			a.noAuto.Store(&refused)
 		}

@@ -7,9 +7,6 @@ import (
 	"sync"
 )
 
-// legacyModelConfigID is the id of the model option the adapter makes of
-// a session's legacy models. No agent sees it: a set of it goes to the
-// agent as session/set_model.
 const legacyModelConfigID = "glitched-legacy-model"
 
 // legacy bridges agents that list a session's models in its "models"
@@ -20,22 +17,18 @@ const legacyModelConfigID = "glitched-legacy-model"
 // session/set_model. The wire capture and the tap keep the lines the
 // agent really sent and got.
 type legacy struct {
-	mu sync.Mutex
-	// opening are the session/new, load and resume requests sent, by id:
-	// the session each takes up, "" for a new one.
-	opening map[string]string
-	// setting are the session/set_model requests sent, by id.
-	setting map[string]legacySet
-	// sessions are the sessions whose models are legacy, by id.
-	sessions map[string]*legacySession
+	mu             sync.Mutex
+	openingByReqID map[string]string
+	settingByReqID map[string]legacySet
+	sessions       map[string]*legacySession
 }
 
 type legacySet struct{ session, model string }
 
 type legacySession struct {
 	current string
-	models  []json.RawMessage // the agent's availableModels, as it sent them
-	others  []json.RawMessage // the session's other config options
+	models  []json.RawMessage
+	others  []json.RawMessage
 }
 
 type legacyModel struct {
@@ -52,8 +45,7 @@ type rpc struct {
 	Error  json.RawMessage `json:"error,omitempty"`
 }
 
-// idKey is a JSON-RPC id as one key, however it was spaced.
-func idKey(id json.RawMessage) string {
+func canonicalID(id json.RawMessage) string {
 	var v any
 	if json.Unmarshal(id, &v) != nil {
 		return string(id)
@@ -62,12 +54,21 @@ func idKey(id json.RawMessage) string {
 	return string(b)
 }
 
-// toAgent is line as the agent gets it: a set of the legacy model option
-// as session/set_model.
+func mayEditToAgent(line []byte) bool {
+	return bytes.Contains(line, []byte(`"session/new"`)) ||
+		bytes.Contains(line, []byte(`"session/load"`)) ||
+		bytes.Contains(line, []byte(`"session/resume"`)) ||
+		bytes.Contains(line, []byte(legacyModelConfigID))
+}
+
+func mayEditFromAgent(line []byte) bool {
+	return bytes.Contains(line, []byte(`"result"`)) ||
+		bytes.Contains(line, []byte(`"error"`)) ||
+		bytes.Contains(line, []byte(`config_option_update`))
+}
+
 func (l *legacy) toAgent(line []byte) []byte {
-	// A prompt may be long: only the lines the bridge acts on are read.
-	if !bytes.Contains(line, []byte(`"session/new"`)) && !bytes.Contains(line, []byte(`"session/load"`)) &&
-		!bytes.Contains(line, []byte(`"session/resume"`)) && !bytes.Contains(line, []byte(legacyModelConfigID)) {
+	if !mayEditToAgent(line) {
 		return line
 	}
 	var m rpc
@@ -81,10 +82,10 @@ func (l *legacy) toAgent(line []byte) []byte {
 		}
 		json.Unmarshal(m.Params, &p)
 		l.mu.Lock()
-		if l.opening == nil {
-			l.opening = map[string]string{}
+		if l.openingByReqID == nil {
+			l.openingByReqID = map[string]string{}
 		}
-		l.opening[idKey(m.ID)] = p.SessionID
+		l.openingByReqID[canonicalID(m.ID)] = p.SessionID
 		l.mu.Unlock()
 	case "session/set_config_option":
 		var p struct {
@@ -101,22 +102,18 @@ func (l *legacy) toAgent(line []byte) []byte {
 			return line
 		}
 		l.mu.Lock()
-		if l.setting == nil {
-			l.setting = map[string]legacySet{}
+		if l.settingByReqID == nil {
+			l.settingByReqID = map[string]legacySet{}
 		}
-		l.setting[idKey(m.ID)] = legacySet{p.SessionID, p.Value}
+		l.settingByReqID[canonicalID(m.ID)] = legacySet{p.SessionID, p.Value}
 		l.mu.Unlock()
 		return append(out, '\n')
 	}
 	return line
 }
 
-// fromAgent is line as the SDK gets it: a session's legacy models as a
-// model option, and the answer to a session/set_model as the session's
-// options.
 func (l *legacy) fromAgent(line []byte) []byte {
-	// An update may be long: only answers and option updates are read.
-	if !bytes.Contains(line, []byte(`"result"`)) && !bytes.Contains(line, []byte(`config_option_update`)) {
+	if !mayEditFromAgent(line) {
 		return line
 	}
 	var m rpc
@@ -126,18 +123,18 @@ func (l *legacy) fromAgent(line []byte) []byte {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if m.Method == "session/update" {
-		return l.updated(line, m.Params)
+		return l.updatedLocked(line, m.Params)
 	}
 	if m.Method != "" || len(m.ID) == 0 {
 		return line
 	}
-	key := idKey(m.ID)
-	if session, ok := l.opening[key]; ok {
-		delete(l.opening, key)
-		return l.opened(line, session, m.Result)
+	key := canonicalID(m.ID)
+	if session, ok := l.openingByReqID[key]; ok {
+		delete(l.openingByReqID, key)
+		return l.openedLocked(line, session, m.Result)
 	}
-	if set, ok := l.setting[key]; ok {
-		delete(l.setting, key)
+	if set, ok := l.settingByReqID[key]; ok {
+		delete(l.settingByReqID, key)
 		s := l.sessions[set.session]
 		if len(m.Error) > 0 || len(m.Result) == 0 || s == nil {
 			return line
@@ -148,9 +145,7 @@ func (l *legacy) fromAgent(line []byte) []byte {
 	return line
 }
 
-// opened is the answer to a session's opening, with its legacy models as
-// a model option where it has no model option of its own. l.mu is held.
-func (l *legacy) opened(line []byte, session string, raw json.RawMessage) []byte {
+func (l *legacy) openedLocked(line []byte, session string, raw json.RawMessage) []byte {
 	var result map[string]json.RawMessage
 	if json.Unmarshal(raw, &result) != nil || result == nil {
 		return line
@@ -187,9 +182,7 @@ func (l *legacy) opened(line []byte, session string, raw json.RawMessage) []byte
 	return answer(line, result)
 }
 
-// updated is a session/update notification whose config options would
-// drop a legacy session's model option, with it kept. l.mu is held.
-func (l *legacy) updated(line []byte, raw json.RawMessage) []byte {
+func (l *legacy) updatedLocked(line []byte, raw json.RawMessage) []byte {
 	var n struct {
 		SessionID string `json:"sessionId"`
 		Update    struct {
@@ -224,7 +217,6 @@ func (l *legacy) updated(line []byte, raw json.RawMessage) []byte {
 	return append(out, '\n')
 }
 
-// options are the session's config options, its models' among them.
 func (s *legacySession) options() json.RawMessage {
 	choices := []map[string]any{}
 	for _, raw := range s.models {
@@ -249,7 +241,6 @@ func (s *legacySession) options() json.RawMessage {
 	return b
 }
 
-// answer is line, a JSON-RPC response, with result in place of its own.
 func answer(line []byte, result any) []byte {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(line, &m) != nil {

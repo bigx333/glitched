@@ -147,8 +147,6 @@ func TestArgumentsSplitAsAShellSplitsThem(t *testing.T) {
 	}
 }
 
-// A program named from the home folder, as ~/bin/demo-cli, is found
-// there, and only when it is a program.
 func TestAProgramNamedFromHomeIsFound(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -387,7 +387,6 @@ func (f *fake) sendCommands(ctx context.Context, id acp.SessionId) {
 // Modes are agy's, as `session/new` lists them.
 var Modes = []string{"default", "accept-edits", "auto", "plan"}
 
-// offered are the modes a session lists, nil for none.
 func offered() []string {
 	switch v := os.Getenv(Offered); v {
 	case "":
@@ -807,8 +806,6 @@ func (f *fake) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (acp.L
 	return acp.LoadSessionResponse{ConfigOptions: options, Modes: f.modes()}, err
 }
 
-// SetSessionMode takes one of the modes the session lists, as agy does,
-// and tells of it before it answers; "mode-refused" takes none.
 func (f *fake) SetSessionMode(ctx context.Context, p acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
 	f.record("session/set_mode", p)
 	if f.is("mode-refused") || !slices.Contains(offered(), string(p.ModeId)) {

@@ -148,8 +148,6 @@ var OpenCode = Profile{
 	},
 }
 
-// deleteOpenCodeSession deletes the session from OpenCode's history, with
-// its own CLI, and only logs a failure: a probe's leftover is no error.
 func deleteOpenCodeSession(ctx context.Context, prog provider.Program, session string) {
 	if err := guard(prog.Path); err != nil {
 		slog.Warn("acp: deleting a probe's session", "agent", "OpenCode", "err", err)
@@ -204,8 +202,6 @@ func (c CustomProfile) ToProfile() (Profile, error) {
 	if name == "" {
 		name = id
 	}
-	// An agent may speak ACP as it starts, with no arguments, as
-	// codex-acp does.
 	args := slices.Clone(c.Args)
 	env := maps.Clone(c.Env)
 	if env == nil {
@@ -222,8 +218,6 @@ func (c CustomProfile) ToProfile() (Profile, error) {
 		Env:      env,
 		Install:  fmt.Sprintf("%s is not installed.\nCheck its binary path (%s) in Settings › Providers.", name, bin),
 		SignIn:   fmt.Sprintf("%s requires authentication. Run %s in Terminal to sign in.", name, bin),
-		// Glitched can only guess a custom agent's modes, so a session that
-		// offers none of these keeps its own.
 		Access: provider.Grants{
 			api.AccessAsk:       {Mode: "default", Optional: true},
 			api.AccessAutoEdits: {Mode: "auto", Else: "default", Optional: true},

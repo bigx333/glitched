@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"glitched/internal/api"
@@ -121,6 +122,25 @@ type Grant struct {
 	Optional bool
 	Args     []string
 	Env      map[string]string
+}
+
+func (g Grant) ByProcess() bool {
+	return g.Mode == "" && (len(g.Args) > 0 || len(g.Env) > 0)
+}
+
+func (g Grant) PickMode(offered []string, moded bool) (mode string, missing bool) {
+	switch {
+	case g.Else != "" && !moded:
+		return "", true
+	case g.Else != "" && !slices.Contains(offered, g.Mode):
+		if slices.Contains(offered, g.Else) {
+			return g.Else, true
+		}
+		return "", true
+	case g.Optional && moded && g.Mode != "" && !slices.Contains(offered, g.Mode):
+		return "", false
+	}
+	return g.Mode, false
 }
 
 type Grants map[api.Access]Grant

@@ -14,13 +14,8 @@ import (
 	"glitched/internal/provider/acp/acptest"
 )
 
-// fakeOpenCodeEnv names, for the test binary started as `opencode session
-// ...`, the file it appends its arguments to.
 const fakeOpenCodeEnv = "GLITCHED_FAKE_OPENCODE"
 
-// playOpenCodeCLI plays OpenCode's own CLI, outside ACP, when the test
-// binary is started as one of its session commands, and reports whether
-// it did.
 func playOpenCodeCLI() bool {
 	out := os.Getenv(fakeOpenCodeEnv)
 	if out == "" || len(os.Args) < 2 || os.Args[1] != "session" {
@@ -35,8 +30,6 @@ func playOpenCodeCLI() bool {
 	return true
 }
 
-// playing is an adapter whose agent, the test binary playing "hi", runs
-// as profile says, with the log the fake writes.
 func playing(t *testing.T, profile Profile) (*Adapter, string) {
 	t.Helper()
 	a, log := fake(t, "hi")
@@ -46,8 +39,6 @@ func playing(t *testing.T, profile Profile) (*Adapter, string) {
 	return a, log
 }
 
-// started is the environment the agent started with, of the variables
-// acptest records.
 func started(t *testing.T, log string) map[string][]string {
 	t.Helper()
 	inits := find(t, wire(t, log), "initialize")
@@ -70,7 +61,6 @@ func setModes(t *testing.T, log string) []string {
 	return out
 }
 
-// runOnce runs one turn of s on a, and is its reports.
 func runOnce(t *testing.T, a *Adapter, s provider.SessionSpec) []provider.Event {
 	t.Helper()
 	g := open(t, a, s)
@@ -80,11 +70,6 @@ func runOnce(t *testing.T, a *Adapter, s provider.SessionSpec) []provider.Event 
 	return reports(events)
 }
 
-// OpenCode's session modes are its agents, not approval levels: each
-// access level reaches it as the permission config it starts with, which
-// asks before a command under Ask for approval and Approve for me, and
-// lets Approve for me edit. No mode is set, and the run reports the level
-// it asked for.
 func TestOpenCodeRunsEachAccessLevelAsItsPermissionConfig(t *testing.T) {
 	t.Setenv(acptest.Offered, "build,plan")
 	for _, tc := range []struct {
@@ -119,8 +104,6 @@ func TestOpenCodeRunsEachAccessLevelAsItsPermissionConfig(t *testing.T) {
 	}
 }
 
-// An access level's environment goes over the profile's and the engine's
-// own, and the rest of the profile's stays.
 func TestAGrantsEnvironmentGoesOverTheProfiles(t *testing.T) {
 	t.Setenv("GLX_GRANT", "engine")
 	profile := Antigravity
@@ -132,15 +115,11 @@ func TestAGrantsEnvironmentGoesOverTheProfiles(t *testing.T) {
 	if !slices.Equal(env["GLX_GRANT"], []string{"grant"}) || !slices.Equal(env["GLX_KEEP"], []string{"profile"}) {
 		t.Errorf("the agent started with %q", env)
 	}
-	// A level with a mode is confirmed by its mode, whatever else it has.
 	if len(got) == 0 || got[0] != (provider.Granted{Access: api.AccessAsk, Mode: "default"}) {
 		t.Errorf("reported %+v", got)
 	}
 }
 
-// Gemini CLI refuses autoEdit in a folder its user never trusted, so
-// Approve for me trusts the workspace as it starts; Ask for approval
-// leaves trust to the user.
 func TestGeminiTrustsTheWorkspaceOnlyToApproveForMe(t *testing.T) {
 	t.Setenv(acptest.Offered, "default,autoEdit,yolo,plan")
 	for _, tc := range []struct {
@@ -171,8 +150,6 @@ func TestGeminiTrustsTheWorkspaceOnlyToApproveForMe(t *testing.T) {
 	}
 }
 
-// A session that offers neither an access level's mode nor its Else keeps
-// its own mode: the Else, which it would refuse, is never sent.
 func TestAnElseTheSessionDoesntOfferIsNotSent(t *testing.T) {
 	t.Setenv(acptest.Offered, "default,plan")
 	a, log := fake(t, "hi")
@@ -194,9 +171,6 @@ func TestAnElseTheSessionDoesntOfferIsNotSent(t *testing.T) {
 	}
 }
 
-// A custom agent's modes are guessed: one whose session offers none of
-// them runs every access level in its own mode rather than fail, and one
-// that offers them runs each level's.
 func TestACustomAgentKeepsItsOwnModeWhereItOffersNoneOfTheGuesses(t *testing.T) {
 	custom, err := CustomProfile{Provider: "mine", Binary: "/bin/mine"}.ToProfile()
 	if err != nil {
@@ -223,8 +197,6 @@ func TestACustomAgentKeepsItsOwnModeWhereItOffersNoneOfTheGuesses(t *testing.T) 
 	}
 }
 
-// Full access falling back to another mode says nothing of the agent's
-// auto mode, which only Approve for me runs in.
 func TestFullAccessFallingBackSaysNothingOfAutoMode(t *testing.T) {
 	t.Setenv(acptest.Offered, "default,auto,yolo")
 	custom, err := CustomProfile{Provider: "mine", Binary: "/bin/mine"}.ToProfile()
@@ -247,8 +219,6 @@ func TestFullAccessFallingBackSaysNothingOfAutoMode(t *testing.T) {
 	}
 }
 
-// A probe's session is cleaned up, once each time the agent is probed,
-// after the agent that held it is gone.
 func TestAProbesSessionIsCleanedUpAfterItsAgent(t *testing.T) {
 	a, log := fake(t, "hi")
 	var cleaned []string
@@ -273,7 +243,6 @@ func TestAProbesSessionIsCleanedUpAfterItsAgent(t *testing.T) {
 	}
 }
 
-// A probe that opened no session has nothing to clean up.
 func TestAProbeWithNoSessionCleansNothingUp(t *testing.T) {
 	a, _ := fake(t, "signed-out")
 	a.Profile.CleanupProbe = func(context.Context, provider.Program, string) {
@@ -284,8 +253,6 @@ func TestAProbeWithNoSessionCleansNothingUp(t *testing.T) {
 	}
 }
 
-// Describing OpenCode deletes the session its probe opened from
-// OpenCode's history, with OpenCode's own CLI.
 func TestDescribingOpenCodeDeletesItsProbesSession(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "opencode")
 	t.Setenv(fakeOpenCodeEnv, out)
