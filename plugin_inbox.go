@@ -87,6 +87,7 @@ func (k projectKey) String() string { return k.server + ":" + k.workspace }
 
 // projectRecords are the sidebar's projects, in its order.
 func (a *app) projectRecords() []projectRecord {
+	a.syncMarks()
 	out := []projectRecord{}
 	for _, p := range a.projects {
 		icon, color := p.markNames()

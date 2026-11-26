@@ -391,6 +391,17 @@ type app struct {
 	// the sidebar's projects follow.
 	added      []addedProject
 	addedEdits uint64
+	// marks are the projects' marks as marks.json holds them, in the order
+	// the projects were first seen; marksRead is the file as last read or
+	// written here, marksShown the names they were last settled for, and
+	// drawnMarks each name's mark to draw; marksHeld is whether marks.json
+	// is one this version doesn't write.
+	marks        []projectMark
+	marksRead    marksFile
+	marksShown   string
+	drawnMarks   map[string]projectMark
+	marksHeld    bool
+	marksUnsaved bool
 	// lastProject is the folder of the project the last thread on each
 	// machine was started in, by machineKey, as last-project.json holds
 	// it.
@@ -738,6 +749,7 @@ func newApp(dir string, engine func(*daemon.Config), detect func(context.Context
 	a.loadModels()
 	a.loadComposer()
 	a.loadProjects()
+	a.loadMarks()
 	a.loadLastProject()
 	a.loadSettings()
 	a.openPlugins(dir)

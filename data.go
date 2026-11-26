@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"maps"
 	"os"
 	"path/filepath"
@@ -58,7 +57,8 @@ type project struct {
 	threads []thread // the most recently updated first
 	// noProject is whether it holds the threads started with no project,
 	// each in a folder Glitched made for it under the scratch root.
-	noProject bool
+	noProject   bool
+	icon, color string // its mark, from marks.json; "" for one never settled
 }
 
 type projectKey struct {
@@ -87,9 +87,12 @@ func machineKey(e *client.Env) (string, bool) {
 	return e.ID.String(), !e.ID.IsZero()
 }
 
-// newProject is e's project at k, with no thread yet.
+// newProject is e's project at k, with no thread yet, and the mark drawn
+// for its name: gather's projects and projectOf's alike.
 func (a *app) newProject(e *client.Env, k projectKey) *project {
-	return &project{key: k, env: e, noProject: k == keyOf(nil, a.scratchRoot())}
+	p := &project{key: k, env: e, noProject: k == keyOf(nil, a.scratchRoot())}
+	a.markProject(p)
+	return p
 }
 
 // threadKey is the project t is in: its workspace's, but for a thread with
@@ -116,22 +119,25 @@ var (
 	projectColors = []string{"#8b5cf6", "#0ea5e9", "#22c55e", "#f97316", "#ec4899", "#14b8a6", "#eab308"}
 )
 
-// mark is the project's icon and color, picked by its name so that it
-// keeps them, and the same workspace on two machines looks the same.
+// mark is the project's icon and color, which marks.json keeps by its
+// name, so that no two projects shown share an icon while icons go round,
+// and the same workspace on two machines looks the same.
 func (p *project) mark() (*ui.SVG, ui.Color) {
 	icon, color := p.markNames()
 	return appIconNamed(icon), ui.Hex(color)
 }
 
-// markNames are the project's icon, by name, and color, as #rrggbb.
+// markNames are the project's icon, by name, and color, as #rrggbb: its
+// mark, or for a name never settled its hash pick.
 func (p *project) markNames() (string, string) {
 	if p.noProject {
 		return "chat-round-line", "#8e8e93"
 	}
-	h := fnv.New32a()
-	h.Write([]byte(p.name()))
-	n := h.Sum32()
-	return projectIcons[n%uint32(len(projectIcons))], projectColors[n/7%uint32(len(projectColors))]
+	if p.icon != "" {
+		return p.icon, p.color
+	}
+	icon, color := hashMark(p.name())
+	return projectIcons[icon], projectColors[color]
 }
 
 // draft is where New thread starts the next thread: a machine, and a

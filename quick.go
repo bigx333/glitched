@@ -132,7 +132,8 @@ func (a *app) quickProject() int {
 func (a *app) localProjects() []*project {
 	none := a.newProject(a.localEnv(), keyOf(nil, a.scratchRoot()))
 	ps := []*project{none}
-	for _, p := range a.gather() {
+	a.sortThreads()
+	for _, p := range a.projects {
 		if p.key.server == "" && p.key != none.key {
 			ps = append(ps, p)
 		}
