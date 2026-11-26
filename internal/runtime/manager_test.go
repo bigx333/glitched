@@ -2,11 +2,13 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -242,7 +244,7 @@ func TestAPlainThreadGetsNoWorkspaceDocs(t *testing.T) {
 	if len(starts) != 1 || starts[0] != "Fix the typo" {
 		t.Fatalf("the plain thread's first prompts = %q, want only its own words", starts)
 	}
-	if docs := loadManagerDocs(ws, "", api.RoleDefault, true); !strings.Contains(docs, "<workspace_context>") {
+	if docs := loadCoordinatorDocs(ws, "", api.RoleDefault, true); !strings.Contains(docs, "<workspace_context>") {
 		t.Fatalf("a worker's docs = %q, want the workspace context", docs)
 	}
 }
@@ -258,26 +260,66 @@ func TestOnlyAManagersChangeMovesSweeps(t *testing.T) {
 	}
 }
 
-func TestASweepWaitsForASnoozeAndALimitsContinue(t *testing.T) {
-	now := time.Unix(10_000, 0).UTC()
-	idle := api.Thread{Role: api.RoleManager, Sweep: &api.SweepSchedule{IntervalSeconds: 60}, UpdatedAt: now, Run: api.RunIdle}
-	if at, ok := sweepDueAt(idle, now); !ok || !at.Equal(now.Add(time.Minute)) {
-		t.Fatalf("an idle Manager's sweep is due at %v (%v), want %v", at, ok, now.Add(time.Minute))
+// failingOpen fails its first open, before any agent takes a prompt.
+type failingOpen struct {
+	*captureAdapter
+	opens atomic.Int32
+}
+
+func (f *failingOpen) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	if f.opens.Add(1) == 1 {
+		return nil, errors.New("provider unavailable")
 	}
-	snoozed := idle
-	snoozed.Disposition = api.Disposition{State: api.Snoozed, Until: now.Add(time.Hour)}
-	if at, ok := sweepDueAt(snoozed, now); !ok || !at.Equal(now.Add(time.Hour)) {
-		t.Fatalf("a snoozed Manager's sweep is due at %v (%v), want when the snooze runs out", at, ok)
+	return f.captureAdapter.Open(ctx, spec)
+}
+
+func TestAManagerWhoseFirstTurnNeverReachedItsAgentGetsTheDocsNext(t *testing.T) {
+	ctx := context.Background()
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "WORKERS.md"), []byte("Worker W1 owns phase 6."), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	limited := idle
-	resets := now.Add(2 * time.Hour)
-	limited.LastTurn = &api.TurnResult{Ended: now, Outcome: api.OutcomeFailed, Limit: &api.UsageLimit{Resets: resets}}
-	at, ok := sweepDueAt(limited, now)
-	if !ok || !at.After(resets.Add(api.LimitOverdue)) {
-		t.Fatalf("a sweep behind a limit's continue is due at %v (%v), want after %v", at, ok, resets.Add(api.LimitOverdue))
+	st, err := store.Open(filepath.Join(t.TempDir(), "host.db"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, waits := limited.LimitResume(at); waits {
-		t.Fatalf("the limit's continue still waits at %v, when the sweep is due", at)
+	t.Cleanup(func() { st.Close() })
+	ad := &failingOpen{captureAdapter: &captureAdapter{Adapter: fake.New(fake.Turn(false))}}
+	h, err := New(ctx, st, provider.Mux{"fake": ad})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Close() })
+	mgr := api.NewID()
+	submit := func(b api.Intent) {
+		t.Helper()
+		if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: mgr, Body: b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ended := func(n int) {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+			snap, err := h.Read(ctx, api.Query{Thread: mgr})
+			if err == nil && snap.Threads[0].Run == api.RunIdle && len(snap.Threads[0].Requests) == 0 && snap.Threads[0].LastTurn != nil && ad.opens.Load() >= int32(n) {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("turn %d never ended", n)
+			}
+		}
+	}
+	submit(api.ThreadCreate{Workspace: ws, Title: "Manager", Model: api.ModelRef{Provider: "fake", Model: "fake"}, Role: api.RoleManager, Text: "Coordinate"})
+	ended(1)
+	submit(api.MessageDispatch{Text: "Try again", Mode: api.StartNow})
+	ended(2)
+	submit(api.MessageDispatch{Text: "And again", Mode: api.StartNow})
+	ended(3)
+	ad.mu.Lock()
+	starts := slices.Clone(ad.starts)
+	ad.mu.Unlock()
+	if len(starts) != 2 || !strings.Contains(starts[0], "Worker W1 owns phase 6.") || strings.Contains(starts[1], "<workspace_context>") {
+		t.Fatalf("prompts after a failed first open = %q, want the docs once, with the first the agent took", starts)
 	}
 }
 

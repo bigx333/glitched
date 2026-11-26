@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 
 	"glitched/internal/api"
@@ -428,8 +429,10 @@ func cloneSweep(s *api.SweepSchedule) *api.SweepSchedule {
 	return &c
 }
 
+// normalizeSweep keeps an off schedule's prompt, so turning sweeps back
+// on brings it back.
 func normalizeSweep(s *api.SweepSchedule) *api.SweepSchedule {
-	if s == nil || s.IntervalSeconds <= 0 {
+	if s == nil || s.IntervalSeconds <= 0 && strings.TrimSpace(s.Prompt) == "" {
 		return nil
 	}
 	c := *s
@@ -443,10 +446,11 @@ func sweepEqual(a, b *api.SweepSchedule) bool {
 	return *a == *b
 }
 
-// NextSweep reports when the next scheduled sweep on a Manager thread is due,
-// or ok=false if the thread is ineligible (not a manager, sweeps disabled,
-// busy, settled, deleted, or holding queued user work).
-func NextSweep(t Thread) (time.Time, bool) {
+// NextSweepAt is when a Manager's next scheduled sweep is due as of now,
+// or false when none is: not a manager, sweeps off, busy, settled,
+// deleted, or holding queued work. A snooze, a usage limit's continue, and
+// a limit a dismissed wake hit each hold the sweep until they pass.
+func NextSweepAt(t Thread, now time.Time) (time.Time, bool) {
 	if t.Role != api.RoleManager || t.Sweep == nil || t.Sweep.IntervalSeconds <= 0 ||
 		t.Deleted || t.settled() || t.Remote != nil || t.Origin != nil {
 		return time.Time{}, false
@@ -461,5 +465,19 @@ func NextSweep(t Thread) (time.Time, bool) {
 	if lt, ok := t.lastTurn(); ok && lt.Ended.After(base) {
 		base = lt.Ended
 	}
-	return base.Add(time.Duration(t.Sweep.IntervalSeconds) * time.Second), true
+	due := base.Add(time.Duration(t.Sweep.IntervalSeconds) * time.Second)
+	if t.Disposition.State == api.Snoozed && t.Disposition.Until.After(due) {
+		due = t.Disposition.Until
+	}
+	if resets, ok := View(t).LimitResume(now); ok {
+		if after := resets.Add(api.LimitOverdue + time.Nanosecond); after.After(due) {
+			due = after
+		}
+	}
+	if n := len(t.Runs); n > 0 {
+		if l := t.Runs[n-1].Limit; l != nil && l.Resets.After(t.Runs[n-1].Ended) && now.Before(l.Resets) && l.Resets.After(due) {
+			due = l.Resets
+		}
+	}
+	return due, true
 }

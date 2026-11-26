@@ -139,7 +139,7 @@ func (m *mgr) observe(o Observation) ([]Event, []Effect) {
 
 func (m *mgr) sweep() api.ID {
 	m.t.Helper()
-	at, ok := NextSweep(m.th)
+	at, ok := NextSweepAt(m.th, m.at)
 	if !ok {
 		m.t.Fatal("no sweep is due")
 	}
@@ -385,16 +385,104 @@ func TestASweepWaitsForALimitsContinue(t *testing.T) {
 	m.must(api.MessageDispatch{Text: "go", Mode: api.StartNow})
 	resets := m.at.Add(time.Hour)
 	m.observe(Ended{Run: m.th.Live().ID, Outcome: api.OutcomeFailed, Limit: &api.UsageLimit{Resets: resets}})
-	at, ok := NextSweep(m.th)
-	if !ok {
-		t.Fatal("no sweep is scheduled")
+	at, ok := NextSweepAt(m.th, m.at)
+	if !ok || !at.After(resets.Add(api.LimitOverdue)) {
+		t.Fatalf("the next sweep is due at %v (%v), want after the continue's window, %v", at, ok, resets.Add(api.LimitOverdue))
 	}
-	for _, now := range []time.Time{at, resets.Add(time.Second)} {
+	for _, now := range []time.Time{m.at.Add(time.Minute), resets.Add(time.Second)} {
 		if _, _, err := Observe(m.th, SweepDue{Run: api.NewID()}, now); !errors.Is(err, ErrRefused) {
 			t.Fatalf("a sweep at %v while the limit's continue waits = %v, want ErrRefused", now, err)
 		}
 	}
 	if _, _, err := Observe(m.th, SweepDue{Run: api.NewID()}, resets.Add(api.LimitOverdue+time.Second)); err != nil {
 		t.Fatalf("a sweep once the continue is overdue: %v", err)
+	}
+}
+
+func TestASnoozedManagersSweepWaitsForTheSnooze(t *testing.T) {
+	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
+	until := m.at.Add(time.Hour)
+	m.must(api.InboxSet{Disposition: api.Disposition{State: api.Snoozed, Until: until}})
+	if at, ok := NextSweepAt(m.th, m.at); !ok || !at.Equal(until) {
+		t.Fatalf("a snoozed Manager's sweep is due at %v (%v), want when the snooze runs out, %v", at, ok, until)
+	}
+}
+
+func TestALimitADismissedSweepHitHoldsTheNextSweepUntilItResets(t *testing.T) {
+	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
+	run := m.sweep()
+	m.dismiss()
+	resets := m.at.Add(time.Hour)
+	m.observe(Ended{Run: run, Outcome: api.OutcomeFailed, Limit: &api.UsageLimit{Resets: resets}})
+	if at, ok := NextSweepAt(m.th, m.at); !ok || !at.Equal(resets) {
+		t.Fatalf("the next sweep is due at %v (%v), want when the limit resets, %v", at, ok, resets)
+	}
+	for _, now := range []time.Time{m.at.Add(time.Minute), resets.Add(-time.Second)} {
+		if _, _, err := Observe(m.th, SweepDue{Run: api.NewID()}, now); !errors.Is(err, ErrRefused) {
+			t.Fatalf("a sweep at %v, before the limit resets at %v = %v, want ErrRefused", now, resets, err)
+		}
+	}
+	if _, _, err := Observe(m.th, SweepDue{Run: api.NewID()}, resets); err != nil {
+		t.Fatalf("a sweep once the limit reset: %v", err)
+	}
+}
+
+func TestAnApprovalInASnoozedManagersTurnBringsItBack(t *testing.T) {
+	approval := func(m *mgr, run api.ID) {
+		m.t.Helper()
+		m.observe(Surfaced{Run: run, Request: api.NewID(), Dedup: "ask", Kind: api.KindApproval, Body: []byte("{}")})
+		if m.th.Disposition.State != api.Open {
+			m.t.Fatalf("an approval left the Manager %v until %v", m.th.Disposition.State, m.th.Disposition.Until)
+		}
+	}
+	t.Run("a wake the user steered", func(t *testing.T) {
+		m := newManager(t, nil)
+		m.must(api.InboxSet{Disposition: api.Disposition{State: api.Snoozed, Until: m.at.Add(time.Hour)}})
+		m.report(api.ReportDone)
+		run := m.th.Live().ID
+		m.observe(Started{Run: run})
+		m.dismiss()
+		m.must(api.MessageDispatch{Mode: api.SteerActive, Text: "Also check the logs"})
+		if m.th.Disposition.State != api.Open {
+			t.Fatalf("steering the wake left the Manager %v", m.th.Disposition.State)
+		}
+		m.must(api.InboxSet{Disposition: api.Disposition{State: api.Snoozed, Until: m.at.Add(time.Hour)}})
+		approval(m, run)
+	})
+	t.Run("the user's own turn", func(t *testing.T) {
+		m := newManager(t, nil)
+		m.must(api.MessageDispatch{Mode: api.StartNow, Text: "Coordinate"})
+		run := m.th.Live().ID
+		m.observe(Started{Run: run})
+		m.must(api.InboxSet{Disposition: api.Disposition{State: api.Snoozed, Until: m.at.Add(time.Hour)}})
+		approval(m, run)
+	})
+}
+
+func TestADismissedSweepKeepsAReportThatCameInIt(t *testing.T) {
+	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 60})
+	m.sweep()
+	m.report(api.ReportBlocked)
+	blocked := m.th.UpdatedAt
+	m.dismiss()
+	m.end()
+	if !m.th.UpdatedAt.Equal(blocked) || !m.th.Reported.Equal(blocked) {
+		t.Fatalf("after the dismissal UpdatedAt %v, Reported %v, want the blocked report's %v", m.th.UpdatedAt, m.th.Reported, blocked)
+	}
+}
+
+func TestTurningSweepsOffKeepsTheirPrompt(t *testing.T) {
+	const prompt = "Only check release blockers"
+	m := newManager(t, &api.SweepSchedule{IntervalSeconds: 14400, Prompt: prompt})
+	m.must(api.ThreadConfigure{Sweep: &api.SweepSchedule{Prompt: prompt}})
+	if s := m.th.Sweep; s == nil || s.IntervalSeconds != 0 || s.Prompt != prompt {
+		t.Fatalf("sweeps off left %+v, want the prompt kept", s)
+	}
+	if _, ok := NextSweepAt(m.th, m.at); ok {
+		t.Fatal("a sweep is scheduled with sweeps off")
+	}
+	m.must(api.ThreadConfigure{Sweep: &api.SweepSchedule{IntervalSeconds: 900, Prompt: prompt}})
+	if s := m.th.Sweep; s == nil || s.IntervalSeconds != 900 || s.Prompt != prompt {
+		t.Fatalf("sweeps back on = %+v", s)
 	}
 }

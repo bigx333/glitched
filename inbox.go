@@ -54,10 +54,14 @@ const rowHeight = 32
 // else the inbox.
 func (a *app) categoryOf(t thread) category {
 	d := disposition(t)
+	snoozed := d.State == api.Snoozed && a.now.Before(d.Until)
 	switch {
+	case snoozed && t.View.Role == api.RoleManager && len(t.View.Requests) == 0:
+		// A Manager's quiet wake runs while it sleeps.
+		return catSnoozed
 	case a.statusOf(t) == statusWorking:
 		return catWorking
-	case d.State == api.Snoozed && a.now.Before(d.Until):
+	case snoozed:
 		return catSnoozed
 	case d.State == api.Settled:
 		return catSettled

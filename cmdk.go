@@ -371,6 +371,8 @@ func alsoMatches(cmd command, query string) bool {
 	return true
 }
 
+const defaultSweepSeconds = 1800
+
 func (a *app) newManager(env *client.Env, root string, scratch bool) {
 	if scratch {
 		dir, err := a.scratchFolder("manager")
@@ -380,7 +382,7 @@ func (a *app) newManager(env *client.Env, root string, scratch bool) {
 		}
 		root = dir
 	}
-	id := a.backend.CreateManager(env, root, "Manager", a.newThreadRef(thread{env, &client.Thread{}}), accessOf[a.access], &api.SweepSchedule{IntervalSeconds: 1800})
+	id := a.backend.CreateManager(env, root, "Manager", a.newThreadRef(thread{env, &client.Thread{}}), accessOf[a.access], &api.SweepSchedule{IntervalSeconds: defaultSweepSeconds})
 	if id.IsZero() {
 		return
 	}

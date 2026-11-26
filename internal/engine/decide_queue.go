@@ -1,12 +1,12 @@
 package engine
 
 import (
-	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"glitched/internal/api"
 )
@@ -85,7 +85,7 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 	live := d.t.Live()
 	switch {
 	case m.Mode == api.StartNow && live == nil:
-		return d.admit(id)
+		return d.admit(id, d.t.UpdatedAt)
 	case m.Mode == api.SteerActive && live != nil && steerable[live.State]:
 		if err := d.raise(*live); err != nil {
 			return err
@@ -158,8 +158,9 @@ func (d *decision) place(message, before api.ID) (int64, error) {
 }
 
 // admit starts message's turn. The wakes that wait go in with it, claimed
-// by its run: the reports first, so the user's words come last.
-func (d *decision) admit(message api.ID) error {
+// by its run: the reports first, so the user's words come last. A wake's
+// run keeps prior, the thread's UpdatedAt before it, for a dismissal.
+func (d *decision) admit(message api.ID, prior time.Time) error {
 	if !d.runs() {
 		return nil
 	}
@@ -179,7 +180,7 @@ func (d *decision) admit(message api.ID) error {
 	gen := d.t.Generation + 1
 	admitted := api.TurnAdmitted{Run: message, Generation: gen}
 	if m.waking() {
-		admitted.Wake, admitted.Prior = api.WakeReport, cmp.Or(d.prior, d.t.UpdatedAt)
+		admitted.Wake, admitted.Prior = api.WakeReport, prior
 	}
 	if err := d.emit(admitted); err != nil {
 		return err
@@ -217,18 +218,18 @@ func (d *decision) sent(run api.ID) error {
 // starts a turn of its own, unless the last run was stopped: a stop stays
 // a stop, and the wakes go in with the next message the user sends, or
 // start once they resume the queue.
-func (d *decision) settle() error {
+func (d *decision) settle(prior time.Time) error {
 	if d.t.Live() != nil || d.t.settled() || d.t.Deleted || d.t.Remote != nil {
 		return nil
 	}
 	if m := d.t.next(); m != nil {
-		return d.admit(m.ID)
+		return d.admit(m.ID, prior)
 	}
 	if d.t.stopped() && !d.resumed {
 		return nil
 	}
 	if i := index(d.t.Queue, Message.waking); i >= 0 {
-		return d.admit(d.t.Queue[i].ID)
+		return d.admit(d.t.Queue[i].ID, prior)
 	}
 	return nil
 }
@@ -450,7 +451,7 @@ func (d *decision) steer(b api.QueueSteer) error {
 		return err
 	}
 	if live == nil {
-		return d.admit(m.ID)
+		return d.admit(m.ID, d.t.UpdatedAt)
 	}
 	if err := d.raise(*live); err != nil {
 		return err
@@ -667,25 +668,34 @@ func (d *decision) dismissWake(b api.WakeDismiss) error {
 		return nil
 	}
 	e := api.WakeDismissed{Run: live.ID, Reason: strings.TrimSpace(b.Reason), UpdatedAt: live.Prior}
+	kept := d.t.Reported
 	if live.Wake == api.WakeReport && !d.t.Reported.After(live.Woke) {
 		e.Reports, e.Reported = true, d.t.Alerted
+		kept = d.t.Alerted
+	}
+	if kept.After(e.UpdatedAt) {
+		e.UpdatedAt = kept
 	}
 	return d.emit(e)
 }
 
+// raise makes a wake the user's turn: something in it now needs them.
 func (d *decision) raise(r Run) error {
 	if r.Wake == api.NotWake {
 		return nil
 	}
-	return d.emit(api.WakeRaised{Run: r.ID})
+	if err := d.emit(api.WakeRaised{Run: r.ID}); err != nil {
+		return err
+	}
+	return d.unsnooze()
 }
 
 func (d *decision) snoozing() bool {
 	return d.t.Disposition.State == api.Snoozed && d.at.Before(d.t.Disposition.Until)
 }
 
-func (d *decision) unsnooze(r Run) error {
-	if r.Wake == api.NotWake || d.t.Role != api.RoleManager || !d.snoozing() {
+func (d *decision) unsnooze() error {
+	if d.t.Role != api.RoleManager || !d.snoozing() {
 		return nil
 	}
 	return d.emit(api.DispositionChanged{Disposition: api.Disposition{}})

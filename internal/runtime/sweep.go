@@ -21,33 +21,6 @@ func (h *Host) pokeSweeps() {
 	}
 }
 
-func sweepDueAt(v api.Thread, now time.Time) (time.Time, bool) {
-	if v.Role != api.RoleManager || v.Sweep == nil || v.Sweep.IntervalSeconds <= 0 ||
-		v.Deleted || v.Remote != nil || v.Origin != nil || v.Disposition.State == api.Settled {
-		return time.Time{}, false
-	}
-	if v.Turn != nil || v.Run != api.RunIdle || v.Resumable || v.Queued > 0 {
-		return time.Time{}, false
-	}
-	base := v.LastSweep
-	if v.UpdatedAt.After(base) {
-		base = v.UpdatedAt
-	}
-	if v.LastTurn != nil && v.LastTurn.Ended.After(base) {
-		base = v.LastTurn.Ended
-	}
-	due := base.Add(time.Duration(v.Sweep.IntervalSeconds) * time.Second)
-	if v.Disposition.State == api.Snoozed && v.Disposition.Until.After(due) {
-		due = v.Disposition.Until
-	}
-	if resets, ok := v.LimitResume(now); ok {
-		if after := resets.Add(api.LimitOverdue + time.Nanosecond); after.After(due) {
-			due = after
-		}
-	}
-	return due, true
-}
-
 func (h *Host) runSweeps() {
 	defer h.wg.Done()
 	timer := time.NewTimer(0)
@@ -68,8 +41,8 @@ func (h *Host) runSweeps() {
 		}
 		now := h.clock()
 		var next time.Time
-		for _, v := range managers {
-			at, ok := sweepDueAt(v, now)
+		for _, t := range managers {
+			at, ok := engine.NextSweepAt(t, now)
 			if !ok {
 				continue
 			}
@@ -79,9 +52,9 @@ func (h *Host) runSweeps() {
 				}
 				continue
 			}
-			if err := h.observe(h.ctx, v.ID, engine.SweepDue{Run: api.NewID()}, 0); err != nil {
+			if err := h.observe(h.ctx, t.ID, engine.SweepDue{Run: api.NewID()}, 0); err != nil {
 				if h.ctx.Err() == nil && !errors.Is(err, engine.ErrRefused) {
-					slog.Warn("runtime: failed to trigger manager sweep", "thread", v.ID, "err", err)
+					slog.Warn("runtime: failed to trigger manager sweep", "thread", t.ID, "err", err)
 				}
 			}
 		}

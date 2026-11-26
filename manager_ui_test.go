@@ -12,6 +12,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
+	core "glitched/internal/engine"
 	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
 )
@@ -158,12 +159,67 @@ func (h *harness) newManager() *client.Thread {
 func TestManagerSweepButtonKeepsItsPrompt(t *testing.T) {
 	const prompt = "Check CI and report only red builds."
 	at := &api.SweepSchedule{IntervalSeconds: 1800, Prompt: prompt}
-	for at.IntervalSeconds != 0 {
+	for range sweepPresets {
 		next := nextSweepSchedule(at)
-		if next.IntervalSeconds == at.IntervalSeconds || next.IntervalSeconds != 0 && next.Prompt != prompt {
+		if next.IntervalSeconds == at.IntervalSeconds || next.Prompt != prompt {
 			t.Fatalf("from %+v the button goes to %+v", at, next)
 		}
 		at = next
+	}
+	if at.IntervalSeconds != 1800 {
+		t.Fatalf("a full turn of the button ends at %+v, want where it began", at)
+	}
+}
+
+func TestManagerSweepPillKeepsItsPromptThroughOff(t *testing.T) {
+	h := start(t, tempDir(t))
+	const prompt = "Only check release blockers"
+	id := h.a.backend.CreateManager(h.local(), t.TempDir(), "Manager", fakeModel, api.AccessAsk, &api.SweepSchedule{IntervalSeconds: 14400, Prompt: prompt})
+	h.until("the Manager", func() bool { th := h.local().Threads[id]; return th != nil && th.View.Revision > 0 })
+	h.a.select_(thread{h.local(), h.local().Threads[id]})
+	h.until("the 4h pill", func() bool { h.tt.Frame(); return h.tt.HasText("Sweep 4h") })
+	h.click("Sweep 4h")
+	h.until("sweeps off", func() bool {
+		h.tt.Frame()
+		s := h.local().Threads[id].View.Sweep
+		return s != nil && s.IntervalSeconds == 0 && h.tt.HasText("Sweep off")
+	})
+	h.click("Sweep off")
+	h.until("15m sweeps", func() bool { s := h.local().Threads[id].View.Sweep; return s != nil && s.IntervalSeconds == 900 })
+	if s := h.local().Threads[id].View.Sweep; s.Prompt != prompt {
+		t.Fatalf("the prompt after sweeps went off and on = %q, want %q", s.Prompt, prompt)
+	}
+}
+
+func TestManagerQuietWakeStaysSnoozedInTheSidebar(t *testing.T) {
+	a := offline(t)
+	now := time.Now().UTC()
+	a.now = now
+	var th core.Thread
+	id := api.NewID()
+	fold := func(evs []core.Event, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range evs {
+			th = core.Apply(th, e)
+		}
+	}
+	decide := func(b api.Intent) {
+		evs, _, err := core.Decide(th, api.Command{ID: api.NewID(), Target: id, Body: b}, now)
+		fold(evs, err)
+	}
+	decide(api.ThreadCreate{Workspace: t.TempDir(), Title: "Manager", Role: api.RoleManager, Model: fakeModel})
+	decide(api.InboxSet{Disposition: api.Disposition{State: api.Snoozed, Until: now.Add(time.Hour)}})
+	evs, _, err := core.Observe(th, core.Reported{Report: api.ChildReported{Child: api.NewID(), Run: api.NewID(), Kind: api.ReportDone, Title: "Worker"}}, now.Add(time.Minute))
+	fold(evs, err)
+	v := core.View(th)
+	if v.Turn == nil || v.Disposition.State != api.Snoozed {
+		t.Fatalf("the report started %+v, disposition %+v; want a quiet wake under the snooze", v.Turn, v.Disposition)
+	}
+	if got := a.categoryOf(thread{&client.Env{}, &client.Thread{View: v}}); got != catSnoozed {
+		t.Fatalf("a snoozed Manager's quiet wake shows in %v, want Snoozed", got)
 	}
 }
 

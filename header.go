@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
@@ -182,23 +183,12 @@ func sweepLabel(s *api.SweepSchedule) string {
 var sweepPresets = []int64{0, 900, 1800, 3600, 14400}
 
 func nextSweepSchedule(cur *api.SweepSchedule) *api.SweepSchedule {
-	var curSecs int64
-	if cur != nil {
-		curSecs = cur.IntervalSeconds
-	}
-	var secs int64 = sweepPresets[1]
-	for i, p := range sweepPresets {
-		if p == curSecs {
-			secs = sweepPresets[(i+1)%len(sweepPresets)]
-			break
-		}
-	}
-	if secs == 0 {
-		return &api.SweepSchedule{}
-	}
-	next := &api.SweepSchedule{IntervalSeconds: secs}
+	next := &api.SweepSchedule{IntervalSeconds: sweepPresets[1]}
 	if cur != nil {
 		next.Prompt = cur.Prompt
+		if i := slices.Index(sweepPresets, cur.IntervalSeconds); i >= 0 {
+			next.IntervalSeconds = sweepPresets[(i+1)%len(sweepPresets)]
+		}
 	}
 	return next
 }

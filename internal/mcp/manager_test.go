@@ -2,6 +2,7 @@ package mcp_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -14,13 +15,44 @@ import (
 	"glitched/internal/runtime"
 )
 
-func workingManager(t *testing.T, h *runtime.Host, text string) mcp.Origin {
+// gated is a fake whose agents say nothing until open is closed: a run
+// stays running until then.
+type gated struct {
+	*fake.Adapter
+	open chan struct{}
+}
+
+type gatedAgent struct {
+	provider.Agent
+	open chan struct{}
+}
+
+func (g *gated) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	ag, err := g.Adapter.Open(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	return &gatedAgent{ag, g.open}, nil
+}
+
+func (a *gatedAgent) Next(ctx context.Context) (provider.Event, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-a.open:
+		return a.Agent.Next(ctx)
+	}
+}
+
+// workingManager is a Manager on provider on, whose run, the user's with a
+// text and a sweep without, has reached state.
+func workingManager(t *testing.T, h *runtime.Host, on, text string, state api.RunState) mcp.Origin {
 	t.Helper()
 	thread := api.NewID()
 	create := api.ThreadCreate{
 		Workspace: t.TempDir(),
 		Title:     "Coord",
-		Model:     api.ModelRef{Provider: "fake", Model: "fake"},
+		Model:     api.ModelRef{Provider: on, Model: "fake"},
 		Access:    api.AccessAutoEdits,
 		Role:      api.RoleManager,
 		Text:      text,
@@ -33,17 +65,18 @@ func workingManager(t *testing.T, h *runtime.Host, text string) mcp.Origin {
 	}
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(2 * time.Millisecond) {
 		snap, err := h.Read(ctx, api.Query{Thread: thread})
-		if err == nil && len(snap.Threads) == 1 && snap.Threads[0].Run == api.RunWaiting {
+		if err == nil && len(snap.Threads) == 1 && snap.Threads[0].Run == state {
 			return mcp.Origin{Thread: thread, Access: api.AccessAutoEdits, Role: api.RoleManager}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("manager run never waited: %+v %v", snap.Threads, err)
+			t.Fatalf("manager run never reached %v: %+v %v", state, snap.Threads, err)
 		}
 	}
 }
 
 func TestDismissWakeExposedOnlyToManagersAndSilencesRun(t *testing.T) {
-	h := engineOf(t, provider.Mux{"fake": fake.New(fake.Turn(true))})
+	gate := &gated{fake.New(fake.Turn(true)), make(chan struct{})}
+	h := engineOf(t, provider.Mux{"fake": fake.New(fake.Turn(true)), "gated": gate})
 
 	reg := working(t, h)
 	var regBuf bytes.Buffer
@@ -66,12 +99,12 @@ func TestDismissWakeExposedOnlyToManagersAndSilencesRun(t *testing.T) {
 		t.Fatalf("a plain thread's dismiss_wake under a forged role succeeded: %+v", out[3].Result)
 	}
 
-	asked := workingManager(t, h, "Coordinate")
+	asked := workingManager(t, h, "fake", "Coordinate", api.RunWaiting)
 	if out := serve(t, h, asked, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"dismiss_wake","arguments":{}}}`); !out[4].Result.IsError {
 		t.Fatalf("dismiss_wake on the user's turn succeeded: %+v", out[4].Result)
 	}
 
-	mgr := workingManager(t, h, "")
+	mgr := workingManager(t, h, "gated", "", api.RunRunning)
 	var mgrBuf bytes.Buffer
 	if err := mcp.Serve(ctx, strings.NewReader(`{"jsonrpc":"2.0","id":9,"method":"tools/list"}`+"\n"), &mgrBuf, &mcp.Tools{Engine: h, Origin: mgr}); err != nil {
 		t.Fatal(err)
@@ -102,6 +135,33 @@ func TestDismissWakeExposedOnlyToManagersAndSilencesRun(t *testing.T) {
 	}
 	if snap.Threads[0].Turn == nil || !snap.Threads[0].Turn.Silent || snap.Threads[0].Working() {
 		t.Fatalf("expected live turn Silent=true, got %+v", snap.Threads[0])
+	}
+
+	if out := serve(t, h, mgr, delegate(11, `{"task":"Read the project","title":"Worker","client_request_id":"dismissed-sweep-child"}`, "")); out[11].Result.IsError {
+		t.Fatalf("delegating from a dismissed sweep failed: %+v", out[11].Result)
+	}
+	if kids := children(t, h, mgr.Thread); len(kids) != 1 {
+		t.Fatalf("the dismissed sweep's workers = %+v, want the one it delegated", kids)
+	}
+
+	close(gate.open)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(2 * time.Millisecond) {
+		snap, err := h.Read(ctx, api.Query{Thread: mgr.Thread})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if th := snap.Threads[0]; len(th.Requests) > 0 {
+			if th.Turn == nil || th.Turn.Silent {
+				t.Fatalf("the sweep's approval is hidden: %+v", th)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the sweep's approval never opened")
+		}
+	}
+	if out := serve(t, h, mgr, `{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"dismiss_wake","arguments":{}}}`); !out[12].Result.IsError {
+		t.Fatalf("dismiss_wake once the sweep asked the user succeeded: %+v", out[12].Result)
 	}
 
 	s := (mcp.Launcher{Command: "glitched", Engine: "/tmp/sock"}).ForRole(mgr.Thread, api.AccessAutoEdits, api.RoleManager)

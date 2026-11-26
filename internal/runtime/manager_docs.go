@@ -17,7 +17,7 @@ const (
 
 var managerDocFiles = []string{"AGENTS.md", "WORKERS.md", "NOTES.md"}
 
-func loadManagerDocs(workspace, project string, role api.ThreadRole, child bool) string {
+func loadCoordinatorDocs(workspace, project string, role api.ThreadRole, child bool) string {
 	root := cmp.Or(project, workspace)
 	if root == "" || role != api.RoleManager && !child {
 		return ""

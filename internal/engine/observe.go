@@ -37,7 +37,7 @@ func ObserveWith(t Thread, o Observation, env Env, now time.Time) ([]Event, []Ef
 	d := &decision{t: t, thread: t.ID, at: now.UTC().Round(0), env: env}
 	err := d.observe(o)
 	if err == nil {
-		err = d.settle()
+		err = d.settle(d.t.UpdatedAt)
 	}
 	if te := (*TransitionError)(nil); errors.As(err, &te) {
 		return nil, nil, fmt.Errorf("%w: %T: %w", ErrRefused, o, err)
@@ -94,8 +94,8 @@ func (d *decision) observe(o Observation) error {
 			if err := d.emit(api.TurnEnded{Run: o.Run, Outcome: o.Outcome, Error: o.Error, Tokens: o.Tokens, Limit: limit, Head: o.Head}); err != nil {
 				return err
 			}
-			if !live.Dismissed {
-				if err := d.unsnooze(*live); err != nil {
+			if live.Wake != api.NotWake && !live.Dismissed {
+				if err := d.unsnooze(); err != nil {
 					return err
 				}
 			}
@@ -148,7 +148,7 @@ func (d *decision) observe(o Observation) error {
 			return d.stop(*live)
 		}
 		if isLive(o.Run) && !dup {
-			if err := d.unsnooze(*live); err != nil {
+			if err := d.unsnooze(); err != nil {
 				return err
 			}
 			if err := d.raise(*live); err != nil {
@@ -341,12 +341,8 @@ func (d *decision) idleCompact(o IdleCompact) error {
 }
 
 func (d *decision) sweepDue(o SweepDue) error {
-	at, ok := NextSweep(d.t)
-	if !ok || d.at.Before(at) || d.snoozing() {
+	if at, ok := NextSweepAt(d.t, d.at); !ok || d.at.Before(at) {
 		return fmt.Errorf("%w: thread is not due for a sweep", ErrRefused)
-	}
-	if _, ok := View(d.t).LimitResume(d.at); ok {
-		return fmt.Errorf("%w: the thread waits to continue a turn a usage limit ended", ErrRefused)
 	}
 	if o.Run.IsZero() {
 		return fmt.Errorf("%w: sweep needs a run id", ErrRefused)
@@ -396,13 +392,13 @@ func (d *decision) reported(o Reported) error {
 	if d.t.messageAt(id) >= 0 {
 		return nil
 	}
-	d.prior = d.t.UpdatedAt
+	prior := d.t.UpdatedAt
 	if err := d.emit(o.Report); err != nil {
 		return err
 	}
 	wakes := !(o.Report.Kind == api.ReportBlocked && o.Question.IsZero() || d.t.settled())
-	quiet := wakes && d.t.Role == api.RoleManager && d.snoozing()
-	if d.t.Disposition.State == api.Snoozed && !quiet {
+	staysSnoozed := wakes && d.t.Role == api.RoleManager && d.snoozing()
+	if d.t.Disposition.State == api.Snoozed && !staysSnoozed {
 		if err := d.emit(api.DispositionChanged{Disposition: api.Disposition{}}); err != nil {
 			return err
 		}
@@ -412,10 +408,10 @@ func (d *decision) reported(o Reported) error {
 	}
 	if err := d.emit(api.MessageQueued{
 		Message: id, Text: text, Mode: api.AfterActive, Pos: d.t.pos(false), Held: true, Report: o.Report.Child,
-	}); err != nil || !quiet {
+	}); err != nil {
 		return err
 	}
-	if err := d.settle(); err != nil {
+	if err := d.settle(prior); err != nil || !staysSnoozed {
 		return err
 	}
 	if live := d.t.Live(); live != nil && live.Wake == api.WakeReport {

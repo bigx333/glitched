@@ -109,7 +109,7 @@ func DecideWith(t Thread, c api.Command, env Env, now time.Time) ([]Event, []Eff
 		err = d.local(c.ID, c.Body)
 	}
 	if err == nil {
-		err = d.settle()
+		err = d.settle(d.t.UpdatedAt)
 	}
 	if te := (*TransitionError)(nil); errors.As(err, &te) {
 		err = rejected(te.Error())
@@ -349,7 +349,6 @@ type decision struct {
 	resumed bool   // the user resumed the queue: settle starts the wakes after a stop
 	by      api.ID // the thread whose agent sent the command; zero for the user
 	env     Env
-	prior   time.Time
 }
 
 // ceiling is the most the thread may run at now: any access for a
@@ -442,7 +441,7 @@ func (d *decision) create(id api.ID, c api.ThreadCreate) error {
 	if err := d.emit(api.MessageQueued{Message: id, Text: c.Text, Mode: api.StartNow, By: c.Parent}); err != nil {
 		return err
 	}
-	return d.admit(id)
+	return d.admit(id, d.t.UpdatedAt)
 }
 
 // createFromLink creates a thread a link's create asked for, as the host

@@ -434,8 +434,10 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 	case session != t.Session:
 		err = h.observe(ctx, thread, engine.Bound{Run: b.Run, Session: session}, 0)
 	}
-	if t.Session == "" && b.Generation <= 1 && !b.ResumeOnly && !slashCommand(text) {
-		if docs := loadManagerDocs(b.Workspace, t.Project, t.Role, !t.Parent.IsZero() || t.Origin != nil); docs != "" {
+	// A turn that failed before its agent took it gave the agent no docs.
+	delivered := slices.ContainsFunc(t.Queue, func(m engine.Message) bool { return m.State == engine.QueueDispatched })
+	if t.Session == "" && !delivered && !b.ResumeOnly && !slashCommand(text) {
+		if docs := loadCoordinatorDocs(b.Workspace, t.Project, t.Role, !t.Parent.IsZero() || t.Origin != nil); docs != "" {
 			text = docs + text
 		}
 	}
