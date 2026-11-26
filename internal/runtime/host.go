@@ -119,14 +119,18 @@ type liveRun struct {
 	// started is closed once the run's start is recorded: its agent may
 	// call back through glitched mcp before then.
 	started chan struct{}
-	// delivering counts the answers on their way to the agent, from the
-	// call that gives one until its receipt is tried; settled is closed as
-	// the count comes back to none. ending is set as the pump reads the
-	// agent's end of its turn. Set under h.mu.
+	// delivering counts the answers and steers on their way to the agent,
+	// from the call that gives one until its receipt is recorded; settled is
+	// closed as the count comes back to none. ending is set as the pump
+	// reads the agent's end of its turn. steerReady, for a SteerMarker's
+	// steer, is closed once the pump showed what came before the steer.
+	// Set under h.mu.
 	delivering int
 	settled    chan struct{}
 	ending     bool
-	silent     bool // it runs a compaction; set under h.mu
+	steerReady chan struct{}
+	pumped     chan struct{} // closed as the pump returns
+	silent     bool          // it runs a compaction; set under h.mu
 }
 
 var _ api.Endpoint = (*Host)(nil)
