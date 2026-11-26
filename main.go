@@ -36,6 +36,7 @@ import (
 	"glitched/internal/mcp"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/pack"
+	"glitched/internal/provider/acp"
 	"glitched/internal/service"
 	"glitched/internal/transport"
 	"glitched/wind"
@@ -546,6 +547,10 @@ type app struct {
 	// the palette component, which none of the last one's state shows in.
 	cmdkOpens int
 	cmdkList  ui.ListState
+
+	customACP     acp.CustomProfile
+	customACPArgs string
+	customACPErr  string
 
 	svcStatus  service.Status
 	svcRead    time.Time // zero till the first read

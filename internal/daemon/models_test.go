@@ -76,7 +76,7 @@ func TestWithAgentsServesEveryACPAgent(t *testing.T) {
 		}
 		cfg.Launch = map[string]provider.Launch{"antigravity": {Path: agyPath}}
 		cfg.WithAgents()
-		if got := cfg.Providers.Names(); !slices.Equal(got, []string{"antigravity", "claude", "codex"}) {
+		if got := cfg.Providers.Names(); !slices.Equal(got, []string{"antigravity", "claude", "codex", "gemini", "opencode"}) {
 			t.Errorf("with agy_path %q, serves %q", agyPath, got)
 		}
 		return cfg.Providers["antigravity"].(*acp.Adapter)
@@ -98,6 +98,29 @@ func TestWithAgentsServesEveryACPAgent(t *testing.T) {
 	}
 	if got, err := agyOf("").Placement().Program(provider.Launch{}); got.Path != agy || err != nil {
 		t.Errorf("with agy in ~/.local/bin, runs %q (%v)", got, err)
+	}
+}
+
+func TestWithAgentsLoadsCustomACPProfiles(t *testing.T) {
+	dir := stateDir(t)
+	cfg, err := Defaults(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.CustomACP = []acp.CustomProfile{
+		{Provider: "my-agent", Name: "My Agent", Binary: "/usr/local/bin/my-agent", Args: []string{"--acp"}},
+		{Provider: "claude", Binary: "/bin/false"},
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := Defaults(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded.WithAgents()
+	if got := reloaded.Providers.Names(); !slices.Equal(got, []string{"antigravity", "claude", "codex", "gemini", "my-agent", "opencode"}) {
+		t.Errorf("providers = %v, want my-agent loaded alongside built-ins", got)
 	}
 }
 

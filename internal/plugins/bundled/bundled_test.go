@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -251,6 +252,22 @@ func TestEveryBuiltInPluginUsesTypeScriptAndCompiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	onDisk, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirs := func(entries []fs.DirEntry) []string {
+		var names []string
+		for _, e := range entries {
+			if e.IsDir() {
+				names = append(names, e.Name())
+			}
+		}
+		return names
+	}
+	if embedded, disk := dirs(entries), dirs(onDisk); !slices.Equal(embedded, disk) {
+		t.Fatalf("bundled.FS embeds %v, but the folder holds %v; embed every plugin in bundled.go", embedded, disk)
+	}
 	var services []struct {
 		id      string
 		dir     string
@@ -280,19 +297,13 @@ func TestEveryBuiltInPluginUsesTypeScriptAndCompiles(t *testing.T) {
 		if err := json.Unmarshal(raw, &m); err != nil {
 			t.Fatalf("%s: %v", id, err)
 		}
-		if !strings.HasSuffix(m.Main, ".ts") {
-			t.Errorf("%s: main = %q, want .ts", id, m.Main)
-		}
-		if m.Glitched.Service != "" && !strings.HasSuffix(m.Glitched.Service, ".ts") {
-			t.Errorf("%s: service = %q, want .ts", id, m.Glitched.Service)
+		for _, v := range plugins.CheckTypeScriptPlugin(id) {
+			t.Errorf("%s: %v", id, v)
 		}
 		dst := filepath.Join(root, id)
 		err = fs.WalkDir(sub, ".", func(p string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || p == pack.SignatureFile {
 				return err
-			}
-			if strings.HasSuffix(p, ".js") {
-				t.Errorf("%s: unexpected .js file %s", id, p)
 			}
 			b, err := fs.ReadFile(sub, p)
 			if err != nil {

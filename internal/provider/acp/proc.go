@@ -65,7 +65,8 @@ type proc struct {
 	conn    *acpsdk.ClientSideConnection
 	stdin   *os.File
 	stderr  *tail
-	tap     provider.Tap  // sees each line on the agent's pipes, for every run of it
+	tap     provider.Tap // sees each line on the agent's pipes, for every run of it
+	legacy  legacy
 	heard   chan struct{} // closed once stderr is read to its end
 	read    chan struct{} // closed once stdout is read to its end and let go
 	// release has the bridge from stdout let go now, sending the SDK
@@ -89,6 +90,7 @@ type proc struct {
 	session     acpsdk.SessionId
 	options     []acpsdk.SessionConfigOption         // the session's, as the agent last said
 	mode        string                               // the session's mode, as the agent last said
+	modeSeq     uint64
 	moded       bool                                 // the session has modes, as the agent said
 	offered     []string                             // the modes the session offers, as the agent said
 	refused     string                               // why the session runs the access's Else, as configure last found
@@ -111,22 +113,24 @@ var (
 	_ acpsdk.Client = (*proc)(nil)
 )
 
-// launch starts the agent in dir under mark, with args after the
-// profile's and tap seeing its lines, and initializes it. ctx bounds only
-// the start; the process lives until Close.
-func launch(ctx context.Context, profile Profile, prog provider.Program, dir, mark string, args []string, tap provider.Tap) (*proc, error) {
-	cmd := exec.Command(prog.Path, slices.Concat(profile.Args, prog.Args, args)...)
+func launch(startCtx context.Context, profile Profile, prog provider.Program, dir, mark string, grant provider.Grant, tap provider.Tap) (*proc, error) {
+	cmd := exec.Command(prog.Path, slices.Concat(profile.Args, prog.Args, grant.Args)...)
 	if err := guard(prog.Path); err != nil {
 		return nil, err
 	}
 	cmd.Dir = dir
+	env := maps.Clone(profile.Env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	maps.Copy(env, grant.Env)
 	cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool {
 		k, _, _ := strings.Cut(kv, "=")
-		_, ours := profile.Env[k]
+		_, ours := env[k]
 		return ours || k == procEnv || mcp.Routing(k)
 	})
-	for k, v := range profile.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
+	for _, k := range sortedKeys(env) {
+		cmd.Env = append(cmd.Env, k+"="+env[k])
 	}
 	cmd.Env = prog.Environ(append(cmd.Env, procEnv+"="+mark))
 	cmd.SysProcAttr = sweep.SysProcAttr()
@@ -164,7 +168,7 @@ func launch(ctx context.Context, profile Profile, prog provider.Program, dir, ma
 	wire := openWire()
 	go p.watchStderr(errR, wire)
 	in := p.readStdout(outR, wire)
-	p.conn = acpsdk.NewClientSideConnection(p, tapped{inW, wire, ">> ", tap, p.wrote}, in)
+	p.conn = acpsdk.NewClientSideConnection(p, tapped{w: inW, wire: wire, prefix: ">> ", tap: tap, sent: p.wrote, edit: p.legacy.toAgent}, in)
 	p.conn.SetLogger(slog.New(redacted{slog.Default().Handler()}))
 	// The SDK stops reading at a line it can't take, as one past its size
 	// limit: the bridge to it lets go, so the agent's stdout closes.
@@ -175,9 +179,9 @@ func launch(ctx context.Context, profile Profile, prog provider.Program, dir, ma
 
 	// The SDK's own calls end with ctx, but a write to an agent that reads
 	// nothing would not: the agent is stopped instead.
-	stop := context.AfterFunc(ctx, p.halt)
+	stop := context.AfterFunc(startCtx, p.halt)
 	defer stop()
-	r, err := p.conn.Initialize(ctx, acpsdk.InitializeRequest{
+	r, err := p.conn.Initialize(startCtx, acpsdk.InitializeRequest{
 		ProtocolVersion: acpsdk.ProtocolVersionNumber,
 		ClientInfo:      &acpsdk.Implementation{Name: "glitched", Version: "1"},
 		// An agent that can ask with a form asks on Glitched's question
@@ -270,6 +274,7 @@ func (p *proc) open(ctx context.Context, dir string, servers []provider.MCPServe
 	}
 	p.mu.Lock()
 	p.session, p.options, p.mode, p.moded, p.offered = id, options, "", modes != nil, nil
+	p.modeSeq++
 	p.commands, p.pendingCmds = p.pendingCmds[id], nil
 	if p.commands != nil {
 		p.listedLocked()
@@ -340,6 +345,9 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 	if !ok {
 		return []provider.Model{}, nil
 	}
+	if model.Id == legacyModelConfigID {
+		return legacyModelChoices(model), nil
+	}
 	var out []provider.Model
 	for _, o := range choices(model) {
 		m := provider.Model{ID: string(o.Value), Name: o.Name, Default: o.Value == model.CurrentValue}
@@ -367,6 +375,18 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 	return out, nil
 }
 
+func legacyModelChoices(model acpsdk.SessionConfigOptionSelect) []provider.Model {
+	out := make([]provider.Model, 0, len(choices(model)))
+	for _, o := range choices(model) {
+		m := provider.Model{ID: string(o.Value), Name: o.Name, Default: o.Value == model.CurrentValue}
+		if o.Description != nil {
+			m.Description = *o.Description
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 // configure sets the session's model and effort to ref's, and its mode
 // to g's, where they differ: its Else where the session doesn't offer its
 // Mode, saying so. A ref without either, or no mode, leaves the agent's
@@ -381,20 +401,27 @@ func (p *proc) configure(ctx context.Context, ref api.ModelRef, g provider.Grant
 	p.mu.Lock()
 	current, moded, offered := p.mode, p.moded, p.offered
 	p.mu.Unlock()
-	mode := g.Mode
-	switch {
-	case g.Else != "" && !moded:
-		refused = p.profile.Name + "'s session offers no modes"
-	case g.Else != "" && !slices.Contains(offered, mode):
-		refused, mode = p.profile.Name+" doesn't offer its "+mode+" mode", g.Else
+	mode, missing := g.PickMode(offered, moded)
+	if missing {
+		if !moded {
+			refused = p.profile.Name + "'s session offers no modes"
+		} else {
+			refused = p.profile.Name + " doesn't offer its " + g.Mode + " mode"
+		}
 	}
 	p.mu.Lock()
 	p.refused = refused
+	seq := p.modeSeq
 	p.mu.Unlock()
 	if mode != "" && mode != current && moded {
 		if _, err := p.conn.SetSessionMode(ctx, acpsdk.SetSessionModeRequest{SessionId: p.session, ModeId: acpsdk.SessionModeId(mode)}); err != nil {
 			return "", p.failure("run at this access level, as its mode "+mode, err)
 		}
+		p.mu.Lock()
+		if p.modeSeq == seq {
+			p.mode = mode
+		}
+		p.mu.Unlock()
 	}
 	for _, want := range []struct {
 		category acpsdk.SessionConfigOptionCategory
@@ -525,7 +552,7 @@ func (p *proc) readStdout(stdout *os.File, wire io.Writer) *io.PipeReader {
 				p.tap.Line(provider.ACP, provider.Stdout, line)
 				if t := bytes.TrimSpace(line); len(t) > 0 && t[0] != '{' {
 					p.notice(string(t))
-				} else if _, werr := w.Write(line); werr != nil {
+				} else if _, werr := w.Write(p.legacy.fromAgent(line)); werr != nil {
 					return
 				}
 			}
@@ -828,6 +855,7 @@ func (p *proc) SessionUpdate(ctx context.Context, n acpsdk.SessionNotification) 
 	if u.CurrentModeUpdate != nil {
 		p.mu.Lock()
 		p.mode = string(u.CurrentModeUpdate.CurrentModeId)
+		p.modeSeq++
 		p.mu.Unlock()
 	}
 	run := p.current(!quiet, kindOf(u))

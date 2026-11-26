@@ -122,8 +122,18 @@ func (p Placement) Program(l Launch) (Program, error) {
 	return prog, nil
 }
 
+func isTildePath(path string) bool {
+	return path == "~" || strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~"+string(filepath.Separator))
+}
+
 func (p Placement) find() string {
 	for _, name := range p.Names {
+		if isTildePath(name) {
+			if path, msg := absolute(name); msg == "" && program(path) == "" {
+				return path
+			}
+			continue
+		}
 		if path, err := exec.LookPath(name); err == nil {
 			if abs, err := filepath.Abs(path); err == nil {
 				return abs
@@ -144,7 +154,7 @@ func (p Placement) find() string {
 // can't be used: the engine starts programs in each run's workspace,
 // where a relative path names another file.
 func absolute(path string) (string, string) {
-	if path == "~" || strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~"+string(filepath.Separator)) {
+	if isTildePath(path) {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", "no home folder to expand ~ in: " + err.Error()
