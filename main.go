@@ -174,6 +174,19 @@ type app struct {
 	sidebarAsked bool
 	// vibrant is whether the sidebar shows the window's vibrancy.
 	vibrant bool
+	// nativeGlass is whether the window's material is macOS 26's Liquid
+	// Glass, which takes the app's appearance and the Glass tint; set by
+	// main alone, so a test's app has the older material.
+	nativeGlass bool
+	// askedAppearance is the appearance last asked of the system, and
+	// appliedTint the tint last handed to the window's glass (liquidglass.go).
+	askedAppearance mygo.ThemeSource
+	appliedTint     string
+	// setAppearance and setTint hand them over: mygo's on the window, nil,
+	// doing nothing, in a test, where mygo's would wait on a main thread
+	// that never runs.
+	setAppearance func(mygo.ThemeSource)
+	setTint       func(string)
 	// panelsJump shows the diff panel and the terminal without motion,
 	// as when ⌘D and ⌘J toggle them.
 	panelsJump bool
@@ -770,6 +783,8 @@ func newApp(dir string, engine func(*daemon.Config), detect func(context.Context
 			checkCLIs:     true,
 		},
 	}
+	// The appearance is the system's until a theme asks for another.
+	a.askedAppearance = mygo.ThemeSystem
 	a.userMD.Extensions, a.userMD.WrapCode = parser.ExtStrikethrough, true
 	a.userMD.OnLink = func(string) {}
 	a.loadLayout()
@@ -876,6 +891,11 @@ func (a *app) view(c *ui.Context) {
 	}
 	systemDark := c.Theme().Dark
 	a.applyTheme(c)
+	if a.nativeGlass && a.askedAppearance != mygo.ThemeSystem {
+		// The appearance asked for is the system's from now on, though
+		// this frame's theme is still the one before it.
+		systemDark = a.askedAppearance == mygo.ThemeDark
+	}
 	if f := c.WindowActive(); a.plugins != nil && (a.pluginFocused == nil || *a.pluginFocused != f) {
 		if a.pluginFocused != nil {
 			a.plugins.Emit("window.focused", func(string) any { return map[string]bool{"focused": f} })
@@ -895,6 +915,7 @@ func (a *app) view(c *ui.Context) {
 	// Before anything this pass builds binds its cover anew.
 	a.lookOver(c)
 	a.vibrant = c.Vibrancy() && a.settings.glass && c.Theme().Dark == systemDark
+	a.syncTint()
 	if c.Vibrancy() {
 		// The material shows wherever nothing paints over it.
 		c.Root().Background(ui.Transparent)
@@ -1089,6 +1110,21 @@ func main() {
 	mygo.App.WhenReady(func() {
 		a.installMenu()
 		mygo.App.OnNotificationClick(a.onNotificationClick)
+		// The full-screen UI's material, two steps clearer than the menu's:
+		// about half the desktop shows through it in dark, 40% in light.
+		// On macOS 26, Liquid Glass, in the theme's appearance and tint
+		// from the first frame.
+		material, tint := mygo.VibrancyFullScreenUI, ""
+		if a.nativeGlass = systemHasLiquidGlass(); a.nativeGlass {
+			material = mygo.VibrancyGlass
+			a.setAppearance = mygo.Theme.SetSource
+			a.syncAppearance()
+			palette = a.themeFor(a.settings.theme, mygo.Theme.IsDark()).colors
+			if a.settings.glass {
+				tint = tintHex(a.glassTint())
+			}
+			a.appliedTint = tint
+		}
 		a.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:     "Glitched",
 			Width:     1320,
@@ -1102,12 +1138,18 @@ func main() {
 			TitleBarStyle:        mygo.TitleBarHiddenInset,
 			TitleBarHeight:       headerHeight,
 			TrafficLightPosition: &mygo.Point{X: 20, Y: (headerHeight - 12) / 2},
-			// The full-screen UI's material, two steps clearer than the
-			// menu's: about half the desktop shows through it in dark, 40%
-			// in light.
-			Vibrancy: mygo.VibrancyFullScreenUI,
-			Content:  ui.View(a.view),
+			Vibrancy:             material,
+			VibrancyTint:         tint,
+			Content:              ui.View(a.view),
 		})
+		if a.nativeGlass {
+			// Set once the window is, which a frame may come before.
+			a.setTint = func(s string) {
+				if err := a.win.SetVibrancyTint(s); err != nil {
+					log.Print(err)
+				}
+			}
+		}
 		early.ready(a.win)
 		a.notify = showNotification
 		// The wind's glyph atlases are drawn between the window's frames.
@@ -1165,10 +1207,14 @@ func matches(s, q string) bool {
 
 // chrome is the look of the window's bars, the sidebar's and, behind
 // the pages and their clear headers, the right side's: the window's
-// vibrancy tinted with the background by as much
-// as the setting leaves, or the background where there is none.
+// vibrancy, clear over Liquid Glass, which takes the tint itself
+// (syncTint), else tinted with the background by as much as the setting
+// leaves; or the background where there is none.
 func (a *app) chrome(e ui.Element) ui.Element {
-	if a.vibrant {
+	switch {
+	case a.vibrant && a.nativeGlass:
+		return e.Background(ui.Transparent)
+	case a.vibrant:
 		return e.Background(a.glassTint())
 	}
 	return e.Background(palette.sidebar) // the sidebar's, to be one bar with it

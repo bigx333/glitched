@@ -137,6 +137,7 @@ func (a *app) applyTheme(c *ui.Context) {
 		a.settings.theme, a.pendingTheme = a.pendingTheme, ""
 	}
 	a.theme = a.themeFor(a.settings.theme, c.Theme().Dark)
+	a.syncAppearance()
 	palette = a.theme.colors
 	palette.accent = accents[a.settings.accent].color
 
