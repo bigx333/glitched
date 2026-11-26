@@ -773,7 +773,8 @@ func newApp(dir string, engine func(*daemon.Config), detect func(context.Context
 		settings: settings{
 			theme:         systemTheme,
 			glass:         true,
-			vibrancy:      1, // untinted: Liquid Glass has no color of its own
+			vibrancy:      0.7,  // the app's background at 30% over the glass, out of the box
+			tintPanels:    true, // the panels take the same tint
 			wind:          true,
 			fontSize:      13,
 			timeFormat:    "Relative",

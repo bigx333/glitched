@@ -213,7 +213,8 @@ func TestChromeClearOnNativeGlass(t *testing.T) {
 	shot := func(native bool, tint float64) []byte {
 		a := offline(t)
 		a.nativeGlass = native
-		a.settings.theme, a.settings.glass, a.settings.vibrancy = "Light", true, tint
+		// The panels untinted, so the frames differ by the bars alone.
+		a.settings.theme, a.settings.glass, a.settings.vibrancy, a.settings.tintPanels = "Light", true, tint, false
 		tt := ui.NewTester(a.view, 1000, 600)
 		tt.SetDark(false)
 		tt.SetVibrancy(true)
