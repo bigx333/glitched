@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -12,33 +13,64 @@ import (
 	"glitched/internal/client"
 )
 
-// A workMode is how a run's work log shows.
+// A workMode is the layout shape of a run's work log.
 type workMode uint8
 
 const (
 	// workInlineSingle is settled work of one step: the step, with no card
 	// around it.
 	workInlineSingle workMode = iota
-	// workLiveCollapsed is work under way, folded: one line of the step at
-	// work.
-	workLiveCollapsed
-	// workSettledCollapsed is settled work, folded: one line of what it did.
-	workSettledCollapsed
-	// workExpanded is the card of every step.
+	// workCollapsed is one summary or live status line, with failed and
+	// subagent steps surfaced underneath.
+	workCollapsed
+	// workExpanded is the bordered card listing every step.
 	workExpanded
 )
 
-// classifyWork is how the work log of e shows, open or not.
-func classifyWork(e entry, open bool) workMode {
-	switch {
-	case open:
-		return workExpanded
-	case e.working:
-		return workLiveCollapsed
-	case e.paused == "" && len(e.work) == 1:
+// A workActivity is what a work log is doing right now.
+type workActivity uint8
+
+const (
+	workIdle workActivity = iota
+	workRunning
+	workThinking
+	workStopping
+	workPaused
+)
+
+// workState derives the live activity of the work row rs.es[i].
+func workState(t thread, rs rows, i int, zen bool) workActivity {
+	e := rs.es[i]
+	if e.paused != "" {
+		return workPaused
+	}
+	if !zen && i == thinkingAt(t, rs) {
+		switch {
+		case t.View.Run == api.RunStopping:
+			return workStopping
+		case e.working:
+			return workRunning
+		default:
+			return workThinking
+		}
+	}
+	if e.working {
+		return workRunning
+	}
+	return workIdle
+}
+
+// classifyWork picks the layout shape of a work log from its activity and
+// disclosure state. A settled single-step log always renders inline so it
+// never shows a toggle that removes itself on click.
+func classifyWork(e entry, act workActivity, open bool) workMode {
+	if act == workIdle && len(e.work) == 1 {
 		return workInlineSingle
 	}
-	return workSettledCollapsed
+	if open {
+		return workExpanded
+	}
+	return workCollapsed
 }
 
 // workScrollHeight is the most a work log's open steps take before they
@@ -46,32 +78,42 @@ func classifyWork(e entry, open bool) workMode {
 const workScrollHeight = 280
 
 // workLog is a run's work. Folded, as it starts outside Zen mode, it is a
-// line: the step at work while the work goes on, what it did once done,
-// and under the line the steps that failed or ran a subagent, which never
-// fold away. In an open Zen line it starts open: the user opened the line
-// to see the work. A click on its head holds the timeline where it is, so
-// the head stays under the pointer.
-func (a *app) workLog(c *ui.Context, t thread, key string, e entry, files []fileChange) {
+// single line: the active step, thinking between steps, or a summary once
+// settled, with failed and subagent steps surfaced underneath. In an open
+// Zen line multi-step logs start open so the user does not click twice.
+func (a *app) workLog(c *ui.Context, t thread, rs rows, i int, key string, e entry, files []fileChange) {
 	m := a.memoOf(t.id())
+	act := workState(t, rs, i, a.settings.zen)
 	auto := a.settings.zen
 	open := m.disclosureOpen(key, auto)
-	mode := classifyWork(e, open)
+	mode := classifyWork(e, act, open)
 	if mode == workInlineSingle {
 		ui.Column(c).Key(key).Padding(0, 8).Children(func() { a.step(c, t, files, e.run, e.work[0]) })
 		return
 	}
 	toggle := func() {
+		wasOpen := m.disclosureOpen(key, auto)
 		m.toggleDisclosure(key, auto)
+		if wasOpen {
+			m.dropWorkScroll(key)
+		}
 		a.listFor(t.id()).HoldPlace()
 	}
 	if mode == workExpanded {
+		ws := m.workScrollOf(key)
+		live := act == workRunning || act == workThinking || act == workStopping
+		if live && (!ws.opened || ws.scroll.Y >= ws.scroll.MaxY-2) {
+			ws.scroll.Y = math.MaxFloat32
+		}
+		ws.opened = true
 		ui.Column(c).Key(key).Radius(12).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Clip().Children(func() {
 			ui.Row(c).Key("bar").Children(func() {
-				if ghost(c, "head", false).Radius(0).Padding(8, 12).Grow(1).Children(func() { a.workHead(c, t, e, true) }).Clicked() {
+				if ghost(c, "head", false).Radius(0).Padding(8, 12).Grow(1).Children(func() { a.workHead(c, t, e, act, true) }).Clicked() {
 					toggle()
 				}
 			})
-			ui.Scroll(c).Key("steps-scroll").MinHeight(0).MaxHeight(workScrollHeight).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
+			ui.Scroll(c).Key("steps-scroll").TrackScroll(&ws.scroll).Focusable().Label("Work steps").
+				MinHeight(0).MaxHeight(workScrollHeight).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
 				ui.Column(c).Key("steps").Padding(6, 8, 10).Gap(2).Children(func() {
 					for _, w := range e.work {
 						a.step(c, t, files, e.run, w)
@@ -82,10 +124,11 @@ func (a *app) workLog(c *ui.Context, t thread, key string, e entry, files []file
 		return
 	}
 	kept := func(w client.WorkStep) bool { return stepFailed(w) || w.Subagent != nil }
-	// A border as the card's, unseen, keeps the head where it is as it opens.
+	// A transparent border matching the expanded card keeps the header Y
+	// fixed when opening and closing.
 	ui.Column(c).Key(key).Gap(2).Border(1, ui.Transparent).Children(func() {
 		ui.Row(c).Key("bar").Children(func() {
-			if ghost(c, "head", false).Radius(6).Padding(8, 12).Grow(1).Children(func() { a.workHead(c, t, e, false) }).Clicked() {
+			if ghost(c, "head", false).Radius(6).Padding(8, 12).Grow(1).Children(func() { a.workHead(c, t, e, act, false) }).Clicked() {
 				toggle()
 			}
 		})
@@ -102,21 +145,22 @@ func (a *app) workLog(c *ui.Context, t thread, key string, e entry, files []file
 	})
 }
 
-// workHead is the head of a work log: what the run waits on, the step at
-// work, shimmering, or what the work did, how many steps failed and how
-// long it took; how many steps it took, and the chevron.
-func (a *app) workHead(c *ui.Context, t thread, e entry, open bool) {
-	switch {
-	case e.paused != "":
+// workHead draws the clickable header of a work log.
+func (a *app) workHead(c *ui.Context, t thread, e entry, act workActivity, open bool) {
+	switch act {
+	case workPaused:
 		ui.Icon(c, icClock).FontSize(12).TextColor(palette.amber)
 		ui.Text(c, e.paused).FontSize(12).SingleLine().Shrink(1)
 		ui.Spacer(c)
-	case e.working:
+	case workStopping:
 		a.statusMark(c, statusWorking)
-		ui.Row(c).Shrink(1).MinWidth(0).Children(func() {
-			shimmerText(c, liveStep(t.View.Workspace, e.work), 12, palette.muted, palette.text)
-		})
-		ui.Spacer(c)
+		shimmerText(c, "Stopping…", 12, palette.muted, palette.text)
+	case workRunning:
+		a.statusMark(c, statusWorking)
+		shimmerText(c, liveStep(t.View.Workspace, e.work), 12, palette.muted, palette.text)
+	case workThinking:
+		a.statusMark(c, statusWorking)
+		shimmerText(c, thinkingWorkLabel(t.View.Workspace, e.work), 12, palette.muted, palette.text)
 	default:
 		ui.Text(c, workSummary(e.work)).FontSize(12).SingleLine().Shrink(1)
 		ui.Spacer(c)
@@ -131,6 +175,19 @@ func (a *app) workHead(c *ui.Context, t thread, e entry, open bool) {
 		ui.Text(c, plural(len(e.work), "step")).FontSize(11).TextColor(palette.faint).Shrink(0)
 	}
 	chevron(c, open)
+}
+
+// thinkingWorkLabel names the live row between sequential steps so the
+// user sees both that the agent is thinking and the last step completed.
+func thinkingWorkLabel(workspace string, ws []client.WorkStep) string {
+	if len(ws) == 0 {
+		return "Thinking…"
+	}
+	last := liveStep(workspace, ws)
+	if last == "" || last == "Working…" {
+		return "Thinking…"
+	}
+	return "Thinking… · " + last
 }
 
 // liveStep names the step at work: the last started, or the last.
@@ -167,35 +224,46 @@ func stepFailed(w client.WorkStep) bool {
 }
 
 // A workPhrase is what a work summary says of a kind of step: its verb,
-// what it counts, and whether it counts each file once.
+// what it counts, and whether it counts each file path once.
 type workPhrase struct {
 	verb, noun string
 	files      bool
 }
 
 var (
-	workPhrases = map[string]workPhrase{
-		"read":    {"read", "file", true},
-		"edit":    {"edited", "file", true},
-		"command": {"ran", "command", false},
-		"search":  {"searched", "time", false},
-	}
+	readFilePhrase = workPhrase{"read", "file", true}
+	editPhrase     = workPhrase{"made", "edit", false}
+	commandPhrase  = workPhrase{"ran", "command", false}
+	searchPhrase   = workPhrase{"searched", "time", false}
 	subagentPhrase = workPhrase{"started", "subagent", false}
 	toolPhrase     = workPhrase{"used", "tool", false}
 )
 
+// phraseOf classifies a step truthfully from provider fields: file reads
+// carry Path while pathless reads (such as WebFetch) count as tools, and
+// edits count operations because multi-file patches carry only one Path.
 func phraseOf(w client.WorkStep) workPhrase {
 	if w.Subagent != nil {
 		return subagentPhrase
 	}
-	if p, ok := workPhrases[w.Kind]; ok {
-		return p
+	switch w.Kind {
+	case "read":
+		if w.Path != "" {
+			return readFilePhrase
+		}
+		return toolPhrase
+	case "edit":
+		return editPhrase
+	case "command":
+		return commandPhrase
+	case "search":
+		return searchPhrase
 	}
 	return toolPhrase
 }
 
 // workSummary says what the steps did, a phrase a kind of step, in the
-// order each kind first came: "Ran 2 commands · edited 1 file".
+// order each kind first came: "Ran 2 commands · made 1 edit".
 func workSummary(ws []client.WorkStep) string {
 	type count struct {
 		p     workPhrase

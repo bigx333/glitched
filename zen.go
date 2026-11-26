@@ -141,6 +141,30 @@ type timelineMemo struct {
 	// disclosures are the work logs and plans the user opened or closed,
 	// by key, against how they start.
 	disclosures map[string]disclosureOverride
+	// workScrolls keeps the inner scroll state of open work logs, by key.
+	workScrolls map[string]*workScroll
+}
+
+// workScroll is an open work log's inner scroll state.
+type workScroll struct {
+	scroll ui.ScrollState
+	opened bool
+}
+
+func (m *timelineMemo) workScrollOf(key string) *workScroll {
+	if m.workScrolls == nil {
+		m.workScrolls = map[string]*workScroll{}
+	}
+	ws := m.workScrolls[key]
+	if ws == nil {
+		ws = &workScroll{}
+		m.workScrolls[key] = ws
+	}
+	return ws
+}
+
+func (m *timelineMemo) dropWorkScroll(key string) {
+	delete(m.workScrolls, key)
 }
 
 // A disclosureOverride is how the user left a work log or plan: as it

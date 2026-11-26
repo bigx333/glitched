@@ -49,7 +49,7 @@ func TestView(t *testing.T) {
 		t.Fatalf("selected %s, want %s", h.a.selected, fix.id())
 	}
 	h.until("its transcript", func() bool {
-		return h.tt.HasText("Why does it flicker?") && h.tt.HasText("Read 1 file · edited 1 file")
+		return h.tt.HasText("Why does it flicker?") && h.tt.HasText("Used 1 tool · made 1 edit")
 	})
 	if h.a.backend.Unread(fix.Thread) {
 		t.Error("the thread shown is still unread")
@@ -400,7 +400,7 @@ func TestServers(t *testing.T) {
 
 	h.click(th.View.Title)
 	h.until("its transcript, from the server", func() bool {
-		return h.tt.HasText("Which keys are old?") && h.tt.HasText("Read 1 file · edited 1 file")
+		return h.tt.HasText("Which keys are old?") && h.tt.HasText("Used 1 tool · made 1 edit")
 	})
 	for _, s := range []string{"Open in", "Commit & push", "Toggle terminal  ⌘J", "Toggle diff  ⌘D", "Attach files"} {
 		if _, ok := h.tt.Find(s); ok {
@@ -1225,7 +1225,7 @@ func TestQuickAsk(t *testing.T) {
 		t.Fatalf("opened %q in %s on %v", th.View.Title, th.View.Workspace, th.env)
 	}
 	h.until("the question in the thread", func() bool {
-		return h.tt.HasText("Why does the SIP stack drop calls?") && h.tt.HasText("Read 1 file · edited 1 file")
+		return h.tt.HasText("Why does the SIP stack drop calls?") && h.tt.HasText("Used 1 tool · made 1 edit")
 	})
 }
 

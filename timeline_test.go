@@ -274,7 +274,7 @@ func TestALongTimeline(t *testing.T) {
 		// The last work log's head in view, folded or open.
 		last := func() (head ui.Rect) {
 			for _, n := range h.tt.AccessAll() {
-				if strings.HasPrefix(n.Name, "Ran 1 command · edited 1 file · searched 1 time 40s 3 steps") && !n.Offscreen {
+				if strings.HasPrefix(n.Name, "Ran 1 command · made 1 edit · searched 1 time 40s 3 steps") && !n.Offscreen {
 					head = n.Bounds
 				}
 			}

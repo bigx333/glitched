@@ -674,8 +674,9 @@ func (a *app) requestAnswers(c *ui.Context, t thread, r *client.RequestEntry) {
 		a.drawn[r.Request] = s
 		// The card fits, and its sight records, what the last frame laid
 		// out: until the two agree, the next frame, which the window may
-		// not ask for, fits it again.
-		if !s.same(a.drew[r.Request]) {
+		// not ask for, fits it again. Skip when drew is nil (card built
+		// standalone without timeline swapping drew/drawn).
+		if a.drew != nil && !s.same(a.drew[r.Request]) {
 			c.Invalidate()
 		}
 	}

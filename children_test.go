@@ -466,7 +466,7 @@ func TestCmdEnterStopsFromTheCompactComposer(t *testing.T) {
 	th := h.thread("Read everything")
 	h.a.select_(th)
 	h.until("the reads", func() bool {
-		return h.tt.HasText("Read 30 files") && h.tt.HasText("A line of what the reads found.") && th.View.Working()
+		return h.tt.HasText("Used 30 tools") && h.tt.HasText("A line of what the reads found.") && th.View.Working()
 	})
 	h.tt.Advance(time.Second)
 	h.a.listFor(th.id()).ScrollTo(0, ui.Start)

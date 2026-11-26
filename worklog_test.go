@@ -20,10 +20,15 @@ func TestWorkSummarySaysWhatTheStepsDid(t *testing.T) {
 		want  string
 	}{
 		{nil, "Worked"},
-		{[]client.WorkStep{{Kind: "command"}, {Kind: "edit", Path: "a.go"}, {Kind: "command"}, {Kind: "search"}}, "Ran 2 commands · edited 1 file · searched 1 time"},
+		{[]client.WorkStep{{Kind: "command"}, {Kind: "edit", Path: "a.go"}, {Kind: "command"}, {Kind: "search"}}, "Ran 2 commands · made 1 edit · searched 1 time"},
 		{[]client.WorkStep{{Kind: "read", Path: "a"}, {Kind: "read", Path: "b"}, {Kind: "read", Path: "c"}, {Kind: "read", Path: "d"}, {Kind: "command"}}, "Read 4 files · ran 1 command"},
-		// A file edited three times is one file edited.
-		{[]client.WorkStep{{Kind: "edit", Path: "a.go"}, {Kind: "edit", Path: "a.go"}, {Kind: "edit", Path: "a.go"}}, "Edited 1 file"},
+		// Repeated reads of the same file count once, while edits count operations
+		// because multi-file patches carry only one Path.
+		{[]client.WorkStep{{Kind: "read", Path: "a.go"}, {Kind: "read", Path: "a.go"}}, "Read 1 file"},
+		{[]client.WorkStep{{Kind: "edit", Path: "a.go", Title: "Edit a.go, b.go"}}, "Made 1 edit"},
+		{[]client.WorkStep{{Kind: "edit", Path: "a.go"}, {Kind: "edit", Path: "a.go"}, {Kind: "edit", Path: "a.go"}}, "Made 3 edits"},
+		// Pathless reads (such as WebFetch) count as tools rather than files.
+		{[]client.WorkStep{{Kind: "read", Title: "WebFetch https://a"}, {Kind: "read", Title: "WebFetch https://b"}}, "Used 2 tools"},
 		{[]client.WorkStep{{Kind: "tool", Subagent: sub}, {Kind: "tool"}, {Kind: "url"}}, "Started 1 subagent · used 2 tools"},
 	} {
 		if got := workSummary(tc.steps); got != tc.want {
@@ -36,19 +41,21 @@ func TestClassifyWork(t *testing.T) {
 	one, two := []client.WorkStep{{Kind: "command"}}, []client.WorkStep{{Kind: "command"}, {Kind: "edit"}}
 	for _, tc := range []struct {
 		e    entry
+		act  workActivity
 		open bool
 		want workMode
 	}{
-		{entry{work: one}, false, workInlineSingle},
-		{entry{work: one}, true, workExpanded},
-		{entry{work: one, paused: "Waiting for approval"}, false, workSettledCollapsed},
-		{entry{work: one, working: true}, false, workLiveCollapsed},
-		{entry{work: two, working: true}, true, workExpanded},
-		{entry{work: two}, false, workSettledCollapsed},
-		{entry{work: two}, true, workExpanded},
+		{entry{work: one}, workIdle, false, workInlineSingle},
+		{entry{work: one}, workIdle, true, workInlineSingle},
+		{entry{work: one, paused: "Waiting for approval"}, workPaused, false, workCollapsed},
+		{entry{work: one, working: true}, workRunning, false, workCollapsed},
+		{entry{work: one}, workThinking, false, workCollapsed},
+		{entry{work: two, working: true}, workRunning, true, workExpanded},
+		{entry{work: two}, workIdle, false, workCollapsed},
+		{entry{work: two}, workIdle, true, workExpanded},
 	} {
-		if got := classifyWork(tc.e, tc.open); got != tc.want {
-			t.Errorf("classifyWork(%+v, %v) = %v, want %v", tc.e, tc.open, got, tc.want)
+		if got := classifyWork(tc.e, tc.act, tc.open); got != tc.want {
+			t.Errorf("classifyWork(%+v, %v, %v) = %v, want %v", tc.e, tc.act, tc.open, got, tc.want)
 		}
 	}
 }
@@ -193,7 +200,7 @@ func TestASettledWorkLogFoldsToWhatItDid(t *testing.T) {
 		&client.AssistantEntry{Run: long, Text: "Looked everywhere."},
 	}
 	h, _ := zenThread(t, es, false, "Looked everywhere.")
-	const summary = "Ran 2 commands · edited 1 file · started 1 subagent"
+	const summary = "Ran 2 commands · made 1 edit · started 1 subagent"
 	for _, s := range []string{summary, "1 failed", "40s", "go test ./...", "--- FAIL: TestIt", "Agent alpha", "notes.txt", "Searched 30 times"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("folded, the thread doesn't show %q: %q", s, h.tt.Texts())
@@ -264,5 +271,249 @@ func TestADonePlanFoldsToItsHead(t *testing.T) {
 	clickRect(h, head(t, h.tt, "Checklist 3 of 3 done"))
 	if h.tt.HasText("Read the code") {
 		t.Error("a second click didn't fold the done plan")
+	}
+}
+
+// Completing one command while the run keeps working before starting the
+// next stays on the same single live line so the conversation never jumps.
+func TestSequentialCommandsKeepTheConversationStill(t *testing.T) {
+	at := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	exit0 := 0
+	run := api.NewID()
+	before := append(zenTurns(15), &client.UserEntry{Message: run, Text: "Run two commands.", State: client.Sent})
+	entryWith := func(items []client.WorkStep, ended time.Time) []client.Entry {
+		return append(slices.Clone(before), &client.WorkEntry{Run: run, Items: items, Started: at, Ended: ended})
+	}
+	step1Running := []client.WorkStep{{Item: "c1", Kind: "command", Title: "go vet ./...", Status: api.WorkStarted, Started: at}}
+	step1Done := []client.WorkStep{{Item: "c1", Kind: "command", Title: "go vet ./...", Status: api.WorkCompleted, Exit: &exit0, Started: at, Ended: at.Add(time.Second)}}
+	step2Running := append(slices.Clone(step1Done), client.WorkStep{Item: "c2", Kind: "command", Title: "go test ./...", Status: api.WorkStarted, Started: at.Add(2 * time.Second)})
+
+	h, th := zenThread(t, entryWith(step1Running, time.Time{}), false, "go vet ./...")
+	th.View.Run = api.RunRunning
+	th.View.Turn = &api.Turn{Run: run}
+	h.a.changed()
+	h.tt.Frame()
+
+	msg0, ok := h.tt.Find("Run two commands.")
+	if !ok {
+		t.Fatalf("prompt missing: %q", h.tt.Texts())
+	}
+	line0, ok := h.tt.Find("go vet ./...")
+	if !ok {
+		t.Fatalf("live step missing: %q", h.tt.Texts())
+	}
+
+	// Command 1 finishes; the model thinks before starting command 2.
+	replaceEntries(h, th, entryWith(step1Done, at.Add(time.Second)))
+	h.tt.Advance(100 * time.Millisecond)
+	if !h.tt.HasText("Thinking…") || !h.tt.HasText("go vet ./...") {
+		t.Fatalf("between sequential steps, live line should show Thinking… and last step: %q", h.tt.Texts())
+	}
+	if msg1, ok := h.tt.Find("Run two commands."); !ok || msg1.Y != msg0.Y {
+		t.Fatalf("prompt moved from %v to %v between commands", msg0.Y, msg1.Y)
+	}
+	if line1, ok := h.tt.Find("Thinking… · go vet ./..."); !ok || line1.Y != line0.Y || line1.H != line0.H {
+		t.Fatalf("live line moved from %v to %v between commands", line0, line1)
+	}
+
+	// Command 2 starts.
+	replaceEntries(h, th, entryWith(step2Running, time.Time{}))
+	h.tt.Advance(100 * time.Millisecond)
+	if msg2, ok := h.tt.Find("Run two commands."); !ok || msg2.Y != msg0.Y {
+		t.Fatalf("prompt moved from %v to %v when command 2 started", msg0.Y, msg2.Y)
+	}
+	if line2, ok := h.tt.Find("go test ./..."); !ok || line2.Y != line0.Y || line2.H != line0.H {
+		t.Fatalf("live line moved from %v to %v when command 2 started", line0, line2)
+	}
+}
+
+// A very long live command title stays clipped inside its box and never
+// paints over the step count on the right.
+func TestLongLiveTitleStaysClearOfStepCount(t *testing.T) {
+	at := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	exit0 := 0
+	run := api.NewID()
+	longTitle := "go test -v -count=1 " + strings.Repeat("very-long-package-name/", 12)
+	es := []client.Entry{
+		&client.UserEntry{Message: run, Text: "Test it.", State: client.Sent},
+		&client.WorkEntry{Run: run, Started: at, Items: []client.WorkStep{
+			{Item: "c1", Kind: "command", Title: "go vet .", Status: api.WorkCompleted, Exit: &exit0, Started: at, Ended: at},
+			{Item: "c2", Kind: "command", Title: longTitle, Status: api.WorkStarted, Started: at},
+		}},
+	}
+	h, _ := zenThread(t, es, false, "2 steps")
+	titleBox, ok := h.tt.Find(longTitle)
+	if !ok {
+		t.Fatalf("long live title missing: %q", h.tt.Texts())
+	}
+	stepsBox, ok := h.tt.Find("2 steps")
+	if !ok {
+		t.Fatalf("step count missing: %q", h.tt.Texts())
+	}
+	if titleBox.W <= 0 || titleBox.X+titleBox.W > stepsBox.X {
+		t.Fatalf("live title box %v overlaps step count %v", titleBox, stepsBox)
+	}
+	// Render a reference frame with a short title so the pixels inside
+	// stepsBox must match identically (proving the long title did not bleed).
+	longImg := h.tt.Image()
+	es[1].(*client.WorkEntry).Items[1].Title = "go test ."
+	replaceEntries(h, h.a.current(), es)
+	h.tt.Advance(100 * time.Millisecond)
+	shortImg := h.tt.Image()
+	for y := int(stepsBox.Y); y < int(stepsBox.Y+stepsBox.H); y++ {
+		for x := int(stepsBox.X); x < int(stepsBox.X+stepsBox.W); x++ {
+			if longImg.At(x, y) != shortImg.At(x, y) {
+				t.Fatalf("long live title painted into step count at (%d,%d)", x, y)
+			}
+		}
+	}
+}
+
+// Keyboard users can Tab into an expanded long work log and scroll to its
+// last command.
+func TestExpandedLongWorkLogScrollsByKeyboard(t *testing.T) {
+	at := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	exit0 := 0
+	run := api.NewID()
+	steps := make([]client.WorkStep, 50)
+	for i := range steps {
+		steps[i] = client.WorkStep{Item: fmt.Sprintf("c%d", i), Kind: "command", Title: fmt.Sprintf("make step-%d", i), Status: api.WorkCompleted, Exit: &exit0, Started: at, Ended: at}
+	}
+	es := []client.Entry{
+		&client.UserEntry{Message: api.NewID(), Text: "Build everything.", State: client.Sent},
+		&client.WorkEntry{Run: run, Started: at, Ended: at.Add(time.Minute), Items: steps},
+		&client.AssistantEntry{Run: run, Text: "Built."},
+	}
+	h, _ := zenThread(t, es, false, "Built.")
+	clickRect(h, head(t, h.tt, "Ran 50 commands"))
+	// Focus the inner scroll container via Tab from the header.
+	h.tt.Key(0, ui.KeyTab)
+	if !h.tt.Focused("Work steps") {
+		t.Fatalf("Tab from open work log header did not focus Work steps")
+	}
+	scrollBox, ok := h.tt.Find("Work steps")
+	if !ok {
+		t.Fatal("Work steps scroll container missing")
+	}
+	h.tt.Key(0, ui.KeyEnd)
+	h.tt.Advance(100 * time.Millisecond)
+	last, ok := h.tt.Find("make step-49")
+	if !ok || last.Y+last.H > scrollBox.Y+scrollBox.H+2 || last.Y < scrollBox.Y-2 {
+		t.Fatalf("KeyEnd did not bring make step-49 (%v) into Work steps (%v)", last, scrollBox)
+	}
+}
+
+// An expanded live work log follows newly appended steps and failure
+// output growth when already at its bottom.
+func TestExpandedLiveWorkLogFollowsNewSteps(t *testing.T) {
+	run := api.NewID()
+	base := []client.Entry{&client.UserEntry{Message: run, Text: "Build many.", State: client.Sent}}
+	with := func(steps []client.WorkStep) []client.Entry {
+		return append(slices.Clone(base), &client.WorkEntry{Run: run, Items: steps, Started: time.Now()})
+	}
+	inScroll := func(h *harness, scrollBox ui.Rect, name string) (ui.Rect, bool) {
+		for _, n := range h.tt.AccessAll() {
+			if n.Name == name && !n.Offscreen && n.Bounds.Y >= scrollBox.Y-2 && n.Bounds.Y+n.Bounds.H <= scrollBox.Y+scrollBox.H+2 {
+				return n.Bounds, true
+			}
+		}
+		return ui.Rect{}, false
+	}
+
+	h, th := zenThread(t, with(liveSteps(25)), false, "25 steps")
+	clickRect(h, head(t, h.tt, "make step-24"))
+	scrollBox, ok := h.tt.Find("Work steps")
+	if !ok {
+		t.Fatal("Work steps scroll container missing")
+	}
+	// Newly opened live log starts at its end showing step 24 inside scrollBox.
+	if _, ok := inScroll(h, scrollBox, "make step-24"); !ok {
+		t.Fatalf("expanded live log did not start at end inside Work steps (%v)", scrollBox)
+	}
+	// Command 24 fails with multi-line output (height grows without step count changing),
+	// then steps 25..39 arrive.
+	steps25Fail := liveSteps(25)
+	exit1 := 1
+	steps25Fail[24].Status, steps25Fail[24].Exit = api.WorkFailed, &exit1
+	steps25Fail[24].Output = strings.Repeat("error line\n", 8) + "exit status 1"
+	th.View.Run = api.RunRunning
+	th.View.Turn = &api.Turn{Run: run}
+	replaceEntries(h, th, with(steps25Fail))
+	h.tt.Advance(100 * time.Millisecond)
+	if _, ok := inScroll(h, scrollBox, steps25Fail[24].Output); !ok {
+		t.Fatalf("expanded live log did not follow failure output growth inside Work steps (%v)", scrollBox)
+	}
+	steps40 := liveSteps(40)
+	steps40[24] = steps25Fail[24]
+	replaceEntries(h, th, with(steps40))
+	h.tt.Advance(100 * time.Millisecond)
+	if _, ok := inScroll(h, scrollBox, "make step-39"); !ok {
+		t.Fatalf("expanded live log did not follow appended steps after failure inside Work steps (%v)", scrollBox)
+	}
+}
+
+// A multiline command title (as Codex emits) flattens line breaks in the
+// live shimmer box so it never paints into adjacent rows.
+func TestMultilineLiveTitleStaysInsideOneLine(t *testing.T) {
+	at := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	run := api.NewID()
+	multi := "echo line1\necho line2\necho line3\necho line4"
+	es := []client.Entry{
+		&client.UserEntry{Message: run, Text: "Run multiline.", State: client.Sent},
+		&client.WorkEntry{Run: run, Started: at, Items: []client.WorkStep{
+			{Item: "c1", Kind: "command", Title: multi, Status: api.WorkStarted, Started: at},
+		}},
+	}
+	h, _ := zenThread(t, es, false, "echo line1")
+	promptBox, ok := h.tt.Find("Run multiline.")
+	if !ok {
+		t.Fatalf("prompt missing: %q", h.tt.Texts())
+	}
+	titleBox, ok := h.tt.Find(multi)
+	if !ok {
+		t.Fatalf("multiline title missing: %q", h.tt.Texts())
+	}
+	if titleBox.H > 20 {
+		t.Fatalf("multiline live title grew vertically to %v", titleBox.H)
+	}
+	// Compare pixels inside the prompt row above against a single-line title.
+	multiImg := h.tt.Image()
+	es[1].(*client.WorkEntry).Items[0].Title = "echo ok"
+	replaceEntries(h, h.a.current(), es)
+	h.tt.Advance(100 * time.Millisecond)
+	singleImg := h.tt.Image()
+	for y := int(promptBox.Y); y < int(promptBox.Y+promptBox.H); y++ {
+		for x := int(promptBox.X); x < int(promptBox.X+promptBox.W); x++ {
+			if multiImg.At(x, y) != singleImg.At(x, y) {
+				t.Fatalf("multiline live title painted into prompt row at (%d,%d)", x, y)
+			}
+		}
+	}
+}
+
+// Inside an open Zen fold, a single-step settled work log renders inline
+// directly rather than showing a toggle that removes itself when clicked.
+func TestSingleStepLogInZenModeRendersInline(t *testing.T) {
+	at := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	run := api.NewID()
+	es := []client.Entry{
+		&client.UserEntry{Message: api.NewID(), Text: "Read it.", State: client.Sent},
+		&client.WorkEntry{Run: run, Started: at, Ended: at.Add(5 * time.Second), Items: []client.WorkStep{
+			{Item: "r1", Kind: "read", Title: "Read notes.txt", Path: "notes.txt", Status: api.WorkCompleted, Started: at, Ended: at.Add(5 * time.Second)},
+		}},
+		&client.AssistantEntry{Run: run, Text: "All read."},
+	}
+	h, _ := zenThread(t, es, true, "All read.")
+	line := zenLineText(h.tt)
+	if line == "" {
+		t.Fatalf("no Zen line: %q", h.tt.Texts())
+	}
+	h.click(line)
+	h.tt.Advance(time.Second)
+	if !h.tt.HasText("notes.txt") {
+		t.Fatalf("single step did not render inside open Zen line: %q", h.tt.Texts())
+	}
+	if h.tt.HasText("Read 1 file") {
+		t.Fatalf("single-step work log inside open Zen line showed a collapsible card header: %q", h.tt.Texts())
 	}
 }

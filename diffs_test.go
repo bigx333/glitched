@@ -551,7 +551,7 @@ func TestEachThreadReviewsItsOwnDiff(t *testing.T) {
 		h.a.select_(th)
 		h.until("its transcript", func() bool { return len(changedFiles(entriesOf(th))) == 2 })
 		h.tt.Advance(time.Second)
-		h.openWork("Edited 2 files", "Edit "+path)
+		h.openWork("Made 2 edits", "Edit "+path)
 		h.clickPlugin("Edit " + path)
 		h.diffsRead()
 	}
@@ -597,7 +597,7 @@ func TestOpenInEditorOpensTheEditedFile(t *testing.T) {
 	h.a.select_(h.thread("Both"))
 	h.until("its transcript", func() bool { return h.tt.HasText("Edited both.") })
 	h.tt.Advance(time.Second)
-	h.openWork("Edited 2 files", "Edit "+sidebarPath)
+	h.openWork("Made 2 edits", "Edit "+sidebarPath)
 	h.clickPlugin("Edit " + sidebarPath)
 	h.diffsRead()
 	// Each row is named by the path from the workspace.
@@ -839,7 +839,7 @@ func TestADiffFileShowsItsName(t *testing.T) {
 	h.tt.Advance(time.Second)
 	rel := filepath.Join("packages", "a-rather-long-package-name", "src", "some", "deeply", "nested", "folder")
 	ruled, hooked := filepath.Join(rel, "ruled.txt"), filepath.Join(rel, "hooked.txt")
-	h.openWork("Edited 2 files", "Write "+ruled)
+	h.openWork("Made 2 edits", "Write "+ruled)
 	if h.tt.HasText(ws) {
 		t.Errorf("the work log shows the workspace's path: %q", h.tt.Texts())
 	}

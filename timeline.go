@@ -112,17 +112,15 @@ func thinkingAt(t thread, rs rows) int {
 
 var thinkingLabels = map[api.RunState]string{api.RunStarting: "Thinking…", api.RunRunning: "Thinking…", api.RunStopping: "Stopping…"}
 
-// stepsSayWorking is whether row, the row the thinking row goes under, is
-// a work log whose step is under way, which shows the work itself: a
-// second spinner under it would only say it again. Zen mode's line says
-// the run works, not what it does, and a run stopping says so whatever
-// its steps say.
+// stepsSayWorking is whether row, the row the thinking row would go under,
+// is a work log that shows the run's live state itself (running step,
+// thinking between steps, or stopping), so no separate thinking row pops
+// in and out beneath it. Zen mode keeps its own thinking row.
 func (a *app) stepsSayWorking(t thread, rs rows, row int) bool {
-	if row < 0 || row >= len(rs.es) || a.settings.zen || t.View.Run == api.RunStopping {
+	if row < 0 || row >= len(rs.es) || a.settings.zen {
 		return false
 	}
-	e := rs.es[row]
-	return e.kind == entryWork && e.working
+	return rs.es[row].kind == entryWork
 }
 
 // thinkingRow says the agent is at work: the steps card's working mark and
@@ -588,7 +586,7 @@ func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body *widg
 			a.messageActions(c, t, rs.es, i, col.Hovered() && !e.streaming)
 		})
 	case entryWork:
-		a.workLog(c, t, e.key, e, rs.files)
+		a.workLog(c, t, rs, i, e.key, e, rs.files)
 	case entryPlan:
 		a.planCard(c, t, e)
 	case entryFailed, entryError:

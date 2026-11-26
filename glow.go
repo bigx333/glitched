@@ -2,6 +2,7 @@ package main
 
 import (
 	_ "embed"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -25,21 +26,52 @@ var (
 )
 
 // shimmerText is a label with a shine sweeping across it, again and
-// again; where the window draws without a GPU, plain text.
+// again; where the window draws without a GPU, plain text. Long labels
+// truncate to fit the box so they never paint over sibling controls.
 func shimmerText(c *ui.Context, text string, size float32, base, shine ui.Color) {
-	box := ui.Box(c).Grow(1).Height(size * 1.4)
+	box := ui.Box(c).Grow(1).Shrink(1).MinWidth(0).Height(size * 1.4).Clip()
 	box.Label(text).Draw(func(p *ui.Painter, r ui.Rect) {
-		_, h := p.MeasureText(0, ui.Span{Text: text, Size: size})
+		shown := fitShimmer(p, text, size, r.W)
+		_, h := p.MeasureText(0, ui.Span{Text: shown, Size: size})
 		y := r.Y + (r.H-h)/2
 		if !p.Accelerated() {
-			p.Text(r.X, y, text, size, base)
+			p.Text(r.X, y, shown, size, base)
 			return
 		}
 		secs := float32(p.Now().Sub(shimmerStart).Seconds())
-		shimmer.Text(p, r.X, y, text, size, shader.Options{Values: shimmerValues.
+		shimmer.Text(p, r.X, y, shown, size, shader.Options{Values: shimmerValues.
 			Float(shimmerTime, secs).Color(shimmerBase, base).Color(shimmerShine, shine)})
 		p.AnimationFrame()
 	})
+}
+
+// fitShimmer flattens line breaks to spaces and truncates text with an
+// ellipsis when it exceeds maxW, keeping single-line shimmer boxes from
+// painting over adjacent rows or sibling controls.
+func fitShimmer(p *ui.Painter, text string, size, maxW float32) string {
+	if strings.ContainsAny(text, "\r\n") {
+		text = strings.Join(strings.FieldsFunc(text, func(r rune) bool { return r == '\r' || r == '\n' }), " ")
+	}
+	if maxW <= 0 || text == "" {
+		return text
+	}
+	if w, _ := p.MeasureText(0, ui.Span{Text: text, Size: size}); w <= maxW {
+		return text
+	}
+	rs := []rune(text)
+	lo, hi := 0, len(rs)
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if w, _ := p.MeasureText(0, ui.Span{Text: string(rs[:mid]) + "…", Size: size}); w <= maxW {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	if lo == 0 {
+		return "…"
+	}
+	return string(rs[:lo]) + "…"
 }
 
 // glowLayers are the composer glow's layers: a border this wide, blurred
