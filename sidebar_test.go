@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -25,6 +26,56 @@ func TestShortcutHints(t *testing.T) {
 	tt.HoldModifiers(0)
 	if inSidebar() {
 		t.Error("keycaps still show after ⌘ is let go")
+	}
+}
+
+// Holding ⌘ must not shift the sidebar's rows or anything below them, at
+// any interface font size or sidebar width.
+func TestShortcutHintsKeepLayout(t *testing.T) {
+	for _, size := range []float64{11, 12, 13, 14, 15, 16} {
+		for _, width := range []float32{0, minSidebarWidth} {
+			name := fmt.Sprintf("font_%.0f_w_%.0f", size, width)
+			t.Run(name, func(t *testing.T) {
+				a := offline(t)
+				a.settings.fontSize = size
+				if width > 0 {
+					a.sidebarWidth = width
+				}
+				tt := ui.NewTester(a.view, 1320, 860)
+
+				measure := func() map[string]ui.Rect {
+					out := map[string]ui.Rect{}
+					for _, label := range []string{"New thread", "Search", "Inbox", "Settings"} {
+						r, ok := tt.Find(label)
+						if !ok {
+							t.Fatalf("missing %q in sidebar", label)
+						}
+						out[label] = r
+					}
+					return out
+				}
+
+				before := measure()
+				tt.HoldModifiers(ui.Cmd)
+				after := measure()
+				if _, ok := tt.Find("⌘"); !ok {
+					t.Fatal("keycaps hidden while ⌘ is held")
+				}
+				for _, label := range []string{"New thread", "Search", "Inbox", "Settings"} {
+					b, a := before[label], after[label]
+					if b.Y != a.Y || b.H != a.H {
+						t.Errorf("%q shifted vertically while ⌘ is held: before=%+v after=%+v", label, b, a)
+					}
+				}
+				tt.HoldModifiers(0)
+				released := measure()
+				for _, label := range []string{"New thread", "Search", "Inbox", "Settings"} {
+					if before[label] != released[label] {
+						t.Errorf("%q changed after ⌘ release: before=%+v after=%+v", label, before[label], released[label])
+					}
+				}
+			})
+		}
 	}
 }
 
