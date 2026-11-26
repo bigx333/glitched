@@ -59,6 +59,7 @@ func TestALinksSocketMayCallOnlyItsMethods(t *testing.T) {
 		Projects:  struct{ Projects }{},
 		Skills:    struct{ skillsRole }{},
 		Replies:   linkReplies{},
+		Terminals: struct{ Terminals }{},
 		Authorize: func(_ *http.Request, proved func(Key) bool) (Grant, error) {
 			for _, token := range []string{"link", "full"} {
 				if k := KeyOf(token); proved(k) {
@@ -93,6 +94,7 @@ func TestALinksSocketMayCallOnlyItsMethods(t *testing.T) {
 		"projects.folders", "projects.repos", "projects.clone",
 		"skills.list", "skills.sync", "skills.put", "skills.drop",
 		"hub.append", "hub.acked", "hub.events", "hub.follow",
+		"terminal.open", "terminal.input", "terminal.resize", "terminal.claim",
 	}
 	for _, name := range slices.Concat(allowed, refused) {
 		if methods[name] == nil {

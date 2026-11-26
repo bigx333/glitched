@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 
 	"glitched/internal/api"
@@ -58,10 +59,14 @@ type Thread struct {
 	Context     api.Context // how full its context is; zero until an agent says
 	Session     string      // the provider's id for the thread's conversation; "" until a run binds one
 	Reported    time.Time   // when a child last reported back
+	Alerted     time.Time   // when a child last reported it was blocked on the user
 	LastReport  *api.Report // never written through; its Cursor has no Log
 	Confirmed   api.Confirmed
 	Remote      *Remote // set on a remote child's placeholder, which runs nothing here
 	Origin      *Origin // set on a thread another machine's link started here
+	Role        api.ThreadRole
+	Sweep       *api.SweepSchedule
+	LastSweep   time.Time
 	Runs        []Run
 	Queue       []Message
 	Requests    []Request
@@ -89,7 +94,17 @@ type Run struct {
 	// Dropped marks a run a rewind took out of the thread's conversation:
 	// it stays in the timeline, and the agent no longer has it.
 	Dropped bool
+	// Wake is why the engine started the run on its own; NotWake for a
+	// turn the user asked for or joined. Woke is when it was admitted,
+	// and Prior the thread's UpdatedAt before it. Dismissed is a wake
+	// its Manager quieted: the thread shows it as it does a silent run.
+	Wake      api.WakeKind
+	Woke      time.Time
+	Prior     time.Time
+	Dismissed bool
 }
+
+func (r Run) quiet() bool { return r.Silent || r.Dismissed }
 
 // Remote is a placeholder's: the machine its child was placed on, as
 // api.Remote, and where that child stands there, as far as this engine
@@ -201,10 +216,9 @@ func (t Thread) Live() *Run {
 	return nil
 }
 
-// lastTurn is the thread's last finished run that isn't silent.
 func (t Thread) lastTurn() (Run, bool) {
 	for i := len(t.Runs) - 1; i >= 0; i-- {
-		if r := t.Runs[i]; r.State == RunFinished && !r.Silent {
+		if r := t.Runs[i]; r.State == RunFinished && !r.quiet() {
 			return r, true
 		}
 	}
@@ -239,9 +253,9 @@ func (t Thread) slot() RunState {
 
 func (t Thread) runAt(id api.ID) int { return index(t.Runs, func(r Run) bool { return r.ID == id }) }
 
-func (t Thread) silentRun(id api.ID) bool {
+func (t Thread) quietRun(id api.ID) bool {
 	i := t.runAt(id)
-	return i >= 0 && t.Runs[i].Silent
+	return i >= 0 && t.Runs[i].quiet()
 }
 
 func (t Thread) messageAt(id api.ID) int {
@@ -353,6 +367,9 @@ func View(t Thread) api.Thread {
 		Reported:    t.Reported,
 		Confirmed:   t.Confirmed,
 		Resumable:   t.resumable(),
+		Role:        t.Role,
+		Sweep:       cloneSweep(t.Sweep),
+		LastSweep:   t.LastSweep,
 	}
 	if t.Context != (api.Context{}) {
 		c := t.Context
@@ -380,7 +397,7 @@ func View(t Thread) api.Thread {
 		v.Origin = &o
 	}
 	if r := t.Live(); r != nil {
-		v.Turn = &api.Turn{Run: r.ID, Model: r.Model, Access: r.Access, Silent: r.Silent}
+		v.Turn = &api.Turn{Run: r.ID, Model: r.Model, Access: r.Access, Silent: r.quiet(), Dismissed: r.Dismissed}
 	}
 	if t.LastReport != nil {
 		r := *t.LastReport
@@ -402,4 +419,65 @@ func View(t Thread) api.Thread {
 		}
 	}
 	return v
+}
+
+func cloneSweep(s *api.SweepSchedule) *api.SweepSchedule {
+	if s == nil {
+		return nil
+	}
+	c := *s
+	return &c
+}
+
+// normalizeSweep keeps an off schedule's prompt, so turning sweeps back
+// on brings it back.
+func normalizeSweep(s *api.SweepSchedule) *api.SweepSchedule {
+	if s == nil || s.IntervalSeconds <= 0 && strings.TrimSpace(s.Prompt) == "" {
+		return nil
+	}
+	c := *s
+	return &c
+}
+
+func sweepEqual(a, b *api.SweepSchedule) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// NextSweepAt is when a Manager's next scheduled sweep is due as of now,
+// or false when none is: not a manager, sweeps off, busy, settled,
+// deleted, or holding queued work. A snooze, a usage limit's continue, and
+// a limit a dismissed wake hit each hold the sweep until they pass.
+func NextSweepAt(t Thread, now time.Time) (time.Time, bool) {
+	if t.Role != api.RoleManager || t.Sweep == nil || t.Sweep.IntervalSeconds <= 0 ||
+		t.Deleted || t.settled() || t.Remote != nil || t.Origin != nil {
+		return time.Time{}, false
+	}
+	if t.Live() != nil || t.resumable() || t.next() != nil {
+		return time.Time{}, false
+	}
+	base := t.LastSweep
+	if t.UpdatedAt.After(base) {
+		base = t.UpdatedAt
+	}
+	if lt, ok := t.lastTurn(); ok && lt.Ended.After(base) {
+		base = lt.Ended
+	}
+	due := base.Add(time.Duration(t.Sweep.IntervalSeconds) * time.Second)
+	if t.Disposition.State == api.Snoozed && t.Disposition.Until.After(due) {
+		due = t.Disposition.Until
+	}
+	if resets, ok := View(t).LimitResume(now); ok {
+		if after := resets.Add(api.LimitOverdue + time.Nanosecond); after.After(due) {
+			due = after
+		}
+	}
+	if n := len(t.Runs); n > 0 {
+		if l := t.Runs[n-1].Limit; l != nil && l.Resets.After(t.Runs[n-1].Ended) && now.Before(l.Resets) && l.Resets.After(due) {
+			due = l.Resets
+		}
+	}
+	return due, true
 }

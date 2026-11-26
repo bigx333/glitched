@@ -31,6 +31,7 @@ import (
 	"glitched/internal/provider/codex"
 	"glitched/internal/provider/fake"
 	"glitched/internal/providerlog"
+	"glitched/internal/pty"
 	"glitched/internal/runtime"
 	"glitched/internal/secrets"
 	"glitched/internal/store"
@@ -111,6 +112,8 @@ type Config struct {
 	// program on PATH as it is. The claude_path, codex_path and agy_path
 	// of older files are read as its Paths.
 	Launch map[string]provider.Launch `json:"providers,omitempty"`
+	// CustomACP defines additional user-configured ACP providers in engine.json.
+	CustomACP []acp.CustomProfile `json:"custom_acp,omitempty"`
 	// Children caps the child threads agents start. Its zero fields take
 	// engine.DefaultLimits'.
 	Children engine.Limits `json:"children,omitzero"`
@@ -165,6 +168,8 @@ type Config struct {
 	// RemoteSteps is called as a remote child's create reaches each step,
 	// as runtime.WithRemoteSteps says: where tests hold it.
 	RemoteSteps func(step string, placeholder api.ID) `json:"-"`
+	// Shell overrides the login shell command used for engine-owned PTYs.
+	Shell []string `json:"-"`
 }
 
 // CompactBeforeExpireEnabled reports whether automatic idle compaction is
@@ -244,6 +249,19 @@ func (cfg *Config) WithAgents() {
 		l := cfg.Launch[p.Provider]
 		cfg.Providers[p.Provider] = &acp.Adapter{Profile: p, Path: l.Path, Home: l.Home, Args: l.Args}
 	}
+	for _, c := range cfg.CustomACP {
+		p, err := c.ToProfile()
+		if err != nil {
+			slog.Warn("skipping invalid custom ACP profile", "provider", c.Provider, "err", err)
+			continue
+		}
+		if _, exists := cfg.Providers[p.Provider]; exists {
+			slog.Warn("skipping duplicate custom ACP profile", "provider", p.Provider)
+			continue
+		}
+		l := cfg.Launch[p.Provider]
+		cfg.Providers[p.Provider] = &acp.Adapter{Profile: p, Path: l.Path, Home: l.Home, Args: l.Args}
+	}
 }
 
 // Save records cfg in engine.json under its Dir, for Defaults. Keys of
@@ -260,6 +278,7 @@ func (cfg Config) Save() error {
 // backup.
 type Daemon struct {
 	host  *runtime.Host
+	ptys  *pty.Manager
 	awake *awake // nil where the engine can't keep the machine awake
 	clis  *clis
 	store *store.Store
@@ -536,16 +555,18 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	}
 	d.undo = append(d.undo, h.Close)
 	d.host = h
+	d.ptys = pty.New(pty.Options{Command: cfg.Shell})
+	d.undo = append(d.undo, d.ptys.Close)
 
 	svc := d.startPlugins(cfg)
 	d.undo = append(d.undo, func() error { svc.Close(); return nil })
 	d.clis = newCLIs(ctx, cfg.Dir, cfg.Providers, h, cliupdate.NewChecker(cfg.Versions, filepath.Join(cfg.Dir, "cli-versions.json")))
 	cmds := newCommandLists(ctx, cfg.Providers)
 	ls := &launches{dir: cfg.Dir, mux: cfg.Providers, commands: cmds}
-	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: cmds, Launches: ls, CLIs: d.clis, Asks: h, Secrets: h, Projects: endpoint{h, d, false}, Skills: h, Search: h}}
+	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: cmds, Launches: ls, CLIs: d.clis, Asks: h, Secrets: h, Projects: endpoint{h, d, false}, Skills: h, Search: h, Terminals: d.ptys}}
 	g := &grants{dir: cfg.Dir, base: ctx}
 	tailnetServer := func(tn transport.Transport) *transport.Server {
-		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Launches: ls, CLIs: d.clis, Secrets: h, Projects: endpoint{h, d, true}, Skills: h, Replies: h, Search: h, Authorize: g.authorize}
+		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Launches: ls, CLIs: d.clis, Secrets: h, Projects: endpoint{h, d, true}, Skills: h, Replies: h, Search: h, Terminals: d.ptys, Authorize: g.authorize}
 	}
 	for _, tn := range tns[1:] {
 		servers = append(servers, tailnetServer(tn))
@@ -690,6 +711,31 @@ func (d *Daemon) Endpoint() api.Endpoint { return endpoint{d.host, d, false} }
 // Search queries the full-text transcript index on this engine.
 func (d *Daemon) Search(ctx context.Context, q api.SearchQuery) (api.SearchResult, error) {
 	return d.host.Search(ctx, q)
+}
+
+// OpenTerminal opens or reattaches to an engine-owned PTY for workspace.
+func (d *Daemon) OpenTerminal(ctx context.Context, req api.TerminalOpen) (api.TerminalStream, error) {
+	return d.ptys.OpenTerminal(ctx, req)
+}
+
+// TerminalInput sends input bytes to an engine-owned PTY.
+func (d *Daemon) TerminalInput(ctx context.Context, req api.TerminalInput) error {
+	return d.ptys.TerminalInput(ctx, req)
+}
+
+// TerminalResize resizes an engine-owned PTY.
+func (d *Daemon) TerminalResize(ctx context.Context, req api.TerminalResize) error {
+	return d.ptys.TerminalResize(ctx, req)
+}
+
+// TerminalClaim claims or transfers the terminal input lease.
+func (d *Daemon) TerminalClaim(ctx context.Context, req api.TerminalClaim) (api.TerminalLease, error) {
+	return d.ptys.TerminalClaim(ctx, req)
+}
+
+// ReleaseTerminalClient releases any active terminal input leases held by client.
+func (d *Daemon) ReleaseTerminalClient(client string) {
+	d.ptys.ReleaseTerminalClient(client)
 }
 
 // SetLimits applies new child limits at once, as engine.json's Children

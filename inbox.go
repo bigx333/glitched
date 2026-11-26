@@ -54,10 +54,14 @@ const rowHeight = 32
 // else the inbox.
 func (a *app) categoryOf(t thread) category {
 	d := disposition(t)
+	snoozed := d.State == api.Snoozed && a.now.Before(d.Until)
 	switch {
+	case snoozed && t.View.Role == api.RoleManager && len(t.View.Requests) == 0:
+		// A Manager's quiet wake runs while it sleeps.
+		return catSnoozed
 	case a.statusOf(t) == statusWorking:
 		return catWorking
-	case d.State == api.Snoozed && a.now.Before(d.Until):
+	case snoozed:
 		return catSnoozed
 	case d.State == api.Settled:
 		return catSettled
@@ -493,6 +497,18 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 // rowTitle is a row's thread's title, bold while unread; a child lifted
 // into Working has the way to its parent under it.
 func (a *app) rowTitle(c *ui.Context, t thread) {
+	if t.View.Role != api.RoleManager {
+		a.rowName(c, t)
+		return
+	}
+	ui.Row(c).Grow(1).Shrink(1).Gap(6).AlignItems(ui.Center).Children(func() {
+		a.rowName(c, t)
+		a.tip(c, ui.Text(c, "M").FontSize(10).Bold().TextColor(palette.accent).Padding(1, 5).Radius(4).
+			Background(palette.accent.Alpha(0.14)).Shrink(0), "Manager thread")
+	})
+}
+
+func (a *app) rowName(c *ui.Context, t thread) {
 	var name ui.Element
 	if p, ok := a.parentOf(t); ok {
 		ui.Column(c).Grow(1).Shrink(1).Children(func() {

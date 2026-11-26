@@ -164,6 +164,10 @@ type ThreadCreate struct {
 	// Settled is a link's create of a thread its machine settled before
 	// this engine took it: the thread is made settled, and starts nothing.
 	Settled bool `json:"settled,omitempty"`
+	// Role configures specialized behavior such as RoleManager.
+	Role ThreadRole `json:"role,omitempty"`
+	// Sweep configures periodic background sweeps when Role is RoleManager.
+	Sweep *SweepSchedule `json:"sweep,omitempty"`
 }
 
 // Fork asks for a thread that goes on from Run, a finished turn of
@@ -294,11 +298,12 @@ type ThreadRename struct {
 // be wider than its parent's, and a narrower access narrows the threads
 // under it to it too.
 type ThreadConfigure struct {
-	Model     *string `json:"model,omitempty"`
-	Effort    *string `json:"effort,omitempty"`
-	Fast      *bool   `json:"fast,omitempty"`
-	Ultrafast *bool   `json:"ultrafast,omitempty"`
-	Access    *Access `json:"access,omitempty"`
+	Model     *string        `json:"model,omitempty"`
+	Effort    *string        `json:"effort,omitempty"`
+	Fast      *bool          `json:"fast,omitempty"`
+	Ultrafast *bool          `json:"ultrafast,omitempty"`
+	Access    *Access        `json:"access,omitempty"`
+	Sweep     *SweepSchedule `json:"sweep,omitempty"`
 }
 
 // Onto is the model and access c makes of m and a: what it gives in
@@ -342,6 +347,7 @@ func (QueueCancel) intentType() string     { return "queue.cancel" }
 func (QueueMove) intentType() string       { return "queue.move" }
 func (QueueSteer) intentType() string      { return "queue.steer" }
 func (ResumeCancel) intentType() string    { return "resume.cancel" }
+func (WakeDismiss) intentType() string     { return "wake.dismiss" }
 
 // StartsTurn is whether i may start a turn of its thread's agent: a
 // message, the go-ahead for what a stop held, a queued message sent now,
@@ -371,6 +377,7 @@ var intents = map[string]func() Intent{
 	"queue.move":       func() Intent { return new(QueueMove) },
 	"queue.steer":      func() Intent { return new(QueueSteer) },
 	"resume.cancel":    func() Intent { return new(ResumeCancel) },
+	"wake.dismiss":     func() Intent { return new(WakeDismiss) },
 }
 
 func IntentType(i Intent) string { return i.intentType() }
@@ -438,6 +445,8 @@ func (c *Command) UnmarshalJSON(b []byte) error {
 	case *QueueSteer:
 		c.Body = *v
 	case *ResumeCancel:
+		c.Body = *v
+	case *WakeDismiss:
 		c.Body = *v
 	}
 	c.ID, c.Target, c.Revision, c.Expires, c.Caller = w.ID, w.Target, w.Revision, w.Expires, w.Caller
@@ -526,10 +535,11 @@ type UsageLimit struct {
 // were. Silent is true for background maintenance runs such as idle
 // compaction.
 type Turn struct {
-	Run    ID       `json:"run"`
-	Model  ModelRef `json:"model"`
-	Access Access   `json:"access"`
-	Silent bool     `json:"silent,omitempty"`
+	Run       ID       `json:"run"`
+	Model     ModelRef `json:"model"`
+	Access    Access   `json:"access"`
+	Silent    bool     `json:"silent,omitempty"`
+	Dismissed bool     `json:"dismissed,omitempty"`
 }
 
 // Thread is the projection a client reads. Working is derived from Run and
@@ -586,6 +596,12 @@ type Thread struct {
 	// Origin is set on a thread another machine's link started: the
 	// thread there that started it, through which link.
 	Origin *Origin `json:"origin,omitempty"`
+	// Role identifies specialized threads such as RoleManager.
+	Role ThreadRole `json:"role,omitempty"`
+	// Sweep configures periodic sweeps for Manager threads.
+	Sweep *SweepSchedule `json:"sweep,omitempty"`
+	// LastSweep is when the most recent scheduled sweep started.
+	LastSweep time.Time `json:"lastSweep,omitzero"`
 }
 
 // Placement is where a remote child runs: on the machine labelled
@@ -699,8 +715,9 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // refuses, and sends a link's thread's view on its commit's last event,
 // which a version 21 follower drops, so it never says what a stop there
 // holds; version 23 removes thread.revert and records fork handoffs
-// separately from old conversation rewinds.
-const Protocol = 23
+// separately from old conversation rewinds; version 24 adds Manager
+// thread roles, periodic sweep schedules, and silent wake dismissal.
+const Protocol = 24
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host

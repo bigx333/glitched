@@ -45,25 +45,25 @@ func apply(t Thread, e Event) (Thread, error) {
 	switch b := e.Body.(type) {
 	case api.AssistantDelta:
 		// Transcript only: no projection changes, so no revision either.
-		if !t.silentRun(b.Run) {
+		if !t.quietRun(b.Run) {
 			t.UpdatedAt = e.At
 		}
 		return t, nil
 	case api.WorkItem:
 		// Transcript only: no projection changes, so no revision either.
-		if !t.silentRun(b.Run) {
+		if !t.quietRun(b.Run) {
 			t.UpdatedAt = e.At
 		}
 		return t, nil
 	case api.SubagentDelta, api.SubagentWork, api.SubagentEnded:
 		// Transcript only, as a work item is, and never the run's own.
-		if run := subagentRun(b); !t.silentRun(run) {
+		if run := subagentRun(b); !t.quietRun(run) {
 			t.UpdatedAt = e.At
 		}
 		return t, nil
 	case api.PlanUpdated:
 		// Transcript only, as a work item is.
-		if !t.silentRun(b.Run) {
+		if !t.quietRun(b.Run) {
 			t.UpdatedAt = e.At
 		}
 		return t, nil
@@ -71,7 +71,7 @@ func apply(t Thread, e Event) (Thread, error) {
 		if t.Exists() {
 			return t, &TransitionError{"thread", "created", "created"}
 		}
-		t = Thread{ID: e.Thread, Workspace: b.Workspace, Project: b.Project, Branch: b.Branch, Title: b.Title, Model: b.Model, Access: b.Access, OwnerEpoch: 1, Parent: b.Parent}
+		t = Thread{ID: e.Thread, Workspace: b.Workspace, Project: b.Project, Branch: b.Branch, Title: b.Title, Model: b.Model, Access: b.Access, OwnerEpoch: 1, Parent: b.Parent, Role: b.Role, Sweep: cloneSweep(b.Sweep)}
 		if r := b.Remote; r != nil {
 			t.Remote = &Remote{Engine: r.Engine, Link: r.Link, State: RemoteCreating}
 		}
@@ -132,14 +132,14 @@ func apply(t Thread, e Event) (Thread, error) {
 	case api.ThreadRenamed:
 		t.Title = b.Title
 	case api.SessionBound:
-		silent = t.silentRun(b.Run)
+		silent = t.quietRun(b.Run)
 		// Another conversation holds none of what the last one did.
 		if t.Session != "" && b.Session != t.Session {
 			t.Context = api.Context{}
 		}
 		t.Session = b.Session
 	case api.ContextReported:
-		silent = t.silentRun(b.Run)
+		silent = t.quietRun(b.Run)
 		// A report that leaves the window out keeps the one known, if it
 		// names the same model: another's, or an unnamed one's, is not
 		// this one's.
@@ -152,10 +152,12 @@ func apply(t Thread, e Event) (Thread, error) {
 		}
 		t.Context = c
 	case api.AccessGranted:
+		silent = t.quietRun(b.Run)
 		if i := t.runAt(b.Run); i >= 0 {
 			t.Confirmed.Access = &api.ConfirmedAccess{Run: b.Run, Asked: t.Runs[i].Access, Access: b.Access, Mode: b.Mode, Why: b.Why}
 		}
 	case api.ModelConfirmed:
+		silent = t.quietRun(b.Run)
 		if i := t.runAt(b.Run); i >= 0 {
 			t.Confirmed.Model = &api.ConfirmedModel{Run: b.Run, Asked: t.Runs[i].Model, Model: b.Model, Effort: b.Effort, Why: b.Why}
 		}
@@ -167,8 +169,35 @@ func apply(t Thread, e Event) (Thread, error) {
 			t.Context.CacheExpires = time.Time{}
 		}
 		t.Model, t.Access = b.Model, b.Access
+		if b.SweepSet {
+			t.Sweep = cloneSweep(b.Sweep)
+		}
+	case api.WakeDismissed:
+		i := t.runAt(b.Run)
+		if i < 0 {
+			return t, &TransitionError{"wake", "none", "dismissed"}
+		}
+		t.Runs = slices.Clone(t.Runs)
+		t.Runs[i].Dismissed = true
+		t.UpdatedAt = b.UpdatedAt
+		if b.Reports {
+			t.Reported = b.Reported
+		}
+		silent = true
+	case api.WakeRaised:
+		i := t.runAt(b.Run)
+		if i < 0 {
+			return t, &TransitionError{"wake", "none", "raised"}
+		}
+		t.Runs = slices.Clone(t.Runs)
+		t.Runs[i].Wake, t.Runs[i].Dismissed = api.NotWake, false
+	case api.SweepStarted:
+		t.LastSweep = e.At
 	case api.ChildReported:
 		t.Reported = e.At
+		if b.Kind == api.ReportBlocked {
+			t.Alerted = e.At
+		}
 		t.LastReport = &api.Report{Child: b.Child, Kind: b.Kind, Cursor: api.Cursor{Seq: e.Seq}}
 	case api.ThreadDeleted:
 		if t.Live() != nil {
@@ -193,18 +222,18 @@ func apply(t Thread, e Event) (Thread, error) {
 		if r := t.Live(); r == nil || r.ID != b.Run || !steerable[r.State] {
 			return t, &TransitionError{"message", "unclaimed", "claimed by a run that cannot be steered"}
 		}
-		silent = t.silentRun(b.Run)
+		silent = t.quietRun(b.Run)
 		if err = t.claim(b.Message, b.Run); err == nil && b.Steer {
 			t.Queue[t.messageAt(b.Message)].Mode = api.SteerActive
 		}
 	case api.MessageDispatched:
 		if m, ok := t.Message(b.Message); ok {
-			silent = t.silentRun(m.Run)
+			silent = t.quietRun(m.Run)
 		}
 		err = t.setMessage(b.Message, QueueDispatched)
 	case api.MessageCancelled:
 		if m, ok := t.Message(b.Message); ok {
-			silent = t.silentRun(m.Run)
+			silent = t.quietRun(m.Run)
 		}
 		err = t.setMessage(b.Message, QueueCancelled)
 	case api.MessageHeld:
@@ -234,7 +263,7 @@ func apply(t Thread, e Event) (Thread, error) {
 		}
 	case api.MessageUncertain:
 		if m, ok := t.Message(b.Message); ok {
-			silent = t.silentRun(m.Run)
+			silent = t.quietRun(m.Run)
 		}
 		err = t.setMessage(b.Message, QueueUncertain)
 	case api.TurnAdmitted:
@@ -245,10 +274,14 @@ func apply(t Thread, e Event) (Thread, error) {
 			break
 		}
 		silent = b.Silent
-		t.Runs = append(slices.Clip(t.Runs), Run{ID: b.Run, Generation: b.Generation, Model: t.Model, Access: t.Access, Silent: b.Silent, State: RunStarting})
+		r := Run{ID: b.Run, Generation: b.Generation, Model: t.Model, Access: t.Access, Silent: b.Silent, State: RunStarting, Wake: b.Wake}
+		if b.Wake != api.NotWake {
+			r.Woke, r.Prior = e.At, b.Prior
+		}
+		t.Runs = append(slices.Clip(t.Runs), r)
 		t.Generation = b.Generation
 	case api.TurnStarted:
-		silent = t.silentRun(b.Run)
+		silent = t.quietRun(b.Run)
 		if err = t.setRun(b.Run, RunRunning); err == nil {
 			err = t.setMessage(b.Run, QueueDispatched)
 		}
@@ -258,12 +291,12 @@ func apply(t Thread, e Event) (Thread, error) {
 		if i := t.runAt(b.Run); i < 0 || t.Runs[i].State != RunStarting {
 			return t, nil
 		}
-		silent = t.silentRun(b.Run)
+		silent = t.quietRun(b.Run)
 		if err = t.setRun(b.Run, RunRunning); err == nil {
 			err = t.setMessage(b.Run, QueueDispatched)
 		}
 	case api.TurnStopping:
-		silent = t.silentRun(b.Run)
+		silent = t.quietRun(b.Run)
 		if err = t.setRun(b.Run, RunStopping); err == nil {
 			err = t.voidRequests(b.Run)
 		}
@@ -271,11 +304,11 @@ func apply(t Thread, e Event) (Thread, error) {
 		if r := t.Live(); r == nil || r.ID != b.Run || r.State != RunStopping {
 			return t, &TransitionError{"run", "not stopping", "signalled"}
 		}
-		silent = t.silentRun(b.Run)
+		silent = t.quietRun(b.Run)
 		t.Runs = slices.Clone(t.Runs)
 		t.Runs[len(t.Runs)-1].Signalled = true
 	case api.TurnUncertain:
-		silent = t.silentRun(b.Run)
+		silent = t.quietRun(b.Run)
 		// A run uncertain already is only said to be so again, for a
 		// rewind: nothing about the thread is newer.
 		if i := t.runAt(b.Run); i >= 0 && t.Runs[i].State == RunUncertain {
@@ -289,7 +322,7 @@ func apply(t Thread, e Event) (Thread, error) {
 			err = t.voidRequests(b.Run)
 		}
 	case api.TurnEnded:
-		silent = t.silentRun(b.Run)
+		silent = t.quietRun(b.Run)
 		if err = t.setRun(b.Run, RunFinished); err == nil {
 			i := t.runAt(b.Run)
 			t.Runs[i].Outcome, t.Runs[i].Error, t.Runs[i].Ended, t.Runs[i].Limit = b.Outcome, b.Error, e.At, b.Limit

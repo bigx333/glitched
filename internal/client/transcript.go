@@ -27,6 +27,8 @@ type Transcript struct {
 	wakes    map[api.ID]*wake
 	silent   map[api.ID]*CompactionEntry // silent idle-compaction runs, by run id
 	dropped  map[api.ID]bool
+
+	dismissed map[api.ID]bool
 	// edits are the indexes of Entries changed in place, in the order
 	// they changed, but for the first editsBase, dropped: Edits reads
 	// them. An entry changed again before a reader was told of its last
@@ -549,7 +551,10 @@ func (t *Transcript) apply(e api.Event) {
 			t.edited(ce)
 			break
 		}
-		t.Ended = e.At
+		if !t.dismissed[b.Run] {
+			t.Ended = e.At
+		}
+		delete(t.dismissed, b.Run)
 		end := TurnEnd{Outcome: b.Outcome, At: e.At}
 		if began, ok := t.began[b.Run]; ok {
 			end.Took = e.At.Sub(began)
@@ -559,6 +564,13 @@ func (t *Transcript) apply(e api.Event) {
 		if b.Outcome == api.OutcomeFailed && b.Error != "" {
 			t.add(&ErrorEntry{Run: b.Run, Error: b.Error})
 		}
+	case api.WakeDismissed:
+		if t.dismissed == nil {
+			t.dismissed = map[api.ID]bool{}
+		}
+		t.dismissed[b.Run] = true
+	case api.WakeRaised:
+		delete(t.dismissed, b.Run)
 	case api.ThreadDeleted:
 		t.Deleted = true
 	case api.ChildReported:

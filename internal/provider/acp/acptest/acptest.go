@@ -52,6 +52,10 @@ type Entry struct {
 	PID    int             `json:"pid"`
 	// Argv, on initialize, is what the fake was started with.
 	Argv []string `json:"argv,omitempty"`
+	// Env, on initialize, is the fake's environment that an access level
+	// or a profile may set: the variables named OPENCODE_*, GEMINI_CLI_*
+	// and GLX_*.
+	Env []string `json:"env,omitempty"`
 }
 
 // Main plays the fake agent, until its stdin closes, when the environment
@@ -125,6 +129,11 @@ func (f *fake) record(method string, params any) {
 	e := Entry{Method: method, Params: raw, PID: os.Getpid()}
 	if method == "initialize" {
 		e.Argv = os.Args[1:]
+		for _, kv := range os.Environ() {
+			if strings.HasPrefix(kv, "OPENCODE_") || strings.HasPrefix(kv, "GEMINI_CLI_") || strings.HasPrefix(kv, "GLX_") {
+				e.Env = append(e.Env, kv)
+			}
+		}
 	}
 	line, _ := json.Marshal(e)
 	fh, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -378,16 +387,23 @@ func (f *fake) sendCommands(ctx context.Context, id acp.SessionId) {
 // Modes are agy's, as `session/new` lists them.
 var Modes = []string{"default", "accept-edits", "auto", "plan"}
 
-func (f *fake) modes() *acp.SessionModeState {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	offered := Modes
+func offered() []string {
 	switch v := os.Getenv(Offered); v {
 	case "":
+		return Modes
 	case "none":
 		return nil
 	default:
-		offered = strings.Split(v, ",")
+		return strings.Split(v, ",")
+	}
+}
+
+func (f *fake) modes() *acp.SessionModeState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	offered := offered()
+	if offered == nil {
+		return nil
 	}
 	s := &acp.SessionModeState{CurrentModeId: acp.SessionModeId(f.mode), AvailableModes: []acp.SessionMode{}}
 	for _, m := range offered {
@@ -790,17 +806,17 @@ func (f *fake) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (acp.L
 	return acp.LoadSessionResponse{ConfigOptions: options, Modes: f.modes()}, err
 }
 
-// SetSessionMode takes one of Modes, as agy does, and tells of it before
-// it answers; "mode-refused" takes none.
 func (f *fake) SetSessionMode(ctx context.Context, p acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
 	f.record("session/set_mode", p)
-	if f.is("mode-refused") || !slices.Contains(Modes, string(p.ModeId)) {
+	if f.is("mode-refused") || !slices.Contains(offered(), string(p.ModeId)) {
 		return acp.SetSessionModeResponse{}, acp.NewInvalidParams("Unknown mode: " + string(p.ModeId))
 	}
 	f.mu.Lock()
 	f.mode = string(p.ModeId)
 	f.mu.Unlock()
-	f.send(ctx, p.SessionId, acp.SessionUpdate{CurrentModeUpdate: &acp.SessionCurrentModeUpdate{CurrentModeId: p.ModeId}})
+	if !f.is("mode-silent") {
+		f.send(ctx, p.SessionId, acp.SessionUpdate{CurrentModeUpdate: &acp.SessionCurrentModeUpdate{CurrentModeId: p.ModeId}})
+	}
 	return acp.SetSessionModeResponse{}, nil
 }
 

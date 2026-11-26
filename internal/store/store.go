@@ -191,10 +191,15 @@ CREATE TABLE threads (
 	context_cache_expires INTEGER,
 	remote      TEXT,
 	origin      TEXT,
+	role        TEXT NOT NULL DEFAULT '',
+	sweep       TEXT,
+	last_sweep  INTEGER,
+	alerted     INTEGER,
 	CHECK ((disposition = 1) = (until IS NOT NULL))
 ) STRICT;
 CREATE INDEX threads_live_updated ON threads (deleted, updated_at DESC, id);
 CREATE INDEX threads_by_parent ON threads (parent, deleted, id) WHERE parent IS NOT NULL;
+CREATE INDEX threads_sweeping ON threads (id) WHERE deleted = 0 AND role = 'manager' AND sweep IS NOT NULL;
 
 CREATE TABLE runs (
 	thread     BLOB NOT NULL REFERENCES threads (id),
@@ -212,6 +217,10 @@ CREATE TABLE runs (
 	limit_resets     INTEGER,
 	resume_cancelled INTEGER NOT NULL DEFAULT 0 CHECK (resume_cancelled IN (0, 1)),
 	dropped    INTEGER NOT NULL DEFAULT 0 CHECK (dropped IN (0, 1)),
+	wake       INTEGER NOT NULL DEFAULT 0 CHECK (wake BETWEEN 0 AND 2),
+	woke       INTEGER,
+	prior      INTEGER,
+	dismissed  INTEGER NOT NULL DEFAULT 0 CHECK (dismissed IN (0, 1)),
 	PRIMARY KEY (thread, ord),
 	CHECK ((state = 'finished') = (outcome IS NOT NULL)),
 	CHECK ((state = 'finished') = (ended IS NOT NULL))
@@ -259,7 +268,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 20
+const schemaVersion = 21
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -400,8 +409,23 @@ CREATE INDEX IF NOT EXISTS threads_by_parent ON threads (parent, deleted, id) WH
 DROP INDEX IF EXISTS commands_by_seq;
 DELETE FROM meta WHERE key = 'commands_pruned';
 `,
+	19: `
+ALTER TABLE threads ADD COLUMN role TEXT NOT NULL DEFAULT '';
+ALTER TABLE threads ADD COLUMN sweep TEXT;
+ALTER TABLE threads ADD COLUMN last_sweep INTEGER;
+ALTER TABLE threads ADD COLUMN alerted INTEGER;
+UPDATE threads SET alerted = (
+	SELECT e.at FROM events e
+	WHERE e.thread = threads.id AND e.type = 'child.reported' AND json_extract(CAST(e.payload AS TEXT), '$.kind') = 2
+	ORDER BY e.seq DESC LIMIT 1);
+CREATE INDEX threads_sweeping ON threads (id) WHERE deleted = 0 AND role = 'manager' AND sweep IS NOT NULL;
+ALTER TABLE runs ADD COLUMN wake INTEGER NOT NULL DEFAULT 0 CHECK (wake BETWEEN 0 AND 2);
+ALTER TABLE runs ADD COLUMN woke INTEGER;
+ALTER TABLE runs ADD COLUMN prior INTEGER;
+ALTER TABLE runs ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0 CHECK (dismissed IN (0, 1));
+`,
 	// Full-text search over the transcript: backfillTranscriptFTS fills it.
-	19: transcriptFTS,
+	20: transcriptFTS,
 }
 
 func (s *Store) migrate() error {
@@ -506,7 +530,7 @@ func upgradeOnce(ctx context.Context, conn *sql.Conn, version int) error {
 	if _, err := tx.ExecContext(ctx, upgrades[version]+fmt.Sprintf(`PRAGMA user_version = %d;`, version+1)); err != nil {
 		return err
 	}
-	if version == 19 {
+	if version == 20 {
 		if err := backfillTranscriptFTS(ctx, tx); err != nil {
 			return err
 		}

@@ -104,7 +104,7 @@ func findMatches(es []entry, query string, words bool) []int {
 
 // findText is the words a row shows, a line each.
 func findText(e entry) string {
-	parts := []string{e.text}
+	parts := []string{e.text, e.note}
 	step := func(s client.WorkStep) {
 		parts = append(parts, s.Title, s.Path, s.Output)
 	}
@@ -122,6 +122,9 @@ func findText(e entry) string {
 	}
 	for _, s := range e.plan {
 		parts = append(parts, s.Text)
+	}
+	if e.request != nil {
+		parts = append(parts, e.request.Kind, string(e.request.Body))
 	}
 	for _, r := range e.reports {
 		parts = append(parts, r.Title, r.Outcome)

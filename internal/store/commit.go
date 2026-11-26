@@ -701,16 +701,16 @@ func ids(ctx context.Context, q querier, query string, args ...any) ([]api.ID, e
 }
 
 const threadSelectCols = `id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
-	parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote, origin`
+	parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote, origin, role, sweep, last_sweep, alerted`
 
 func scanThreadRow(row interface{ Scan(...any) error }, t *engine.Thread) error {
 	var model []byte
-	var until, reported, cacheExpires sql.NullInt64
-	var report, granted, remote, origin sql.NullString
+	var until, reported, cacheExpires, lastSweep, alerted sql.NullInt64
+	var report, granted, remote, origin, sweep sql.NullString
 	var updated int64
 	err := row.Scan(idScan{&t.ID}, &t.Workspace, &t.Title, &model, &t.Access, &t.Revision, &t.OwnerEpoch,
 		&t.Generation, &t.Disposition.State, &until, &updated, &t.Deleted, idScan{&t.Parent}, &t.Tokens, &reported, &report, &t.Session,
-		&t.Project, &t.Branch, &t.Context.Used, &t.Context.Window, &t.Context.Stale, &t.Context.Model, &granted, &cacheExpires, &remote, &origin)
+		&t.Project, &t.Branch, &t.Context.Used, &t.Context.Window, &t.Context.Stale, &t.Context.Model, &granted, &cacheExpires, &remote, &origin, &t.Role, &sweep, &lastSweep, &alerted)
 	if err != nil {
 		return err
 	}
@@ -751,6 +751,18 @@ func scanThreadRow(row interface{ Scan(...any) error }, t *engine.Thread) error 
 			return err
 		}
 	}
+	if sweep.Valid {
+		t.Sweep = &api.SweepSchedule{}
+		if err := json.Unmarshal([]byte(sweep.String), t.Sweep); err != nil {
+			return err
+		}
+	}
+	if lastSweep.Valid {
+		t.LastSweep = fromNanos(lastSweep.Int64)
+	}
+	if alerted.Valid {
+		t.Alerted = fromNanos(alerted.Int64)
+	}
 	return nil
 }
 
@@ -758,10 +770,17 @@ func scanRunRow(rows *sql.Rows) (api.ID, engine.Run, bool, error) {
 	var thread api.ID
 	var r engine.Run
 	var outcome, access sql.NullByte
-	var ended, resets sql.NullInt64
+	var ended, resets, woke, prior sql.NullInt64
 	var model sql.NullString
-	if err := rows.Scan(idScan{&thread}, idScan{&r.ID}, &r.Generation, &r.State, &r.Signalled, &outcome, &r.Error, &ended, &model, &access, &r.Silent, &resets, &r.ResumeCancelled, &r.Dropped); err != nil {
+	if err := rows.Scan(idScan{&thread}, idScan{&r.ID}, &r.Generation, &r.State, &r.Signalled, &outcome, &r.Error, &ended, &model, &access, &r.Silent, &resets, &r.ResumeCancelled, &r.Dropped,
+		&r.Wake, &woke, &prior, &r.Dismissed); err != nil {
 		return thread, r, false, err
+	}
+	if woke.Valid {
+		r.Woke = fromNanos(woke.Int64)
+	}
+	if prior.Valid {
+		r.Prior = fromNanos(prior.Int64)
 	}
 	if resets.Valid {
 		r.Limit = &api.UsageLimit{}
@@ -830,7 +849,7 @@ func (s *Store) liveViews(ctx context.Context, q querier) ([]api.Thread, error) 
 		return nil, nil
 	}
 
-	if err := queryEach(ctx, q, `SELECT r.thread, r.id, r.generation, r.state, r.signalled, r.outcome, r.error, r.ended, r.model, r.access, r.silent, r.limit_resets, r.resume_cancelled, r.dropped
+	if err := queryEach(ctx, q, `SELECT r.thread, r.id, r.generation, r.state, r.signalled, r.outcome, r.error, r.ended, r.model, r.access, r.silent, r.limit_resets, r.resume_cancelled, r.dropped, r.wake, r.woke, r.prior, r.dismissed
 		FROM runs r JOIN threads t ON t.id = r.thread WHERE t.deleted = 0 ORDER BY r.thread, r.ord`, func(rows *sql.Rows) error {
 		thread, r, hasModel, err := scanRunRow(rows)
 		if err != nil {
@@ -891,7 +910,7 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 		return t, err
 	}
 
-	err = each(ctx, q, `SELECT thread, id, generation, state, signalled, outcome, error, ended, model, access, silent, limit_resets, resume_cancelled, dropped FROM runs WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
+	err = each(ctx, q, `SELECT thread, id, generation, state, signalled, outcome, error, ended, model, access, silent, limit_resets, resume_cancelled, dropped, wake, woke, prior, dismissed FROM runs WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
 		_, r, hasModel, err := scanRunRow(rows)
 		if err != nil {
 			return err
@@ -953,13 +972,26 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 	if err != nil {
 		return err
 	}
-	var until, reported, report, granted, cacheExpires, remote, origin any
+	var until, reported, report, granted, cacheExpires, remote, origin, sweep, lastSweep, alerted any
 	if t.Origin != nil {
 		b, err := json.Marshal(t.Origin)
 		if err != nil {
 			return err
 		}
 		origin = string(b)
+	}
+	if t.Sweep != nil {
+		b, err := json.Marshal(t.Sweep)
+		if err != nil {
+			return err
+		}
+		sweep = string(b)
+	}
+	if !t.LastSweep.IsZero() {
+		lastSweep = t.LastSweep.UnixNano()
+	}
+	if !t.Alerted.IsZero() {
+		alerted = t.Alerted.UnixNano()
 	}
 	if t.Remote != nil {
 		b, err := json.Marshal(t.Remote)
@@ -992,8 +1024,8 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 		report = string(b)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO threads (id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
-			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote, origin)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote, origin, role, sweep, last_sweep, alerted)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET workspace = excluded.workspace, title = excluded.title, model = excluded.model,
 			access = excluded.access, revision = excluded.revision, owner_epoch = excluded.owner_epoch, generation = excluded.generation,
 			disposition = excluded.disposition, until = excluded.until, updated_at = excluded.updated_at, deleted = excluded.deleted,
@@ -1001,10 +1033,10 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 			report = excluded.report, session = excluded.session, project = excluded.project, branch = excluded.branch,
 			context_used = excluded.context_used, context_window = excluded.context_window, context_stale = excluded.context_stale,
 			context_model = excluded.context_model, granted = excluded.granted, context_cache_expires = excluded.context_cache_expires,
-			remote = excluded.remote, origin = excluded.origin`,
+			remote = excluded.remote, origin = excluded.origin, role = excluded.role, sweep = excluded.sweep, last_sweep = excluded.last_sweep, alerted = excluded.alerted`,
 		t.ID[:], t.Workspace, t.Title, string(model), t.Access, t.Revision, t.OwnerEpoch, t.Generation, t.Disposition.State, until,
 		t.UpdatedAt.UnixNano(), t.Deleted, nullID(t.Parent), t.Tokens, reported, report, t.Session, t.Project, t.Branch,
-		t.Context.Used, t.Context.Window, t.Context.Stale, t.Context.Model, granted, cacheExpires, remote, origin); err != nil {
+		t.Context.Used, t.Context.Window, t.Context.Stale, t.Context.Model, granted, cacheExpires, remote, origin, t.Role, sweep, lastSweep, alerted); err != nil {
 		return err
 	}
 	for i, r := range t.Runs {
@@ -1021,15 +1053,24 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 				resets = l.Resets.UnixNano()
 			}
 		}
+		var woke, prior any
+		if !r.Woke.IsZero() {
+			woke = r.Woke.UnixNano()
+		}
+		if !r.Prior.IsZero() {
+			prior = r.Prior.UnixNano()
+		}
 		admitted, err := json.Marshal(r.Model)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO runs (thread, ord, id, generation, state, signalled, outcome, error, ended, model, access, silent, limit_resets, resume_cancelled, dropped) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO runs (thread, ord, id, generation, state, signalled, outcome, error, ended, model, access, silent, limit_resets, resume_cancelled, dropped, wake, woke, prior, dismissed)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (thread, ord) DO UPDATE SET state = excluded.state, signalled = excluded.signalled, outcome = excluded.outcome,
-				error = excluded.error, ended = excluded.ended, limit_resets = excluded.limit_resets,
-				resume_cancelled = excluded.resume_cancelled, dropped = excluded.dropped`,
-			t.ID[:], i, r.ID[:], r.Generation, r.State, r.Signalled, outcome, r.Error, ended, string(admitted), r.Access, r.Silent, resets, r.ResumeCancelled, r.Dropped); err != nil {
+				error = excluded.error, ended = excluded.ended, silent = excluded.silent, limit_resets = excluded.limit_resets,
+				resume_cancelled = excluded.resume_cancelled, dropped = excluded.dropped, wake = excluded.wake, dismissed = excluded.dismissed`,
+			t.ID[:], i, r.ID[:], r.Generation, r.State, r.Signalled, outcome, r.Error, ended, string(admitted), r.Access, r.Silent, resets, r.ResumeCancelled, r.Dropped,
+			r.Wake, woke, prior, r.Dismissed); err != nil {
 			return fmt.Errorf("store: run %s: %w", r.ID, err)
 		}
 	}

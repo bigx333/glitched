@@ -63,6 +63,8 @@ type Server struct {
 	Replies Replies
 	// Search queries the full-text transcript index for any admitted client.
 	Search Searcher
+	// Terminals serves engine-owned workspace PTYs for any admitted client.
+	Terminals Terminals
 	// Authorize admits a socket whose client proved, in the handshake, that
 	// it holds one of the keys Authorize knows. proved reports whether the
 	// proof was made with a key; Authorize asks it of every key it knows,
@@ -233,6 +235,9 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 	if grant.Link != nil {
 		ctx = api.WithLink(ctx, *grant.Link)
 	}
+	tc := &termClients{srv: s}
+	ctx = context.WithValue(ctx, termClientsKey{}, tc)
+	defer tc.releaseAll()
 	k := s.keepalive
 	if k == (keepalive{}) {
 		k = defaultKeepalive
@@ -417,6 +422,62 @@ type Replies interface {
 // Searcher searches indexed user and assistant messages across threads.
 type Searcher interface {
 	Search(ctx context.Context, q api.SearchQuery) (api.SearchResult, error)
+}
+
+// Terminals serves engine-owned PTYs for admitted clients.
+type Terminals interface {
+	OpenTerminal(ctx context.Context, req api.TerminalOpen) (api.TerminalStream, error)
+	TerminalInput(ctx context.Context, req api.TerminalInput) error
+	TerminalResize(ctx context.Context, req api.TerminalResize) error
+	TerminalClaim(ctx context.Context, req api.TerminalClaim) (api.TerminalLease, error)
+	AcquireTerminalClient(client string)
+	ReleaseTerminalClient(client string)
+}
+
+type termClientsKey struct{}
+
+// termClients are the terminal client IDs one socket used.
+type termClients struct {
+	srv *Server
+	mu  sync.Mutex
+	ids map[string]struct{}
+}
+
+func (tc *termClients) record(id string) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if _, ok := tc.ids[id]; ok {
+		return
+	}
+	if tc.ids == nil {
+		tc.ids = map[string]struct{}{}
+	}
+	tc.ids[id] = struct{}{}
+	if tc.srv.Terminals != nil {
+		tc.srv.Terminals.AcquireTerminalClient(id)
+	}
+}
+
+func (tc *termClients) releaseAll() {
+	tc.mu.Lock()
+	ids := tc.ids
+	tc.ids = nil
+	tc.mu.Unlock()
+	if tc.srv.Terminals == nil {
+		return
+	}
+	for id := range ids {
+		tc.srv.Terminals.ReleaseTerminalClient(id)
+	}
+}
+
+func recordTermClient(ctx context.Context, id string) {
+	if id == "" {
+		return
+	}
+	if tc, _ := ctx.Value(termClientsKey{}).(*termClients); tc != nil {
+		tc.record(id)
+	}
 }
 
 // Asks are what glitched mcp asks of the engine for request_credentials.
@@ -760,6 +821,24 @@ func (s *Server) methods() map[string]handler {
 	}
 	if sr := s.Search; sr != nil {
 		m["search"] = callHandler(sr.Search)
+	}
+	if tm := s.Terminals; tm != nil {
+		m["terminal.open"] = streamHandler(func(ctx context.Context, req api.TerminalOpen) (source[api.TerminalItem], error) {
+			recordTermClient(ctx, req.Client)
+			return tm.OpenTerminal(ctx, req)
+		})
+		m["terminal.input"] = callHandler(func(ctx context.Context, req api.TerminalInput) (struct{}, error) {
+			recordTermClient(ctx, req.Client)
+			return struct{}{}, tm.TerminalInput(ctx, req)
+		})
+		m["terminal.resize"] = callHandler(func(ctx context.Context, req api.TerminalResize) (struct{}, error) {
+			recordTermClient(ctx, req.Client)
+			return struct{}{}, tm.TerminalResize(ctx, req)
+		})
+		m["terminal.claim"] = callHandler(func(ctx context.Context, req api.TerminalClaim) (api.TerminalLease, error) {
+			recordTermClient(ctx, req.Client)
+			return tm.TerminalClaim(ctx, req)
+		})
 	}
 	if h := s.Hub; h != nil {
 		m["hub.append"] = callHandler(h.Append)

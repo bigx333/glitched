@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"glitched/internal/plugins"
 	"glitched/internal/plugins/pack"
 )
 
@@ -53,19 +54,32 @@ func main() {
 			fail(err.Error())
 		}
 	}
+	if err := sign(dir, key); err != nil {
+		fail(err.Error())
+	}
+}
+
+// sign signs each plugin in dir with key, and refuses one that isn't
+// TypeScript.
+func sign(dir string, key *pack.Key) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		fail(err.Error())
+		return err
 	}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		if err := pack.Sign(filepath.Join(dir, e.Name()), key); err != nil {
-			fail(e.Name() + ": " + err.Error())
+		plugin := filepath.Join(dir, e.Name())
+		if v := plugins.CheckTypeScriptPlugin(plugin); len(v) > 0 {
+			return fmt.Errorf("%s is not TypeScript: %v", e.Name(), v)
+		}
+		if err := pack.Sign(plugin, key); err != nil {
+			return fmt.Errorf("%s: %w", e.Name(), err)
 		}
 		fmt.Println("signed", e.Name(), "with key", key.ID())
 	}
+	return nil
 }
 
 // loadKey reads the release key at path, or makes it when fresh.

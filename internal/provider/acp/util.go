@@ -84,20 +84,28 @@ type tapped struct {
 	prefix string
 	tap    provider.Tap
 	sent   func([]byte)
+	edit   func([]byte) []byte
 }
 
-func (t tapped) Write(p []byte) (int, error) {
+func (t tapped) Write(b []byte) (int, error) {
+	p := b
+	if t.edit != nil {
+		p = t.edit(b)
+	}
 	if t.wire != io.Discard {
 		t.wire.Write(append([]byte(t.prefix), p...))
 	}
-	n, err := t.w.Write(p)
+	_, err := t.w.Write(p)
 	if err == nil {
 		t.tap.Line(provider.ACP, provider.Stdin, p)
 	}
 	if err == nil && t.sent != nil {
 		t.sent(p)
 	}
-	return n, err
+	if err != nil {
+		return 0, err
+	}
+	return len(b), nil
 }
 
 // redacted is the SDK's log, less what the agent sent: a line it could

@@ -191,15 +191,8 @@ func TestEveryExamplePluginUsesTypeScriptAndCompiles(t *testing.T) {
 		if err := json.Unmarshal(b, &m); err != nil {
 			t.Fatalf("%s: %v", e.Name(), err)
 		}
-		if !strings.HasSuffix(m.Main, ".ts") {
-			t.Errorf("%s: main = %q, want .ts", e.Name(), m.Main)
-		}
-		if m.Glitched.Service != "" && !strings.HasSuffix(m.Glitched.Service, ".ts") {
-			t.Errorf("%s: service = %q, want .ts", e.Name(), m.Glitched.Service)
-		}
-		js, _ := filepath.Glob(filepath.Join(dir, "*.js"))
-		if len(js) > 0 {
-			t.Errorf("%s: unexpected .js files %v", e.Name(), js)
+		for _, v := range CheckTypeScriptPlugin(dir) {
+			t.Errorf("%s: %v", e.Name(), v)
 		}
 		p, err := plugin.Load(dir, plugin.Options{Main: m.Main, Prelude: Prelude, Contract: Contract, ContractVersion: ContractVersion, DataDir: t.TempDir()})
 		if err != nil {
