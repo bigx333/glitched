@@ -302,13 +302,16 @@ func (v *Vault) everLocked(thread api.ID, name, value string) {
 
 // Forget deletes thread's folder and everything in it, after recording any
 // on-disk values in v.ever so active consumers still redact them after a
-// restart.
+// restart. If reading the folder fails, it returns the error without
+// deleting the folder so no unread secret is lost.
 func (v *Vault) Forget(thread api.ID) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	defer v.publishLocked()
 	defer v.checkLocked(thread)
-	_, _ = v.valuesLocked(thread)
+	if _, err := v.valuesLocked(thread); err != nil && !errors.Is(err, ErrDeleted) {
+		return err
+	}
 	delete(v.loaded, thread)
 	return os.RemoveAll(v.Dir(thread))
 }

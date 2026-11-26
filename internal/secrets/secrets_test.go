@@ -138,6 +138,35 @@ func TestLegacyENVFileRetainedOnCaseSensitiveVolume(t *testing.T) {
 	}
 }
 
+// Forget refuses to delete a thread's vault directory when an on-disk
+// credential cannot be read into redaction history first.
+func TestForgetFailsWithoutDeletingUnreadableSecret(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses chmod 0000")
+	}
+	dir := t.TempDir()
+	th := api.NewID()
+	if err := New(dir).Put(th, map[string]string{"KEY": "secret-must-not-vanish"}); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(dir, th.String(), "KEY")
+	if err := os.Chmod(keyPath, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(keyPath, 0o600) })
+
+	reopened := New(dir)
+	if err := reopened.Forget(th); err == nil {
+		t.Fatal("Forget succeeded despite unreadable secret file")
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		t.Fatalf("unreadable secret file was deleted: %v", err)
+	}
+	if h := scanned(t, reopened); h.Complete {
+		t.Fatalf("vault reported Complete=true after unreadable Forget: %+v", h)
+	}
+}
+
 // scanned is v's Held once the vault has read every thread's folder.
 func scanned(t *testing.T, v *Vault) Held {
 	t.Helper()

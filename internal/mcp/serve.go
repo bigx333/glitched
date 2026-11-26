@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"slices"
 	"strings"
@@ -131,11 +132,15 @@ func sleepContext(ctx context.Context, d time.Duration) bool {
 // watchOwnership watches a child thread for live takeover or handback and
 // emits notifications/tools/list_changed when UserOwned flips so MCP clients
 // refresh their cached tool catalog (e.g. exposing request_credentials).
-// It handles both StreamThread and StreamSnapshot items and re-subscribes
-// after stream overflow or transient errors.
+// It handles both StreamThread and StreamSnapshot items, stops on terminal
+// errors (ErrNotFound, ErrNotAllowed, deleted thread), and re-subscribes
+// with bounded backoff on transient or repeated zero-item stream errors.
 func watchOwnership(ctx context.Context, tools *Tools, lastChild bool, notify func(string)) {
 	const minBackoff = 50 * time.Millisecond
 	backoff := minBackoff
+	terminal := func(err error) bool {
+		return errors.Is(err, api.ErrNotFound) || errors.Is(err, api.ErrNotAllowed)
+	}
 	check := func(th api.Thread) {
 		if cur := !th.UserOwned(); cur != lastChild {
 			lastChild = cur
@@ -145,7 +150,7 @@ func watchOwnership(ctx context.Context, tools *Tools, lastChild bool, notify fu
 	for ctx.Err() == nil {
 		snap, err := tools.Engine.Read(ctx, api.Query{Thread: tools.Origin.Thread})
 		if err != nil {
-			if !sleepContext(ctx, backoff) {
+			if terminal(err) || !sleepContext(ctx, backoff) {
 				return
 			}
 			backoff = min(backoff*2, time.Second)
@@ -155,30 +160,42 @@ func watchOwnership(ctx context.Context, tools *Tools, lastChild bool, notify fu
 			return
 		}
 		th := snap.Threads[0]
-		if th.Parent.IsZero() && th.Origin == nil {
+		if th.Deleted || (th.Parent.IsZero() && th.Origin == nil) {
 			return
 		}
 		check(th)
 		stream, err := tools.Engine.Open(ctx, api.Subscription{Thread: tools.Origin.Thread, After: snap.Cursor, Views: true})
 		if err != nil {
-			if !sleepContext(ctx, backoff) {
+			if terminal(err) || !sleepContext(ctx, backoff) {
 				return
 			}
 			backoff = min(backoff*2, time.Second)
 			continue
 		}
-		backoff = minBackoff
+		delivered := false
+		var nextErr error
 		for {
 			item, err := stream.Next(ctx)
 			if err != nil {
+				nextErr = err
 				break
 			}
+			delivered = true
+			backoff = minBackoff
 			switch {
 			case item.Thread != nil && (item.Thread.ID == tools.Origin.Thread || item.Thread.ID.IsZero()):
+				if item.Thread.Deleted {
+					stream.Close()
+					return
+				}
 				check(*item.Thread)
 			case item.Snapshot != nil:
 				for _, st := range item.Snapshot.Threads {
 					if st.ID == tools.Origin.Thread || (len(item.Snapshot.Threads) == 1 && st.ID.IsZero()) {
+						if st.Deleted {
+							stream.Close()
+							return
+						}
 						check(st)
 						break
 					}
@@ -186,6 +203,15 @@ func watchOwnership(ctx context.Context, tools *Tools, lastChild bool, notify fu
 			}
 		}
 		stream.Close()
+		if terminal(nextErr) {
+			return
+		}
+		if !delivered {
+			if !sleepContext(ctx, backoff) {
+				return
+			}
+			backoff = min(backoff*2, time.Second)
+		}
 	}
 }
 

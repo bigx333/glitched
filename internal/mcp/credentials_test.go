@@ -264,6 +264,9 @@ func (s *scriptedStream) Close() error { return nil }
 type scriptedEndpoint struct {
 	mu         sync.Mutex
 	thread     api.Thread
+	reads      []api.Thread
+	readErr    error
+	readCount  atomic.Int32
 	streams    []*scriptedStream
 	opens      int
 	afterClose atomic.Bool
@@ -288,9 +291,19 @@ func (e *scriptedEndpoint) Read(ctx context.Context, _ api.Query) (api.Snapshot,
 			return api.Snapshot{}, ctx.Err()
 		}
 	}
+	n := int(e.readCount.Add(1)) - 1
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return api.Snapshot{Threads: []api.Thread{e.thread}}, nil
+	if e.readErr != nil {
+		return api.Snapshot{}, e.readErr
+	}
+	th := e.thread
+	if n < len(e.reads) {
+		th = e.reads[n]
+	} else if len(e.reads) > 0 {
+		th = e.reads[len(e.reads)-1]
+	}
+	return api.Snapshot{Threads: []api.Thread{th}}, nil
 }
 func (e *scriptedEndpoint) Open(_ context.Context, _ api.Subscription) (api.Stream, error) {
 	if e.closed.Load() {
@@ -307,13 +320,18 @@ func (e *scriptedEndpoint) Open(_ context.Context, _ api.Subscription) (api.Stre
 }
 
 // The ownership watcher handles ownership changes delivered in StreamSnapshot,
-// re-subscribes after ErrOverflow, and never outlives Serve at EOF.
+// re-subscribes after ErrOverflow and consumes the new stream, stops on
+// ErrNotFound without polling, and never outlives Serve at EOF.
 func TestOwnershipWatcherHandlesSnapshotOverflowAndShutdown(t *testing.T) {
 	childID, parentID := api.NewID(), api.NewID()
+	initial := api.Thread{ID: childID, Parent: parentID, TakenOver: false}
 	taken := api.Thread{ID: childID, Parent: parentID, TakenOver: true}
 	handedBack := api.Thread{ID: childID, Parent: parentID, TakenOver: false}
 	ep := &scriptedEndpoint{
-		thread: api.Thread{ID: childID, Parent: parentID, TakenOver: false},
+		// Read 0 (initialize) & Read 1 (watch start): initial (TakenOver=false).
+		// Read 2 (reconnect after ErrOverflow): still taken (TakenOver=true), so
+		// the second list_changed can only come from consuming stream 2's handedBack.
+		reads: []api.Thread{initial, initial, taken},
 		streams: []*scriptedStream{
 			// First stream delivers takeover via StreamSnapshot, then overflows.
 			{
@@ -366,9 +384,16 @@ func TestOwnershipWatcherHandlesSnapshotOverflowAndShutdown(t *testing.T) {
 	if l := nextLine("snapshot list_changed"); !strings.Contains(l, `"notifications/tools/list_changed"`) {
 		t.Fatalf("got %s, want notifications/tools/list_changed from snapshot", l)
 	}
-	// 2) After ErrOverflow, watcher reconnects and picks up handback from stream 2
+	// 2) After ErrOverflow, reconnect Read still reports taken; watcher must
+	// consume stream 2's handedBack item to emit the second list_changed.
 	if l := nextLine("post-overflow list_changed"); !strings.Contains(l, `"notifications/tools/list_changed"`) {
 		t.Fatalf("got %s, want notifications/tools/list_changed after overflow", l)
+	}
+	ep.mu.Lock()
+	opens := ep.opens
+	ep.mu.Unlock()
+	if opens < 2 {
+		t.Fatalf("expected reconnect to open stream 2, got opens=%d", opens)
 	}
 	inW.Close()
 	if err := <-done; err != nil {
@@ -378,6 +403,35 @@ func TestOwnershipWatcherHandlesSnapshotOverflowAndShutdown(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	if ep.afterClose.Load() {
 		t.Fatal("ownership watcher called Endpoint after Serve returned")
+	}
+
+	// Terminal ErrNotFound on stream ends the watcher without polling Read again.
+	gone := &scriptedEndpoint{
+		thread:  initial,
+		streams: []*scriptedStream{{err: api.ErrNotFound}},
+	}
+	inR2, inW2 := io.Pipe()
+	outR2, outW2 := io.Pipe()
+	done2 := make(chan error, 1)
+	go func() {
+		done2 <- mcp.Serve(ctx, inR2, outW2, &mcp.Tools{
+			Engine: gone,
+			Origin: mcp.Origin{Thread: childID, Access: api.AccessAsk, Child: true},
+		})
+		outW2.Close()
+	}()
+	sc2 := bufio.NewScanner(outR2)
+	io.WriteString(inW2, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`+"\n")
+	if !sc2.Scan() {
+		t.Fatal("no initialize reply for gone stream test")
+	}
+	time.Sleep(150 * time.Millisecond)
+	if reads := gone.readCount.Load(); reads > 2 {
+		t.Fatalf("watcher kept polling after ErrNotFound: readCount=%d, want <= 2", reads)
+	}
+	inW2.Close()
+	if err := <-done2; err != nil {
+		t.Fatalf("Serve (gone): %v", err)
 	}
 
 	// Shutdown race: EOF arrives while initialize is still inside Read.
