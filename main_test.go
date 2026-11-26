@@ -48,7 +48,9 @@ func TestView(t *testing.T) {
 	if h.a.selected != fix.id() {
 		t.Fatalf("selected %s, want %s", h.a.selected, fix.id())
 	}
-	h.until("its transcript", func() bool { return h.tt.HasText("Why does it flicker?") && h.tt.HasText("Read main.go") })
+	h.until("its transcript", func() bool {
+		return h.tt.HasText("Why does it flicker?") && h.tt.HasText("Used 1 tool · made 1 edit")
+	})
 	if h.a.backend.Unread(fix.Thread) {
 		t.Error("the thread shown is still unread")
 	}
@@ -159,6 +161,7 @@ func TestSendStartsAThread(t *testing.T) {
 		return strings.Contains(texts(entriesOf(h.a.current())), "May I edit it?") && h.a.statusOf(h.a.current()) == statusApproval
 	})
 	h.tt.Advance(time.Second)
+	h.openWork("Paused for approval", "Read main.go")
 	for _, s := range []string{"Looking at the code.", "May I edit it?", "Read main.go"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("no %q in %q", s, h.tt.Texts())
@@ -396,7 +399,9 @@ func TestServers(t *testing.T) {
 	})
 
 	h.click(th.View.Title)
-	h.until("its transcript, from the server", func() bool { return h.tt.HasText("Which keys are old?") && h.tt.HasText("Read main.go") })
+	h.until("its transcript, from the server", func() bool {
+		return h.tt.HasText("Which keys are old?") && h.tt.HasText("Used 1 tool · made 1 edit")
+	})
 	for _, s := range []string{"Open in", "Commit & push", "Toggle terminal  ⌘J", "Toggle diff  ⌘D", "Attach files"} {
 		if _, ok := h.tt.Find(s); ok {
 			t.Errorf("a server's thread offers %q, which works on this machine's files", s)
@@ -1219,7 +1224,9 @@ func TestQuickAsk(t *testing.T) {
 	if th.env != h.local() || th.View.Workspace != "/work/agent-phone" || th.View.Title != "Why does the SIP stack drop calls?" {
 		t.Fatalf("opened %q in %s on %v", th.View.Title, th.View.Workspace, th.env)
 	}
-	h.until("the question in the thread", func() bool { return h.tt.HasText("Why does the SIP stack drop calls?") && h.tt.HasText("Read main.go") })
+	h.until("the question in the thread", func() bool {
+		return h.tt.HasText("Why does the SIP stack drop calls?") && h.tt.HasText("Used 1 tool · made 1 edit")
+	})
 }
 
 // The preview pane and the diff share the side of the chat: one at a time.

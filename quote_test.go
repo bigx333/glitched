@@ -518,8 +518,14 @@ func TestSelectionBarAboveNearComposer(t *testing.T) {
 	h, _ := quoteReady(t)
 	h.untilShown("the reply's end", "Done.")
 	h.until("the turn's end", func() bool { return !h.a.current().View.Working() })
+	// A short thread starts at the top: in a short window, its end is over
+	// the composer.
+	h.tt.SetSize(1320, 420)
 	h.tt.Advance(time.Second)
 	r := doubleClick(h, "Done.")
+	if c := h.a.composerAt; r.Y+r.H < c.Y-40 {
+		t.Fatalf("Done. at %v, not just over the composer at %v", r, c)
+	}
 	if !barShown(h) || h.a.quote.text != "Done" {
 		t.Fatalf("double-clicked Done., bar %v on %q", barShown(h), h.a.quote.text)
 	}

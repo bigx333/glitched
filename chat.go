@@ -47,7 +47,12 @@ func (a *app) chatPage(c *ui.Context) {
 	}
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
 		chat := ui.Column(c).Key("chat").Grow(1).Shrink(1).MinWidth(minChatWidth)
-		a.chatWidth = chat.Bounds().W
+		// What this frame lays out, the next draws with: the window may not
+		// ask for one.
+		if w := chat.Bounds().W; w != a.chatWidth {
+			a.chatWidth = w
+			c.Invalidate()
+		}
 		chat.Children(func() {
 			// The header is glass, the window's vibrancy as the sidebar's;
 			// the chat is below it, on the background, and doesn't scroll

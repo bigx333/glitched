@@ -320,6 +320,11 @@ type sight struct {
 	wrapped                   float32
 }
 
+// same is whether s and was draw the card in the same place.
+func (s sight) same(was sight) bool {
+	return s.header == was.header && s.card == was.card && s.lead == was.lead && s.texts == was.texts && s.wrapped == was.wrapped
+}
+
 // shownText is a text a waiting card shows, by its key, and where the last
 // frame drew its lines.
 type shownText struct {
@@ -667,6 +672,13 @@ func (a *app) requestAnswers(c *ui.Context, t thread, r *client.RequestEntry) {
 		// padding under it.
 		s.wrapped = max(0, row.Bounds().H-max(allow.Bounds().H, always.Bounds().H, session.Bounds().H, deny.Bounds().H)-12)
 		a.drawn[r.Request] = s
+		// The card fits, and its sight records, what the last frame laid
+		// out: until the two agree, the next frame, which the window may
+		// not ask for, fits it again. Skip when drew is nil (card built
+		// standalone without timeline swapping drew/drawn).
+		if a.drew != nil && !s.same(a.drew[r.Request]) {
+			c.Invalidate()
+		}
 	}
 	began := a.pressBegan(r.Request, allow.Pressed() || always.Valid() && always.Pressed() || session.Valid() && session.Pressed() || deny.Pressed())
 	if allow.Clicked() {

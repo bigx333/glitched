@@ -106,7 +106,9 @@ func clipStep(s string) string {
 
 // planCard is a run's plan in the timeline, a step a line as the agent
 // last said it: done steps faint and struck through, the one at work
-// marked, spinning while the run is.
+// marked, spinning while the run is. A plan with every step done starts
+// folded to its head; a click on the head folds or unfolds it, with the
+// head where it was.
 func (a *app) planCard(c *ui.Context, t thread, e entry) {
 	done := 0
 	for _, s := range e.plan {
@@ -114,13 +116,25 @@ func (a *app) planCard(c *ui.Context, t thread, e entry) {
 			done++
 		}
 	}
+	allDone := len(e.plan) > 0 && done == len(e.plan)
+	m := a.memoOf(t.id())
+	open := m.disclosureOpen(e.key, !allDone)
 	live := t.View.Turn != nil && t.View.Turn.Run == e.run && t.View.Working()
 	ui.Column(c).Key(e.key).Radius(12).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Clip().Children(func() {
-		ui.Row(c).Key("head").Padding(8, 12).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Icon(c, icListChecks).FontSize(12).TextColor(palette.muted)
-			ui.Text(c, "Checklist").FontSize(12).Grow(1)
-			ui.Text(c, fmt.Sprintf("%d of %d done", done, len(e.plan))).FontSize(11).TextColor(palette.faint)
+		ui.Row(c).Key("bar").Children(func() {
+			if ghost(c, "head", false).Radius(0).Padding(8, 12).Gap(8).Grow(1).Children(func() {
+				ui.Icon(c, icListChecks).FontSize(12).TextColor(palette.muted)
+				ui.Text(c, "Checklist").FontSize(12).Grow(1)
+				ui.Text(c, fmt.Sprintf("%d of %d done", done, len(e.plan))).FontSize(11).TextColor(palette.faint)
+				chevron(c, open)
+			}).Clicked() {
+				m.toggleDisclosure(e.key, !allDone)
+				a.listFor(t.id()).HoldPlace()
+			}
 		})
+		if !open {
+			return
+		}
 		ui.Column(c).Key("steps").Padding(6, 12, 10).Gap(2).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
 			for i, s := range e.plan {
 				ui.Row(c).Key(i).Padding(2, 0).Gap(8).AlignItems(ui.Center).Children(func() {
