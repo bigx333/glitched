@@ -1,0 +1,9 @@
+{
+  "format": "glitched-plugin-signature:v1",
+  "key": "dj7v6ruVjh7tTklNCssj6SWwWpzkD0Xc9J6Jy0sFzgw=",
+  "files": {
+    "main.ts": "63fea6704835c1de02ad7595f99fa5c17dcdc0e331567e1baf83c4f1056566a1",
+    "plugin.json": "af14179134f3dee9fb473a55ec33de1a61561759082d665702051803f88c5d26"
+  },
+  "sig": "KEjFgrwXTimVXN6aJSbzXDBg7e/A2uydzyeZylaSJWTMis1dztAEgY1McjpIVXBV670rjFQI1dC7xwWYleYyAQ=="
+}
