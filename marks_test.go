@@ -1769,25 +1769,31 @@ func TestUnsavedMarksKeepTheirOrderWhenAnotherWindowWritesFirst(t *testing.T) {
 func TestDeletingAForeignFileWritesMarksThisVersionCanReadAgain(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "marks.json")
-	src := `[{"name":"mygo","color":"#14b8a6"}]`
+	src := `[{"name":"mygo","color":"#0ea5e9"},{"name":"pstack-t3","color":"#0ea5e9"}]`
 	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	log.SetOutput(io.Discard)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
-	a := marksApp(dir, "mygo")
-	before := marksDrawn(a)["mygo"]
+	a := marksApp(dir, "mygo", "pstack-t3")
 	keptAsIs(t, dir, src)
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	showMarks(a, "mygo")
-	showMarks(a, "mygo", "glitched")
-	if got := marksDrawn(a)["mygo"]; got != before {
-		t.Errorf("mygo moved from %v to %v", before, got)
+	showMarks(a, "mygo", "pstack-t3")
+	recreated := marksDrawn(a)
+	if recreated["mygo"].Icon == recreated["pstack-t3"].Icon {
+		t.Fatalf("after recreating deleted foreign file, mygo and pstack-t3 share %s: %v", recreated["mygo"].Icon, recreated)
 	}
+	showMarks(a, "mygo", "pstack-t3", "glitched")
 	ms, _ := readMarks(t, dir)
 	if !slices.ContainsFunc(ms, func(m projectMark) bool { return m.Name == "glitched" }) {
 		t.Errorf("marks.json holds %v; want glitched saved after foreign file deletion", ms)
+	}
+	reopened := marksApp(dir, "mygo", "pstack-t3", "glitched")
+	for _, n := range []string{"mygo", "pstack-t3"} {
+		if got := marksDrawn(reopened)[n]; got != recreated[n] {
+			t.Errorf("reopening moved %s from %v to %v", n, recreated[n], got)
+		}
 	}
 }

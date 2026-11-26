@@ -434,18 +434,18 @@ func (a *app) settleShownMarks() {
 				if disk == 0 || a.marksUnsaved {
 					from = appendMissingMarks(from, before)
 				}
-				out, changed := settleMarks(from, names)
-				for i, m := range out {
+				for i, m := range from {
 					if m.Icon == "" || m.Color == "" {
 						icon, color := drawn(m)
 						if m.Icon == "" {
-							out[i].Icon = projectIcons[icon]
+							from[i].Icon = projectIcons[icon]
 						}
 						if m.Color == "" {
-							out[i].Color = projectColors[color]
+							from[i].Color = projectColors[color]
 						}
 					}
 				}
+				out, changed := settleMarks(from, names)
 				if ms = out; !changed && len(from) == disk {
 					return errMarksSettled
 				}
