@@ -356,7 +356,7 @@ func (f *fake) NewSession(ctx context.Context, p acp.NewSessionRequest) (acp.New
 
 func (f *fake) sendCommands(ctx context.Context, id acp.SessionId) {
 	switch f.scenario {
-	case "compact", "compact-failed":
+	case "compact", "compact-failed", "steer-compact", "steer-compact-failed", "steer-compact-replies":
 		f.send(ctx, id, acp.SessionUpdate{AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
 			AvailableCommands: []acp.AvailableCommand{{Name: "compact", Description: "Compact conversation"}},
 		}})
@@ -591,6 +591,8 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Read both."))
 	case "question", "question-multi", "question-two":
 		return f.question(ctx, sid)
+	case "steer", "steer-compact", "steer-compact-failed", "steer-compact-replies":
+		return f.steer(ctx, sid, p)
 	case "crash-mid-turn":
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Starting"))
 		fmt.Fprintln(os.Stderr, "fake agent: out of memory")
@@ -717,6 +719,79 @@ func (f *fake) question(ctx context.Context, sid acp.SessionId) (acp.PromptRespo
 	f.send(ctx, sid, acp.UpdateToolCall(call, acp.WithUpdateStatus(acp.ToolCallStatusCompleted)))
 	f.send(ctx, sid, acp.UpdateAgentMessageText("Answer: "+string(b)))
 	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+}
+
+// steer plays a turn the client may cancel and prompt again, by tags in
+// the prompt's words. A prompt without [hold] answers "Steered: " and its
+// words. One with [hold] says "Working." and holds the turn until it is
+// cancelled; before that, [tool] opens a step, [ask] asks a permission
+// and [question] a question. Once cancelled, [finish] ends the turn as
+// done anyway, [stop=<reason>] ends it for that reason, [gate] first
+// waits for the Gate file, [hang] never ends it and [crash] exits.
+// /compact holds until cancelled too, then ends done: silent as agy
+// compacts in steer-compact, after a failed compaction in
+// steer-compact-failed, and after an answer in steer-compact-replies.
+func (f *fake) steer(ctx context.Context, sid acp.SessionId, p acp.PromptRequest) (acp.PromptResponse, error) {
+	var said string
+	for _, b := range p.Prompt {
+		if b.Text != nil {
+			said += b.Text.Text
+		}
+	}
+	if said == "/compact" {
+		switch f.scenario {
+		case "steer-compact-failed":
+			f.send(ctx, sid, acp.SessionUpdate{CompactionUpdate: &acp.SessionCompactionUpdate{CompactionId: "cmp-1", Status: acp.CompactionStatusFailed}})
+		case "steer-compact-replies":
+			f.send(ctx, sid, acp.UpdateAgentMessageText("I can't compact this."))
+		}
+		<-ctx.Done()
+		f.record("cancelled", nil)
+		return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+	}
+	has := func(tag string) bool { return strings.Contains(said, "["+tag+"]") }
+	_, reason, stops := strings.Cut(said, "[stop=")
+	reason, _, _ = strings.Cut(reason, "]")
+	if !has("hold") {
+		if stops {
+			return acp.PromptResponse{StopReason: acp.StopReason(reason)}, nil
+		}
+		words := said[strings.LastIndex(said, "\n\n")+1:]
+		f.send(ctx, sid, acp.UpdateAgentMessageText("Steered: "+strings.TrimSpace(words)))
+		return acp.PromptResponse{StopReason: acp.StopReasonEndTurn, Usage: &acp.Usage{TotalTokens: 100}}, nil
+	}
+	if has("tool") {
+		f.send(ctx, sid, acp.StartToolCall("run-1", "make", acp.WithStartKind(acp.ToolKindExecute), acp.WithStartStatus(acp.ToolCallStatusInProgress)))
+	}
+	f.send(ctx, sid, acp.UpdateAgentMessageText("Working."))
+	if has("ask") {
+		call := acp.ToolCallUpdate{ToolCallId: "edit-1", Title: acp.PatchSet("Edit notes.txt"), Kind: acp.PatchSet(acp.ToolKindEdit)}
+		f.ask(context.WithoutCancel(ctx), sid, call, allOptions)
+	}
+	if has("question") {
+		var req acp.CreateElicitationRequest
+		if err := json.Unmarshal([]byte(strings.Replace(agyQuestion, "SID", string(sid), 1)), &req); err != nil {
+			panic(err)
+		}
+		r, err := f.conn.CreateElicitation(context.WithoutCancel(ctx), req)
+		f.record("elicitation/create answer", map[string]any{"answer": r, "error": fmt.Sprint(err)})
+	}
+	<-ctx.Done()
+	f.record("cancelled", nil)
+	switch {
+	case has("finish"):
+		return acp.PromptResponse{StopReason: acp.StopReasonEndTurn, Usage: &acp.Usage{TotalTokens: 10}}, nil
+	case stops:
+		return acp.PromptResponse{StopReason: acp.StopReason(reason)}, nil
+	case has("hang"):
+		time.Sleep(time.Hour)
+	case has("crash"):
+		fmt.Fprintln(os.Stderr, "fake agent: out of memory")
+		os.Exit(3)
+	case has("gate"):
+		gate(context.Background())
+	}
+	return acp.PromptResponse{StopReason: acp.StopReasonCancelled, Usage: &acp.Usage{TotalTokens: 10}}, nil
 }
 
 // skillsSeen is the skills an agent given prompt finds, as Antigravity
