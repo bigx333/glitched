@@ -31,13 +31,19 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	return gitWith(ctx, nil, dir, args...)
 }
 
-// gitWith is git run in env; nil is the engine's own.
+// gitWith is git run in env; nil is the engine's own. A cancel kills git's
+// whole process group, so a hook it runs can't hold its output open.
 func gitWith(ctx context.Context, env []string, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = env
+	cmd.WaitDelay = time.Second
+	ownGroup(cmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
+	if err != nil && ctx.Err() != nil {
+		reap(cmd)
+	}
 	if err != nil {
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
 			return "", errors.New(msg)
