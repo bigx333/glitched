@@ -90,6 +90,7 @@ type proc struct {
 	session     acpsdk.SessionId
 	options     []acpsdk.SessionConfigOption         // the session's, as the agent last said
 	mode        string                               // the session's mode, as the agent last said
+	modeSeq     uint64
 	moded       bool                                 // the session has modes, as the agent said
 	offered     []string                             // the modes the session offers, as the agent said
 	refused     string                               // why the session runs the access's Else, as configure last found
@@ -273,6 +274,7 @@ func (p *proc) open(ctx context.Context, dir string, servers []provider.MCPServe
 	}
 	p.mu.Lock()
 	p.session, p.options, p.mode, p.moded, p.offered = id, options, "", modes != nil, nil
+	p.modeSeq++
 	p.commands, p.pendingCmds = p.pendingCmds[id], nil
 	if p.commands != nil {
 		p.listedLocked()
@@ -409,11 +411,17 @@ func (p *proc) configure(ctx context.Context, ref api.ModelRef, g provider.Grant
 	}
 	p.mu.Lock()
 	p.refused = refused
+	seq := p.modeSeq
 	p.mu.Unlock()
 	if mode != "" && mode != current && moded {
 		if _, err := p.conn.SetSessionMode(ctx, acpsdk.SetSessionModeRequest{SessionId: p.session, ModeId: acpsdk.SessionModeId(mode)}); err != nil {
 			return "", p.failure("run at this access level, as its mode "+mode, err)
 		}
+		p.mu.Lock()
+		if p.modeSeq == seq {
+			p.mode = mode
+		}
+		p.mu.Unlock()
 	}
 	for _, want := range []struct {
 		category acpsdk.SessionConfigOptionCategory
@@ -847,6 +855,7 @@ func (p *proc) SessionUpdate(ctx context.Context, n acpsdk.SessionNotification) 
 	if u.CurrentModeUpdate != nil {
 		p.mu.Lock()
 		p.mode = string(u.CurrentModeUpdate.CurrentModeId)
+		p.modeSeq++
 		p.mu.Unlock()
 	}
 	run := p.current(!quiet, kindOf(u))
