@@ -473,3 +473,82 @@ func TestCmdKPreservesRelevanceOrder(t *testing.T) {
 		t.Fatalf("palette Enter opened %q, want Strong (higher relevance)", h.a.current().View.Title)
 	}
 }
+
+// Greek case-folding (final sigma ς vs Σ) matches in Find just like FTS5.
+func TestFindMatchesGreekCaseFoldedFTSHit(t *testing.T) {
+	h, dir := fakeTurns(t)
+	h.answered(dir, "Greek case", "ΚΌΣΜΟΣ")
+	h.tt.Key(ui.Cmd, ui.KeyK)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Type("κόσμος")
+	settlePlugins(t, h.a, h.tt, h.p)
+	if !h.tt.HasText("Messages") || !h.tt.HasText("ΚΌΣΜΟΣ") {
+		t.Fatalf("missing Greek palette hit: %q", h.tt.Texts())
+	}
+	h.tt.Key(0, ui.KeyEnter)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.wantFound("1 of 1")
+}
+
+// Opening an edited queued message hit from a cached transcript waits for
+// the edit event to catch up before selecting the match.
+func TestFindWaitsForCachedQueueEditCatchup(t *testing.T) {
+	h, dir := fakeTurns(t)
+	th := h.answered(dir, "Queue edit", "needle among many words unrelated to the edited message here")
+	id := h.a.backend.Send(h.local(), th.id(), "old draft", api.Defer)
+	h.until("held draft", func() bool { return len(th.Transcript.Queue) == 1 && len(th.Pending) == 0 })
+	h.answered(dir, "Other", "unrelated")
+	h.a.backend.EditQueued(h.local(), th.id(), id, "needle needle needle needle")
+	h.until("edit committed", func() bool { return len(th.Pending) == 0 })
+
+	h.a.openCommandPalette()
+	h.a.cmdkQuery = "needle"
+	h.a.triggerCmdkSearch("needle")
+	h.until("edited palette hit", func() bool {
+		return len(h.a.cmdkHits) > 0 && h.a.cmdkHits[0].Hit.Snippet == "needle needle needle needle"
+	})
+	for _, cmd := range h.a.commands() {
+		if cmd.section == "Messages" {
+			cmd.run()
+			break
+		}
+	}
+	h.a.cmdkOpen = false
+	h.tt.Frame()
+	h.until("caught-up queue", func() bool { return th.Transcript.Queue[0].Text == "needle needle needle needle" })
+	h.tt.Frame()
+	h.wantFound("2 of 2")
+}
+
+// Opening an offscreen held message in the queue scrolls it into view.
+func TestFindScrollsOffscreenHeldMessageIntoView(t *testing.T) {
+	h, dir := fakeTurns(t)
+	h.a.settings.zen = true
+	th := h.answered(dir, "Zen held", "unrelated")
+	for _, s := range []string{"one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "offscreenneedle"} {
+		id := h.a.backend.Send(h.local(), th.id(), s, api.Defer)
+		h.until("held", func() bool {
+			for _, u := range th.Transcript.Queue {
+				if u.Message == id {
+					return true
+				}
+			}
+			return false
+		})
+	}
+	h.tt.Key(ui.Cmd, ui.KeyK)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Type("offscreenneedle")
+	settlePlugins(t, h.a, h.tt, h.p)
+	if !h.tt.HasText("Messages") {
+		t.Fatal("no palette hit")
+	}
+	h.tt.Key(0, ui.KeyEnter)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Advance(time.Second)
+	h.wantFound("1 of 1")
+	r, ok := h.tt.Find("offscreenneedle")
+	if !ok || r.H <= 0 {
+		t.Fatalf("offscreen held message not scrolled into view: visible=%v bounds=%v", ok, r)
+	}
+}

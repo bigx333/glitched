@@ -577,10 +577,11 @@ type app struct {
 	// findWords: the bar opened at a search hit, and matches each word of
 	// the query, as search did; findTarget is the hit's seq, till the
 	// rows show it.
-	findWords  bool
-	findTarget uint64
-	findKey    findKey
-	findRows   []findHit
+	findWords    bool
+	findTarget   uint64
+	findQueueSeq uint64
+	findKey      findKey
+	findRows     []findHit
 
 	glassOffset ui.Point
 	checkUntil  time.Time

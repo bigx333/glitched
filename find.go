@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
+	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 
 	"glitched/internal/api"
@@ -34,7 +35,7 @@ func (a *app) openFindAt(query string, seq uint64) {
 }
 
 func (a *app) closeFind() {
-	a.findOpen = false
+	a.findOpen, a.findTarget, a.findQueueSeq = false, 0, 0
 }
 
 // findKey is what the find bar's matches are of.
@@ -95,14 +96,13 @@ func (a *app) findMatches(t thread, rs rows) []findHit {
 		a.findKey, a.findRows = k, hits
 	}
 	ms := a.findRows
-	if a.findTarget != 0 && t.Transcript != nil && t.Transcript.Cursor.Seq >= a.findTarget {
+	if a.findTarget != 0 {
 		for i, h := range ms {
 			if h.seq == a.findTarget {
-				a.findIndex, a.findJump = i, true
+				a.findIndex, a.findJump, a.findTarget = i, true, 0
 				break
 			}
 		}
-		a.findTarget = 0
 	}
 	return ms
 }
@@ -186,8 +186,8 @@ func findText(e entry) string {
 	return strings.Join(parts, "\n")
 }
 
-// foldForFind lowers s and drops its accents, as search's unicode61
-// tokenizer does: "Café" finds as "cafe".
+// foldForFind case-folds s and drops its accents, as search's unicode61
+// tokenizer does: "Café" finds as "cafe" and "ΚΌΣΜΟΣ" as "κόσμος".
 func foldForFind(s string) string {
 	ascii := true
 	for i := 0; i < len(s) && ascii; i++ {
@@ -197,9 +197,9 @@ func foldForFind(s string) string {
 		return strings.ToLower(s)
 	}
 	var b strings.Builder
-	for _, r := range norm.NFD.String(s) {
+	for _, r := range norm.NFD.String(cases.Fold().String(s)) {
 		if !unicode.Is(unicode.Mn, r) {
-			b.WriteRune(unicode.ToLower(r))
+			b.WriteRune(r)
 		}
 	}
 	return b.String()
@@ -219,14 +219,20 @@ func (a *app) findBar(c *ui.Context, t thread, rs rows) {
 	show := func() {
 		if len(matches) > 0 {
 			if h := matches[a.findIndex]; h.row >= 0 {
+				a.findQueueSeq = 0
 				a.listFor(t.id()).ScrollIntoView(v.pos(h.row))
-			} else if v.len() > 0 {
-				a.listFor(t.id()).ScrollIntoView(v.len() - 1)
+			} else {
+				a.findQueueSeq = h.seq
+				if v.len() > 0 {
+					a.listFor(t.id()).ScrollIntoView(v.len() - 1)
+				}
+				c.Services().Invalidate()
 			}
 		}
 	}
 	step := func(delta int) {
 		if len(matches) > 0 {
+			a.findTarget = 0
 			a.findIndex = (a.findIndex + delta + len(matches)) % len(matches)
 			show()
 		}

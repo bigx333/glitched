@@ -305,7 +305,7 @@ func (s *Store) Search(ctx context.Context, q api.SearchQuery) (api.SearchResult
 		JOIN transcript_fts f ON f.rowid = b.id
 		JOIN threads t ON hex(t.id) = f.thread_id
 		WHERE `+keep+` AND transcript_fts MATCH ?
-		ORDER BY b.score, b.seq DESC LIMIT ?`, args...)
+		ORDER BY b.score, t.updated_at DESC, b.seq DESC LIMIT ?`, args...)
 	if err != nil {
 		return api.SearchResult{}, err
 	}
