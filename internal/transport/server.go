@@ -78,11 +78,6 @@ type Server struct {
 	authBurst      int           // auth failures from a peer before backoff; zero means defaultAuthBurst
 	authBackoff    time.Duration // initial backoff after authBurst failures; zero means defaultAuthBackoff
 	maxAuthBackoff time.Duration // max backoff per peer; zero means defaultMaxAuthBackoff
-
-	// termRefs counts the open sockets that used each terminal client ID:
-	// a client's leases outlast a socket while another of its sockets lives.
-	termMu   sync.Mutex
-	termRefs map[string]int
 }
 
 // A Grant is what Authorize admitted a socket with.
@@ -428,6 +423,7 @@ type Terminals interface {
 	TerminalInput(ctx context.Context, req api.TerminalInput) error
 	TerminalResize(ctx context.Context, req api.TerminalResize) error
 	TerminalClaim(ctx context.Context, req api.TerminalClaim) (api.TerminalLease, error)
+	AcquireTerminalClient(client string)
 	ReleaseTerminalClient(client string)
 }
 
@@ -442,41 +438,30 @@ type termClients struct {
 
 func (tc *termClients) record(id string) {
 	tc.mu.Lock()
-	defer tc.mu.Unlock()
 	if _, ok := tc.ids[id]; ok {
+		tc.mu.Unlock()
 		return
 	}
 	if tc.ids == nil {
 		tc.ids = map[string]struct{}{}
 	}
 	tc.ids[id] = struct{}{}
-	s := tc.srv
-	s.termMu.Lock()
-	if s.termRefs == nil {
-		s.termRefs = map[string]int{}
+	tc.mu.Unlock()
+	if tc.srv.Terminals != nil {
+		tc.srv.Terminals.AcquireTerminalClient(id)
 	}
-	s.termRefs[id]++
-	s.termMu.Unlock()
 }
 
-// releaseAll releases the leases of the client IDs no other open socket
-// uses, once the socket closed.
 func (tc *termClients) releaseAll() {
 	tc.mu.Lock()
 	ids := tc.ids
 	tc.ids = nil
 	tc.mu.Unlock()
-	s := tc.srv
-	s.termMu.Lock()
-	defer s.termMu.Unlock()
+	if tc.srv.Terminals == nil {
+		return
+	}
 	for id := range ids {
-		if s.termRefs[id]--; s.termRefs[id] > 0 {
-			continue
-		}
-		delete(s.termRefs, id)
-		if s.Terminals != nil {
-			s.Terminals.ReleaseTerminalClient(id)
-		}
+		tc.srv.Terminals.ReleaseTerminalClient(id)
 	}
 }
 

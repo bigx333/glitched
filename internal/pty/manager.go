@@ -45,10 +45,11 @@ type Manager struct {
 	leaseTTL      time.Duration
 	now           func() time.Time
 
-	mu       sync.Mutex
-	sessions map[string]*session
-	closed   bool
-	wg       sync.WaitGroup
+	mu         sync.Mutex
+	sessions   map[string]*session
+	clientRefs map[string]int
+	closed     bool
+	wg         sync.WaitGroup
 }
 
 // New constructs an engine PTY Manager.
@@ -84,6 +85,7 @@ func New(opts Options) *Manager {
 		leaseTTL:      ttl,
 		now:           now,
 		sessions:      map[string]*session{},
+		clientRefs:    map[string]int{},
 	}
 }
 
@@ -377,20 +379,35 @@ func (m *Manager) TerminalClaim(ctx context.Context, req api.TerminalClaim) (api
 	}, nil
 }
 
+// AcquireTerminalClient records an active transport connection for client so
+// closing an older connection does not release leases while another lives.
+func (m *Manager) AcquireTerminalClient(client string) {
+	if client == "" {
+		return
+	}
+	m.mu.Lock()
+	if m.clientRefs == nil {
+		m.clientRefs = map[string]int{}
+	}
+	m.clientRefs[client]++
+	m.mu.Unlock()
+}
+
 // ReleaseTerminalClient releases any active input lease held by client across
-// all live sessions (for instance when a transport connection closes or is revoked).
+// all live sessions once no other connection for client remains open.
 func (m *Manager) ReleaseTerminalClient(client string) {
 	if client == "" {
 		return
 	}
 	m.mu.Lock()
-	var list []*session
-	for _, s := range m.sessions {
-		list = append(list, s)
+	defer m.mu.Unlock()
+	if n := m.clientRefs[client]; n > 1 {
+		m.clientRefs[client] = n - 1
+		return
 	}
-	m.mu.Unlock()
+	delete(m.clientRefs, client)
 
-	for _, s := range list {
+	for _, s := range m.sessions {
 		s.mu.Lock()
 		if !s.exited && s.leaseClient == client {
 			s.leaseClient = ""
@@ -504,6 +521,7 @@ type subStream struct {
 	// historyEnd is where the replay this subscriber got ends: the output
 	// before it is sent without the queries a terminal would answer again.
 	historyEnd uint64
+	metaDirty  bool
 }
 
 func (sub *subStream) signalLocked() {
@@ -519,9 +537,14 @@ func (sub *subStream) pushItemLocked(it api.TerminalItem) {
 }
 
 func (sub *subStream) notifyLeaseLocked(s *session) {
-	if sub.paused || sub.closed || sub.sentExit {
+	if sub.closed || sub.sentExit {
 		return
 	}
+	if sub.paused {
+		sub.metaDirty = true
+		return
+	}
+	sub.metaDirty = false
 	sub.pushItemLocked(api.TerminalItem{
 		Session:     s.id,
 		Offset:      sub.resumeOffset,
@@ -539,7 +562,8 @@ func (sub *subStream) enqueueBytesLocked(p []byte, startOff uint64, truncated, w
 	s := sub.sess
 	var edits []edit
 	if startOff < sub.historyEnd {
-		edits = replayEdits(p[:min(uint64(len(p)), sub.historyEnd-startOff)])
+		prefix := s.ring.sliceBefore(startOff, replayLookback)
+		edits = replayEditsWithPrefix(prefix, p[:min(uint64(len(p)), sub.historyEnd-startOff)])
 	}
 	high := s.mgr.highWatermark
 	stepCap := min(chunkSize, max(1, high/2))
@@ -604,8 +628,10 @@ func (sub *subStream) Next(ctx context.Context) (api.TerminalItem, error) {
 					sub.historyEnd = tailEnd
 				}
 				if len(tail) > 0 {
+					sub.metaDirty = false
 					sub.enqueueBytesLocked(tail, sub.resumeOffset, truncated, true)
 				} else if truncated {
+					sub.metaDirty = false
 					sub.pushItemLocked(api.TerminalItem{
 						Session:     s.id,
 						Offset:      tailEnd,
@@ -615,6 +641,8 @@ func (sub *subStream) Next(ctx context.Context) (api.TerminalItem, error) {
 						LeaseClient: s.leaseClient,
 					})
 					sub.resumeOffset = tailEnd
+				} else if sub.metaDirty {
+					sub.notifyLeaseLocked(s)
 				}
 				if s.exited && !sub.paused && sub.resumeOffset >= tailEnd && !sub.sentExit {
 					sub.sentExit = true

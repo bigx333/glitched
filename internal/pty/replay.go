@@ -56,6 +56,34 @@ func replayEdits(p []byte) []edit {
 	}
 }
 
+const replayLookback = 4096
+
+// replayEditsWithPrefix returns the edits for p given prefix, the bytes
+// immediately before p that the client already received. Any query whose
+// escape sequence started in prefix and finishes in p is replaced with CAN
+// (0x18) so the emulator aborts the half-received sequence without replying.
+func replayEditsWithPrefix(prefix, p []byte) []edit {
+	if len(prefix) == 0 {
+		return replayEdits(p)
+	}
+	n := len(prefix)
+	buf := make([]byte, n+len(p))
+	copy(buf, prefix)
+	copy(buf[n:], p)
+	raw := replayEdits(buf)
+	var out []edit
+	for _, e := range raw {
+		switch {
+		case e.end <= n:
+		case e.start < n:
+			out = append(out, edit{start: 0, end: e.end - n, repl: []byte{0x18}})
+		default:
+			out = append(out, edit{start: e.start - n, end: e.end - n, repl: e.repl})
+		}
+	}
+	return out
+}
+
 // stripReplayQueries returns p with its replayEdits applied.
 func stripReplayQueries(p []byte) []byte {
 	out, _ := splice(p, 0, len(p), replayEdits(p))

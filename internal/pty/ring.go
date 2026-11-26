@@ -71,3 +71,29 @@ func (r *ringBuf) readFrom(after uint64) (out []byte, end uint64, truncated bool
 	}
 	return out, end, truncated
 }
+
+func (r *ringBuf) sliceBefore(off uint64, maxBytes int) []byte {
+	if maxBytes <= 0 || off <= r.base {
+		return nil
+	}
+	end := r.end()
+	if off > end {
+		off = end
+	}
+	start := r.base
+	if off-start > uint64(maxBytes) {
+		start = off - uint64(maxBytes)
+	}
+	n := int(off - start)
+	if n <= 0 {
+		return nil
+	}
+	out := make([]byte, n)
+	pos := (r.head + int(start-r.base)) % r.cap
+	n1 := min(n, r.cap-pos)
+	copy(out, r.buf[pos:pos+n1])
+	if n1 < n {
+		copy(out[n1:], r.buf[:n-n1])
+	}
+	return out
+}

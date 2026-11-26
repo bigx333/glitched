@@ -93,3 +93,17 @@ func TestStripReplayQueries(t *testing.T) {
 		})
 	}
 }
+
+func TestReplayEditsWithSplitPrefix(t *testing.T) {
+	edits := replayEditsWithPrefix([]byte("abc\x1b["), []byte("cdef"))
+	got, _ := splice([]byte("cdef"), 0, len("cdef"), edits)
+	if string(got) != "\x18def" {
+		t.Fatalf("split DA1 = %q, want %q", string(got), "\x18def")
+	}
+
+	edits = replayEditsWithPrefix([]byte("abc\x1b]10;"), []byte("?\x07tail"))
+	got, _ = splice([]byte("?\x07tail"), 0, len("?\x07tail"), edits)
+	if string(got) != "\x18tail" {
+		t.Fatalf("split OSC 10 = %q, want %q", string(got), "\x18tail")
+	}
+}

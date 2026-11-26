@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -23,11 +25,12 @@ var errCut = errors.New("test: the connection is cut")
 // over a connection the test can cut, and restore to another engine.
 type flaky struct {
 	api.Endpoint
-	mu      sync.Mutex
-	be      *pty.Manager
-	down    bool
-	streams []*cutStream
-	refused chan struct{}
+	mu          sync.Mutex
+	be          *pty.Manager
+	down        bool
+	dropReplyOn bool
+	streams     []*cutStream
+	refused     chan struct{}
 }
 
 func newFlaky(be *pty.Manager) *flaky {
@@ -89,7 +92,15 @@ func (f *flaky) TerminalInput(ctx context.Context, req api.TerminalInput) error 
 	if err != nil {
 		return err
 	}
-	return be.TerminalInput(ctx, req)
+	err = be.TerminalInput(ctx, req)
+	f.mu.Lock()
+	drop := f.dropReplyOn
+	f.dropReplyOn = false
+	f.mu.Unlock()
+	if err == nil && drop {
+		return errCut
+	}
+	return err
 }
 
 func (f *flaky) TerminalResize(ctx context.Context, req api.TerminalResize) error {
@@ -223,12 +234,60 @@ func TestWriteDuringAnOutageKeepsTheInputAlive(t *testing.T) {
 	readConnUntil(t, conn, "up-2")
 
 	f.cut()
-	go func() {
-		<-f.refused
-		f.restore(nil)
-	}()
+	write(t, conn, "echo dropped\n")
+	f.restore(nil)
 	write(t, conn, "echo back-$((2+3))\n")
 	readConnUntil(t, conn, "back-5")
+}
+
+func TestWriteLostReplyDoesNotDuplicateCommand(t *testing.T) {
+	f := newFlaky(shPTYs(t, pty.Options{}))
+	ws := t.TempDir()
+	outFile := filepath.Join(ws, "count.txt")
+	conn := newViewer(t, f).open(t, ws, 80, 24)
+	write(t, conn, "echo ready-$((1+1))\n")
+	readConnUntil(t, conn, "ready-2")
+
+	f.mu.Lock()
+	f.dropReplyOn = true
+	f.mu.Unlock()
+	write(t, conn, fmt.Sprintf("echo line >> %q\n", outFile))
+	write(t, conn, "echo done-$((3+4))\n")
+	readConnUntil(t, conn, "done-7")
+
+	b, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read %s: %v", outFile, err)
+	}
+	if lines := strings.Split(strings.TrimSpace(string(b)), "\n"); len(lines) != 1 {
+		t.Fatalf("command ran %d times (%q), want 1", len(lines), string(b))
+	}
+}
+
+func TestOfflineWriteRespectsDeadline(t *testing.T) {
+	prev := terminalWriteTimeout
+	terminalWriteTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { terminalWriteTimeout = prev })
+
+	f := newFlaky(shPTYs(t, pty.Options{}))
+	ws := t.TempDir()
+	conn := newViewer(t, f).open(t, ws, 80, 24)
+	write(t, conn, "echo up-$((1+1))\n")
+	readConnUntil(t, conn, "up-2")
+
+	f.cut()
+	// Start Read reconnecting in the background while the engine stays down.
+	go func() {
+		buf := make([]byte, 256)
+		_, _ = conn.Read(buf)
+	}()
+	<-f.refused
+
+	start := time.Now()
+	write(t, conn, "x")
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("offline Write took %v, want <= 1s (write timeout is %v)", took, terminalWriteTimeout)
+	}
 }
 
 func TestTakeControlResizesToThisView(t *testing.T) {
@@ -384,4 +443,49 @@ func TestReattachTypesNoQueryAnswers(t *testing.T) {
 	term2.Send([]byte("\x04"))
 	term2.Send(ask("again"))
 	waitScreen(t, term2, "a live query's answer after reattaching", answered("again"))
+}
+
+func TestSplitQueryAcrossDisconnectTypesNoAnswer(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash:", err)
+	}
+	if err := terminal.Load(); err != nil {
+		t.Skip("libghostty-vt unavailable:", err)
+	}
+	mgr := shPTYs(t, pty.Options{Command: []string{"bash", "--norc", "--noprofile"}})
+	f := newFlaky(mgr)
+	v := newViewer(t, f)
+	ws := t.TempDir()
+	conn := v.open(t, ws, 80, 24)
+	term, err := terminal.New(terminal.Options{Conn: conn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer term.Close()
+
+	// Emit the start of a DA1 query (`\x1b[`), let Ghostty receive it, cut the
+	// link, then finish the query (`c`) while offline and start `cat -v`.
+	fifo := filepath.Join(ws, "gate")
+	cmd := fmt.Sprintf("mkfifo %q; printf 'SPLIT_START\\033['; read _ < %q; printf 'c'; clear; cat -v\n", fifo, fifo)
+	term.Send([]byte(cmd))
+	waitScreen(t, term, "SPLIT_START", func(s string) bool { return strings.Contains(s, "SPLIT_START") })
+
+	// Give Read a moment to ingest the trailing `\x1b[` right after SPLIT_START.
+	time.Sleep(150 * time.Millisecond)
+	f.cut()
+
+	// Unblock the shell so it emits `c` and starts `cat -v` while offline.
+	if err := os.WriteFile(fifo, []byte("go\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	f.restore(nil)
+	term.Send([]byte("after-split\n"))
+	screen := waitScreen(t, term, "after-split echoed by cat", func(s string) bool {
+		return strings.Count(s, "after-split") >= 2
+	})
+	if strings.Contains(screen, "^[[?") {
+		t.Fatalf("split DA1 query across disconnect injected an answer into cat:\n%s", screen)
+	}
 }

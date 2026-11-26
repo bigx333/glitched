@@ -36,7 +36,7 @@ type TerminalConn struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	openMu      sync.Mutex
+	openSem     chan struct{}
 	mu          sync.Mutex
 	target      termTarget
 	stream      api.TerminalStream
@@ -93,6 +93,7 @@ func (m *Manager) OpenTerminal(env *Env, workspace string, cols, rows int, onSta
 		onStatus:  onStatus,
 		ctx:       ctx,
 		cancel:    cancel,
+		openSem:   make(chan struct{}, 1),
 		target:    tg,
 		cols:      cols,
 		rows:      rows,
@@ -106,7 +107,7 @@ func (tc *TerminalConn) notifyStatus() {
 	tc.m.post(tc.ctx, tc.onStatus)
 }
 
-func (tc *TerminalConn) resolveTarget() (termTarget, bool) {
+func (tc *TerminalConn) resolveTarget(ctx context.Context) (termTarget, bool) {
 	ch := make(chan termTarget, 1)
 	tc.m.post(tc.ctx, func() {
 		ch <- tc.m.terminalTarget(tc.env)
@@ -114,20 +115,40 @@ func (tc *TerminalConn) resolveTarget() (termTarget, bool) {
 	select {
 	case tg := <-ch:
 		return tg, tg.fn != nil
+	case <-ctx.Done():
+		return termTarget{}, false
 	case <-tc.ctx.Done():
 		return termTarget{}, false
 	}
 }
 
 func (tc *TerminalConn) ensureStream(ctx context.Context) (api.TerminalStream, termTarget, api.ID, error) {
-	tc.openMu.Lock()
-	defer tc.openMu.Unlock()
+	tc.mu.Lock()
+	if tc.closed || tc.exited {
+		tc.mu.Unlock()
+		return nil, termTarget{}, api.ID{}, io.EOF
+	}
+	if tc.stream != nil {
+		st, tg, sess := tc.stream, tc.target, tc.session
+		tc.mu.Unlock()
+		return st, tg, sess, nil
+	}
+	tc.mu.Unlock()
 
 	backoff := 250 * time.Millisecond
 	for {
+		select {
+		case tc.openSem <- struct{}{}:
+		case <-ctx.Done():
+			return nil, termTarget{}, api.ID{}, ctx.Err()
+		case <-tc.ctx.Done():
+			return nil, termTarget{}, api.ID{}, io.EOF
+		}
+
 		tc.mu.Lock()
 		if tc.closed || tc.exited {
 			tc.mu.Unlock()
+			<-tc.openSem
 			return nil, termTarget{}, api.ID{}, io.EOF
 		}
 		st := tc.stream
@@ -139,13 +160,18 @@ func (tc *TerminalConn) ensureStream(ctx context.Context) (api.TerminalStream, t
 		tc.mu.Unlock()
 
 		if st != nil {
+			<-tc.openSem
 			return st, tg, sess, nil
 		}
 		if tg.fn == nil {
-			resolved, ok := tc.resolveTarget()
+			resolved, ok := tc.resolveTarget(ctx)
 			if !ok {
-				if ctx.Err() != nil || tc.ctx.Err() != nil {
+				<-tc.openSem
+				if tc.ctx.Err() != nil {
 					return nil, termTarget{}, api.ID{}, io.EOF
+				}
+				if ctx.Err() != nil {
+					return nil, termTarget{}, api.ID{}, ctx.Err()
 				}
 				select {
 				case <-time.After(backoff):
@@ -173,14 +199,19 @@ func (tc *TerminalConn) ensureStream(ctx context.Context) (api.TerminalStream, t
 		})
 		if err != nil {
 			if errors.Is(err, transport.ErrUnknownMethod) || errors.Is(err, api.ErrNotAllowed) {
+				<-tc.openSem
 				return nil, termTarget{}, api.ID{}, err
-			}
-			if ctx.Err() != nil || tc.ctx.Err() != nil {
-				return nil, termTarget{}, api.ID{}, io.EOF
 			}
 			tc.mu.Lock()
 			tc.target = termTarget{}
 			tc.mu.Unlock()
+			<-tc.openSem
+			if tc.ctx.Err() != nil {
+				return nil, termTarget{}, api.ID{}, io.EOF
+			}
+			if ctx.Err() != nil {
+				return nil, termTarget{}, api.ID{}, ctx.Err()
+			}
 			select {
 			case <-time.After(backoff):
 				backoff = min(backoff*2, 2*time.Second)
@@ -195,6 +226,7 @@ func (tc *TerminalConn) ensureStream(ctx context.Context) (api.TerminalStream, t
 		tc.mu.Lock()
 		if tc.closed {
 			tc.mu.Unlock()
+			<-tc.openSem
 			_ = opened.Close()
 			return nil, termTarget{}, api.ID{}, io.EOF
 		}
@@ -202,6 +234,7 @@ func (tc *TerminalConn) ensureStream(ctx context.Context) (api.TerminalStream, t
 		curCols, curRows := tc.cols, tc.rows
 		curSess := tc.session
 		tc.mu.Unlock()
+		<-tc.openSem
 
 		if curCols != cols || curRows != rows {
 			rctx, rcancel := context.WithTimeout(tc.ctx, 2*time.Second)
@@ -317,14 +350,19 @@ func (tc *TerminalConn) Read(p []byte) (int, error) {
 	}
 }
 
+var terminalWriteTimeout = 5 * time.Second
+
 // Write types p into the PTY. While the engine is out of reach it gives up
 // after a few seconds and drops p rather than failing, as a failed write
 // would end the terminal's input for good; Read reconnects meanwhile.
+// A transport failure after TerminalInput was sent is never retried, so one
+// write cannot execute a command twice; only api.ErrNotFound (where the
+// engine rejected a stale session without writing) retries once.
 func (tc *TerminalConn) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	ctx, cancel := context.WithTimeout(tc.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(tc.ctx, terminalWriteTimeout)
 	defer cancel()
 	data := bytes.Clone(p)
 	for retried := false; ; retried = true {
@@ -362,10 +400,15 @@ func (tc *TerminalConn) Write(p []byte) (int, error) {
 			return 0, err
 		case tc.ended():
 			return 0, io.ErrClosedPipe
-		case retried || st == nil || ctx.Err() != nil:
+		case errors.Is(err, api.ErrNotFound) && !retried && st != nil && ctx.Err() == nil:
+			tc.forget(st, sess, err)
+			continue
+		default:
+			if st != nil {
+				tc.forget(st, sess, err)
+			}
 			return len(p), nil
 		}
-		tc.forget(st, sess, err)
 	}
 }
 

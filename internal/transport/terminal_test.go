@@ -225,3 +225,63 @@ func TestClosingAStaleSocketKeepsTheReconnectedClientsLease(t *testing.T) {
 		t.Fatalf("client-b's input: %v, want api.ErrLeaseHeld while client-a's live socket holds the lease", err)
 	}
 }
+
+func TestClosingAStaleSocketAcrossListenersKeepsLease(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	mgr := pty.New(pty.Options{Command: []string{"/bin/sh"}})
+	t.Cleanup(func() { _ = mgr.Close() })
+	spy := releaseSpy{Manager: mgr, released: make(chan string, 16)}
+	auth := func(_ *http.Request, proved func(Key) bool) (Grant, error) {
+		for _, tok := range []string{"tok-a", "tok-b"} {
+			if k := KeyOf(tok); proved(k) {
+				return Grant{Key: k, Done: context.Background()}, nil
+			}
+		}
+		return Grant{}, errors.New("unknown token")
+	}
+	addr1 := serveTailnet(t, &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, Terminals: spy, Authorize: auth})
+	addr2 := serveTailnet(t, &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, Terminals: spy, Authorize: auth})
+	ws := t.TempDir()
+
+	stale := NewEndpointClient(Tailnet{Address: addr1, Token: "tok-a"}, api.ID{})
+	defer stale.Close()
+	st1, err := stale.OpenTerminal(ctx, api.TerminalOpen{Workspace: ws, Client: "client-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := st1.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = stale.TerminalInput(ctx, api.TerminalInput{Workspace: ws, Session: first.Session, Client: "probe"})
+
+	fresh := NewEndpointClient(Tailnet{Address: addr2, Token: "tok-a"}, api.ID{})
+	defer fresh.Close()
+	st2, err := fresh.OpenTerminal(ctx, api.TerminalOpen{Workspace: ws, Session: first.Session, Client: "client-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	if _, err := st2.Next(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	st1.Close()
+	stale.Close()
+	for got := ""; got != "probe"; {
+		select {
+		case got = <-spy.released:
+		case <-ctx.Done():
+			t.Fatal("stale socket on listener 1 never tore down")
+		}
+	}
+
+	other := NewEndpointClient(Tailnet{Address: addr2, Token: "tok-b"}, api.ID{})
+	defer other.Close()
+	err = other.TerminalInput(ctx, api.TerminalInput{Workspace: ws, Session: first.Session, Client: "client-b", Data: []byte("echo hijacked\n")})
+	if !errors.Is(err, api.ErrLeaseHeld) {
+		t.Fatalf("client-b's input: %v, want api.ErrLeaseHeld while client-a lives on listener 2", err)
+	}
+}

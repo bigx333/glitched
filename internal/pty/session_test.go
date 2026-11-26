@@ -242,3 +242,69 @@ func TestExitedShellsCloseTheirPTY(t *testing.T) {
 		t.Fatalf("%d /dev/ptmx descriptors left open after 10 exited shells and Close", leaked)
 	}
 }
+
+func TestPausedWatcherSeesLeaseReleaseWhileQuiet(t *testing.T) {
+	ws := t.TempDir()
+	mgr := New(Options{
+		Command:       []string{"/bin/sh", "-c", "sleep 60"},
+		ReplayBytes:   64 << 10,
+		HighWatermark: 1024,
+		LowWatermark:  512,
+	})
+	defer mgr.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	owner, err := mgr.OpenTerminal(ctx, api.TerminalOpen{Workspace: ws, Client: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	if _, err := owner.Next(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	watcher, err := mgr.OpenTerminal(ctx, api.TerminalOpen{Workspace: ws, Client: "watcher"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer watcher.Close()
+	if _, err := watcher.Next(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fill watcher past highWatermark so it pauses.
+	sub := watcher.(*subStream)
+	sess := sub.sess
+	chunk := make([]byte, 1200)
+	for i := range chunk {
+		chunk[i] = 'x'
+	}
+	sess.mu.Lock()
+	end := sess.ring.write(chunk)
+	sub.enqueueBytesLocked(chunk, end-uint64(len(chunk)), false, false)
+	sub.signalLocked()
+	paused := sub.paused
+	sess.mu.Unlock()
+	if !paused {
+		t.Fatal("expected watcher to pause at high watermark")
+	}
+
+	// Release owner while watcher is paused and the shell stays quiet.
+	mgr.ReleaseTerminalClient("owner")
+
+	// Drain watcher: it must receive a frame reporting the released lease ("").
+	sawRelease := false
+	drainCtx, drainCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer drainCancel()
+	for !sawRelease {
+		it, err := watcher.Next(drainCtx)
+		if err != nil {
+			t.Fatalf("watcher never saw lease release after unpausing: %v", err)
+		}
+		if it.LeaseClient == "" {
+			sawRelease = true
+		}
+	}
+}
