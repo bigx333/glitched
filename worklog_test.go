@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -386,6 +387,9 @@ func TestExpandedLongWorkLogScrollsByKeyboard(t *testing.T) {
 	}
 	h, _ := zenThread(t, es, false, "Built.")
 	clickRect(h, head(t, h.tt, "Ran 50 commands"))
+	if h.tt.HasText("All 50") {
+		t.Errorf("a log of one kind shows filter tabs: %q", h.tt.Texts())
+	}
 	// Focus the inner scroll container via Tab from the header.
 	h.tt.Key(0, ui.KeyTab)
 	if !h.tt.Focused("Work steps") {
@@ -411,7 +415,13 @@ func TestExpandedLiveWorkLogFollowsNewSteps(t *testing.T) {
 	with := func(steps []client.WorkStep) []client.Entry {
 		return append(slices.Clone(base), &client.WorkEntry{Run: run, Items: steps, Started: time.Now()})
 	}
-	inScroll := func(h *harness, scrollBox ui.Rect, name string) (ui.Rect, bool) {
+	// The box is found again each time: a first failure adds its filter
+	// tab, and the bar of tabs moves the steps down.
+	inScroll := func(h *harness, _ ui.Rect, name string) (ui.Rect, bool) {
+		scrollBox, ok := h.tt.Find("Work steps")
+		if !ok {
+			return ui.Rect{}, false
+		}
 		for _, n := range h.tt.AccessAll() {
 			if n.Name == name && !n.Offscreen && n.Bounds.Y >= scrollBox.Y-2 && n.Bounds.Y+n.Bounds.H <= scrollBox.Y+scrollBox.H+2 {
 				return n.Bounds, true
@@ -515,5 +525,327 @@ func TestSingleStepLogInZenModeRendersInline(t *testing.T) {
 	}
 	if h.tt.HasText("Read 1 file") {
 		t.Fatalf("single-step work log inside open Zen line showed a collapsible card header: %q", h.tt.Texts())
+	}
+}
+
+func TestStepKindOfFollowsTheSummary(t *testing.T) {
+	for _, tc := range []struct {
+		w    client.WorkStep
+		want workFilter
+	}{
+		{client.WorkStep{Kind: "command"}, workFilterCommand},
+		{client.WorkStep{Kind: "read", Path: "a.go"}, workFilterRead},
+		{client.WorkStep{Kind: "read", Title: "WebFetch https://a"}, workFilterTool},
+		{client.WorkStep{Kind: "edit", Path: "a.go"}, workFilterEdit},
+		{client.WorkStep{Kind: "search"}, workFilterSearch},
+		{client.WorkStep{Kind: "tool", Subagent: &client.Subagent{}}, workFilterSubagent},
+		{client.WorkStep{Kind: "command", Subagent: &client.Subagent{}}, workFilterSubagent},
+		{client.WorkStep{Kind: "tool"}, workFilterTool},
+		{client.WorkStep{Kind: "url"}, workFilterTool},
+	} {
+		if got := stepKindOf(tc.w); got != tc.want {
+			t.Errorf("stepKindOf(%+v) = %v, want %v", tc.w, got, tc.want)
+		}
+	}
+}
+
+// timedStep is a finished step of kind that took d, exiting with exit
+// when it is not nil.
+func timedStep(item, kind string, d time.Duration, exit *int) client.WorkStep {
+	at := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	return client.WorkStep{Item: item, Kind: kind, Title: item, Path: map[bool]string{true: item}[kind == "read" || kind == "edit"],
+		Status: api.WorkCompleted, Exit: exit, Started: at, Ended: at.Add(d)}
+}
+
+func TestWorkLedgerStats(t *testing.T) {
+	exit0, exit1 := 0, 1
+	tabs := func(lg workLedger) []string {
+		var out []string
+		for _, tb := range lg.tabs {
+			out = append(out, tb.text())
+		}
+		return out
+	}
+
+	// Quick commands measure against the floor, so none draws full.
+	quick := workLedgerStats([]client.WorkStep{timedStep("a", "command", 100*time.Millisecond, &exit0), timedStep("b", "command", 300*time.Millisecond, &exit0)})
+	if quick.maxDur != minLedgerDur {
+		t.Errorf("quick commands measure against %v, want the %v floor", quick.maxDur, minLedgerDur)
+	}
+	if got := durationFill(300*time.Millisecond, quick.maxDur); got >= durationBarWidth/2 {
+		t.Errorf("a 300ms command among quick ones fills %v of %v", got, durationBarWidth)
+	}
+	// One kind of step has no tabs to choose between.
+	if got := tabs(quick); !slices.Equal(got, []string{"All 2", "Cmd 2"}) {
+		t.Errorf("the tabs of one kind are %q", got)
+	}
+
+	// Mixed steps: kinds in the order each first came, then the failed.
+	mixed := workLedgerStats([]client.WorkStep{
+		timedStep("go build", "command", 2*time.Second, &exit0),
+		timedStep("a.go", "read", 0, nil),
+		timedStep("a.go", "edit", 0, nil),
+		timedStep("b.go", "read", 0, nil),
+		timedStep("go test", "command", 10*time.Second, &exit1),
+	})
+	if mixed.maxDur != 10*time.Second {
+		t.Errorf("mixed steps measure against %v, want the longest, 10s", mixed.maxDur)
+	}
+	if got := tabs(mixed); !slices.Equal(got, []string{"All 5", "Cmd 2", "Read 2", "Edit 1", "Failed 1"}) {
+		t.Errorf("the tabs of mixed steps are %q", got)
+	}
+	// A running step has no duration yet.
+	running := timedStep("go vet", "command", time.Minute, nil)
+	running.Status = api.WorkStarted
+	if got := workLedgerStats([]client.WorkStep{running}).maxDur; got != minLedgerDur {
+		t.Errorf("a running step measures %v", got)
+	}
+
+	for _, tc := range []struct {
+		d, max time.Duration
+		want   float32
+		slow   bool
+	}{
+		{0, minLedgerDur, 3, false},
+		{750 * time.Millisecond, minLedgerDur, 14, false},
+		{minLedgerDur, minLedgerDur, 28, false},
+		{20 * time.Second, 10 * time.Second, 28, true},
+		{7 * time.Second, 10 * time.Second, 19.6, true},
+		{5 * time.Second, 10 * time.Second, 14, false},
+		{1900 * time.Millisecond, 2 * time.Second, 26.6, false},
+	} {
+		if got := durationFill(tc.d, tc.max); math.Abs(float64(got-tc.want)) > 0.01 {
+			t.Errorf("durationFill(%v, %v) = %v, want %v", tc.d, tc.max, got, tc.want)
+		}
+		if got := slowStep(tc.d, tc.max); got != tc.slow {
+			t.Errorf("slowStep(%v, %v) = %v, want %v", tc.d, tc.max, got, tc.slow)
+		}
+	}
+}
+
+// The breakdown bar draws runs of a kind in order, and with too many
+// runs, a run a kind.
+func TestWorkSparkCapsItsRuns(t *testing.T) {
+	exit1 := 1
+	steps := []client.WorkStep{{Kind: "command"}, {Kind: "command"}, {Kind: "edit"}, {Kind: "command", Exit: &exit1}, {Kind: "command"}}
+	if got, want := workSpark(steps), []sparkRun{{workFilterCommand, 2}, {workFilterEdit, 1}, {workFilterFailed, 1}, {workFilterCommand, 1}}; !slices.Equal(got, want) {
+		t.Errorf("workSpark = %v, want %v", got, want)
+	}
+	var many []client.WorkStep
+	for range 100 {
+		many = append(many, client.WorkStep{Kind: "command"}, client.WorkStep{Kind: "read", Path: "a"})
+	}
+	if got, want := workSpark(many), []sparkRun{{workFilterCommand, 100}, {workFilterRead, 100}}; !slices.Equal(got, want) {
+		t.Errorf("workSpark of 200 alternating steps = %v, want %v", got, want)
+	}
+}
+
+// ledger is a thread whose one settled work log of steps is open.
+func ledger(t *testing.T, steps []client.WorkStep, summary string) *harness {
+	t.Helper()
+	at := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	run := api.NewID()
+	es := []client.Entry{
+		&client.UserEntry{Message: api.NewID(), Text: "Look into it.", State: client.Sent},
+		&client.WorkEntry{Run: run, Started: at, Ended: at.Add(time.Minute), Items: steps},
+		&client.AssistantEntry{Run: run, Text: "Looked."},
+	}
+	h, _ := zenThread(t, es, false, "Looked.")
+	clickRect(h, head(t, h.tt, summary))
+	return h
+}
+
+// A long command keeps how long it took on one line, clear of the
+// command, which gives way instead (the right column used to wrap under
+// a long rg).
+func TestALongCommandKeepsItsTelemetryOnOneLine(t *testing.T) {
+	exit0 := 0
+	long := `rg -n "Unread\(|markRead|unreadCount|lastReadAt|isUnread|readState" apps/web/src apps/server/src packages/contracts/src --glob '!*.test.ts' 2>/dev/null`
+	cmd := timedStep(long, "command", 3200*time.Millisecond, &exit0)
+	short := timedStep("go vet .", "command", 3400*time.Millisecond, &exit0)
+	h := ledger(t, []client.WorkStep{cmd, short, timedStep("main.go", "edit", 0, nil)}, "Ran 2 commands")
+	took, ok := h.tt.Find("3.2s")
+	if !ok {
+		t.Fatalf("no duration for the long command: %q", h.tt.Texts())
+	}
+	if took.H > 18 {
+		t.Errorf("the duration wrapped to %v high", took.H)
+	}
+	// It keeps the room it takes beside a short command.
+	if ref, ok := h.tt.Find("3.4s"); !ok || math.Abs(float64(took.W-ref.W)) > 0.5 || math.Abs(float64(took.X-ref.X)) > 0.5 {
+		t.Errorf("beside the long command the duration is %v, beside a short one %v", took, ref)
+	}
+	_, args, _ := strings.Cut(long, " ")
+	text, ok := h.tt.Find(args)
+	if !ok {
+		t.Fatalf("no arguments of the long command: %q", h.tt.Texts())
+	}
+	if text.H > 18 {
+		t.Errorf("the command wrapped to %v high", text.H)
+	}
+	// The bar and its gap sit between the command and its duration.
+	if right := text.X + text.W; right > took.X-durationBarWidth-6+0.5 {
+		t.Errorf("the command ends at %v, over its duration at %v", right, took.X)
+	}
+	if mid, tmid := text.Y+text.H/2, took.Y+took.H/2; math.Abs(float64(mid-tmid)) > 2 {
+		t.Errorf("the duration sits at %v, off the command's line at %v", tmid, mid)
+	}
+}
+
+// An open log of mixed steps filters them by kind, back to all with All,
+// and opened again, it shows all. A log of one kind has nothing to filter.
+func TestWorkLogFiltersByKind(t *testing.T) {
+	exit0, exit1 := 0, 1
+	steps := []client.WorkStep{
+		timedStep("go build ./...", "command", 2*time.Second, &exit0),
+		timedStep("a.go", "read", 0, nil),
+		timedStep("main.go", "edit", 0, nil),
+		timedStep("b.go", "read", 0, nil),
+		timedStep("go test ./...", "command", 4*time.Second, &exit1),
+	}
+	steps[1].Title, steps[2].Title, steps[3].Title = "Read a.go", "Edit main.go", "Read b.go"
+	const summary = "Ran 2 commands · read 2 files · made 1 edit"
+	h := ledger(t, steps, summary)
+	for _, s := range []string{"All 5", "Cmd 2", "Read 2", "Edit 1", "Failed 1"} {
+		if !h.tt.HasText(s) {
+			t.Errorf("no tab %q: %q", s, h.tt.Texts())
+		}
+	}
+	shows := func(want ...string) {
+		t.Helper()
+		for _, s := range []string{"go build ./...", "Read a.go", "Edit main.go", "Read b.go", "go test ./..."} {
+			if h.tt.HasText(s) != slices.Contains(want, s) {
+				t.Errorf("showing %q is %v, want %v: %q", s, h.tt.HasText(s), slices.Contains(want, s), h.tt.Texts())
+			}
+		}
+	}
+	tabSelected := func(want string) {
+		t.Helper()
+		for _, name := range []string{"All 5", "Cmd 2", "Read 2", "Edit 1", "Failed 1"} {
+			found, sel := false, false
+			for _, n := range h.tt.AccessAll() {
+				if n.Role == ui.RoleTab && n.Name == name {
+					found, sel = true, n.Selected
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("no RoleTab %q", name)
+			}
+			if sel != (name == want) {
+				t.Errorf("tab %q Selected = %v, want %v", name, sel, name == want)
+			}
+		}
+	}
+	tabSelected("All 5")
+	// From the header, Tab enters the filter tablist once and the next Tab
+	// reaches Work steps.
+	h.tt.Key(0, ui.KeyTab)
+	if !h.tt.Focused("All 5") {
+		t.Fatalf("Tab from mixed log header did not focus active filter tab")
+	}
+	h.tt.Key(0, ui.KeyTab)
+	if !h.tt.Focused("Work steps") {
+		t.Fatalf("second Tab from mixed log header did not focus Work steps")
+	}
+
+	h.click("Read 2")
+	h.tt.Advance(time.Second)
+	tabSelected("Read 2")
+	shows("Read a.go", "Read b.go")
+	h.click("Failed 1")
+	h.tt.Advance(time.Second)
+	tabSelected("Failed 1")
+	shows("go test ./...")
+	h.click("All 5")
+	h.tt.Advance(time.Second)
+	tabSelected("All 5")
+	shows("go build ./...", "Read a.go", "Edit main.go", "Read b.go", "go test ./...")
+
+	h.click("Edit 1")
+	h.tt.Advance(time.Second)
+	shows("Edit main.go")
+	clickRect(h, head(t, h.tt, summary))
+	clickRect(h, head(t, h.tt, summary))
+	shows("go build ./...", "Read a.go", "Edit main.go", "Read b.go", "go test ./...")
+}
+
+// Switching filters at the end of a long thread keeps the work log's
+// header in place under the pointer.
+func TestSwitchingWorkFiltersKeepsHeaderInPlace(t *testing.T) {
+	at := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	exit0 := 0
+	run := api.NewID()
+	steps := make([]client.WorkStep, 22)
+	for i := range 21 {
+		steps[i] = timedStep(fmt.Sprintf("make step-%d", i), "command", time.Second, &exit0)
+		steps[i].Item = fmt.Sprintf("c%d", i)
+	}
+	steps[21] = timedStep("main.go", "edit", 0, nil)
+	steps[21].Item, steps[21].Title = "e1", "Edit main.go"
+	es := append(zenTurns(15),
+		&client.UserEntry{Message: api.NewID(), Text: "Build it.", State: client.Sent},
+		&client.WorkEntry{Run: run, Started: at, Ended: at.Add(time.Minute), Items: steps},
+		&client.AssistantEntry{Run: run, Text: "Built."},
+	)
+	const summary = "Ran 21 commands · made 1 edit"
+	h, _ := zenThread(t, es, false, "Built.")
+	clickRect(h, head(t, h.tt, summary))
+	h.click("Edit 1")
+	h.tt.Advance(time.Second)
+	before := head(t, h.tt, summary)
+	h.click("All 22")
+	h.tt.Advance(time.Second)
+	after := head(t, h.tt, summary)
+	if math.Abs(float64(after.Y-before.Y)) > 1 {
+		t.Errorf("switching filter moved header from Y=%v to Y=%v", before.Y, after.Y)
+	}
+}
+
+// A click opens a command to read in full, and a second closes it.
+func TestACommandOpensToReadInFull(t *testing.T) {
+	exit0 := 0
+	long := "go test -run 'TestWork|TestASettled|TestALive|TestLongLive|TestExpanded|TestMultiline' -count=1 ./internal/... ./cmd/... ."
+	h := ledger(t, []client.WorkStep{timedStep(long, "command", time.Second, &exit0), timedStep("main.go", "edit", 0, nil)}, "Ran 1 command")
+	drawerText := func() (ui.Rect, bool) {
+		for _, n := range h.tt.AccessAll() {
+			if n.Role == ui.RoleText && n.Name == long {
+				return n.Bounds, true
+			}
+		}
+		return ui.Rect{}, false
+	}
+	if _, ok := drawerText(); ok {
+		t.Fatal("the command drawer shows before a click")
+	}
+	h.click(long)
+	h.tt.Advance(time.Second)
+	full, ok := drawerText()
+	if !ok {
+		t.Fatalf("a click didn't open the command: %q", h.tt.Texts())
+	}
+	if row, _ := h.tt.Find(long); full.H <= row.H/2 {
+		t.Errorf("the open command is %v high, under its row's %v", full.H, row.H)
+	}
+	h.click(long)
+	h.tt.Advance(time.Second)
+	if _, ok := drawerText(); ok {
+		t.Error("a second click didn't close the command")
+	}
+}
+
+func TestSplitCommandPreservesQuotedSpaces(t *testing.T) {
+	for _, tc := range []struct {
+		in, bin, args string
+	}{
+		{`rg 'a  b'`, "rg", `'a  b'`},
+		{"echo line1\necho  line2", "echo", "line1 echo  line2"},
+		{"/usr/local/bin/check", "/usr/local/bin/check", ""},
+		{"  go   test -run 'a  b'", "go", "test -run 'a  b'"},
+	} {
+		bin, args := splitCommand(tc.in)
+		if bin != tc.bin || args != tc.args {
+			t.Errorf("splitCommand(%q) = (%q, %q), want (%q, %q)", tc.in, bin, args, tc.bin, tc.args)
+		}
 	}
 }

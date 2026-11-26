@@ -141,14 +141,30 @@ type timelineMemo struct {
 	// disclosures are the work logs and plans the user opened or closed,
 	// by key, against how they start.
 	disclosures map[string]disclosureOverride
-	// workScrolls keeps the inner scroll state of open work logs, by key.
+	// workScrolls keeps what open work logs show, by key.
 	workScrolls map[string]*workScroll
 }
 
-// workScroll is an open work log's inner scroll state.
+// workScroll is what an open work log shows: where its steps scroll, the
+// kind of step it filters to, and the commands the user opened to read.
+// Closing the log forgets it.
 type workScroll struct {
-	scroll ui.ScrollState
-	opened bool
+	scroll  ui.ScrollState
+	opened  bool
+	filter  workFilter
+	inspect map[string]bool
+}
+
+// toggleInspect opens the command step with the item to read, or closes it.
+func (ws *workScroll) toggleInspect(item string) {
+	if ws.inspect[item] {
+		delete(ws.inspect, item)
+		return
+	}
+	if ws.inspect == nil {
+		ws.inspect = map[string]bool{}
+	}
+	ws.inspect[item] = true
 }
 
 func (m *timelineMemo) workScrollOf(key string) *workScroll {
