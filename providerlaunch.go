@@ -57,6 +57,13 @@ func (a *app) launchState() *launchState {
 	return &a.launches
 }
 
+func (s *launchState) invalidate(engine api.ID) {
+	if r := s.read[engine]; r != nil {
+		r.rev++
+		r.at = time.Time{}
+	}
+}
+
 // launchMachines are the engines a row's launch settings can be of: this
 // machine's, then each server that is online.
 func (a *app) launchMachines() []*client.Env {

@@ -45,6 +45,7 @@ var families = []family{
 	{"codex", "Codex", "OpenAI", ui.Hex("#10a37f"), icOpenAI},
 	{"gemini", "Gemini", "Google", ui.Hex("#4f7cf7"), icGemini},
 	{"antigravity", "Antigravity", "Google", ui.Hex("#1a73e8"), icGemini},
+	{"opencode", "OpenCode", "ACP", ui.Hex("#8b5cf6"), icSparkles},
 	{"grok", "Grok", "xAI", ui.Hex("#2c2c31"), icGrok},
 }
 
