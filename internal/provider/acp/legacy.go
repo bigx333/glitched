@@ -65,6 +65,11 @@ func idKey(id json.RawMessage) string {
 // toAgent is line as the agent gets it: a set of the legacy model option
 // as session/set_model.
 func (l *legacy) toAgent(line []byte) []byte {
+	// A prompt may be long: only the lines the bridge acts on are read.
+	if !bytes.Contains(line, []byte(`"session/new"`)) && !bytes.Contains(line, []byte(`"session/load"`)) &&
+		!bytes.Contains(line, []byte(`"session/resume"`)) && !bytes.Contains(line, []byte(legacyModelConfigID)) {
+		return line
+	}
 	var m rpc
 	if json.Unmarshal(line, &m) != nil || m.Method == "" || len(m.ID) == 0 {
 		return line
@@ -110,6 +115,10 @@ func (l *legacy) toAgent(line []byte) []byte {
 // model option, and the answer to a session/set_model as the session's
 // options.
 func (l *legacy) fromAgent(line []byte) []byte {
+	// An update may be long: only answers and option updates are read.
+	if !bytes.Contains(line, []byte(`"result"`)) && !bytes.Contains(line, []byte(`config_option_update`)) {
+		return line
+	}
 	var m rpc
 	if json.Unmarshal(line, &m) != nil {
 		return line
