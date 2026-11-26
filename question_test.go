@@ -690,43 +690,56 @@ func options(labels ...string) []api.Option {
 
 // The question card shows an agent's text as printable ASCII, every other
 // character as an escape such as \u{5D0}, and flags that it did, as the
-// approval card does: a bidi control, a right-to-left letter or an
-// invisible mark could make one option read as another.
+// approval card does. Individual character-class escaping rules are covered
+// directly by internal/plain's TestText and FuzzText; this test verifies
+// every question-card field path and one full end-to-end ask.
 func TestQuestionCardEscapesWhatItCannotShow(t *testing.T) {
+	checkTexts := func(t *testing.T, texts []string, q api.Question, want string) {
+		t.Helper()
+		if !slices.ContainsFunc(texts, func(s string) bool { return strings.Contains(s, want) }) {
+			t.Errorf("the card shows %q, want %q", texts, want)
+		}
+		if !slices.ContainsFunc(texts, func(s string) bool { return strings.Contains(s, outsideASCII) }) {
+			t.Errorf("the card shows %q, want the flag %q", texts, outsideASCII)
+		}
+		fields := []string{q.Text, q.Header}
+		for _, o := range q.Options {
+			fields = append(fields, o.Label, o.About)
+		}
+		for _, field := range fields {
+			for _, r := range field {
+				if (r > '~' || r < ' ') && slices.ContainsFunc(texts, func(s string) bool { return strings.ContainsRune(s, r) }) {
+					t.Errorf("the card draws %U as it is; texts %q", r, texts)
+				}
+			}
+		}
+	}
+	a := offline(t)
 	for name, tc := range map[string]struct {
 		q    api.Question
 		want string
 	}{
-		"bidi in the question": {api.Question{Text: "Keep the data? \u202e\u2066no\u2069\u202c", Options: options("Yes", "No")}, `Keep the data? \u{202E}\u{2066}no\u{2069}\u{202C}`},
-		"bidi in a label":      {api.Question{Text: "Which?", Options: options("Keep \u202eeteled\u202c", "Delete")}, `Keep \u{202E}eteled\u{202C}`},
-		"invisible in a label": {api.Question{Text: "Which?", Options: options("SQLite", "SQLite\u200b")}, `SQLite\u{200B}`},
-		"right-to-left about": {api.Question{Text: "Which?", Options: []api.Option{{Label: "A", About: "\u05d0 drops the table"}, {Label: "B"}}},
-			`\u{5D0} drops the table`},
-		"header":                {api.Question{Text: "Which?", Header: "St\u200bore", Options: options("A", "B")}, `St\u{200B}ore`},
-		"escape sequence":       {api.Question{Text: "Which?", Options: options("\x1b[2KMemory", "B")}, `\u{1B}[2KMemory`},
-		"line break in a label": {api.Question{Text: "Which?", Options: options("Keep\nDelete all", "B")}, `Keep\u{A}Delete all`},
+		"question text": {api.Question{Text: "Keep the data? \u202e\u2066no\u2069\u202c", Options: options("Yes", "No")}, `Keep the data? \u{202E}\u{2066}no\u{2069}\u{202C}`},
+		"header":        {api.Question{Text: "Which?", Header: "St\u200bore", Options: options("A", "B")}, `St\u{200B}ore`},
+		"option label":  {api.Question{Text: "Which?", Options: options("Keep\nDelete all", "B")}, `Keep\u{A}Delete all`},
+		"option about":  {api.Question{Text: "Which?", Options: []api.Option{{Label: "A", About: "\u05d0 drops the table"}, {Label: "B"}}}, `\u{5D0} drops the table`},
 	} {
 		t.Run(name, func(t *testing.T) {
-			h, _ := questioning(t, []provider.Event{provider.RequestOpened{ID: "ask-1", Kind: api.KindQuestion, Body: questionsOf(tc.q)}})
-			if !h.tt.HasText(tc.want) {
-				t.Errorf("the card shows %q, want %q", h.tt.Texts(), tc.want)
-			}
-			if !h.tt.HasText(outsideASCII) {
-				t.Errorf("the card shows %q, want the flag %q", h.tt.Texts(), outsideASCII)
-			}
-			fields := []string{tc.q.Text, tc.q.Header}
-			for _, o := range tc.q.Options {
-				fields = append(fields, o.Label, o.About)
-			}
-			for _, field := range fields {
-				for _, r := range field {
-					if (r > '~' || r < ' ') && slices.ContainsFunc(h.tt.Texts(), func(s string) bool { return strings.ContainsRune(s, r) }) {
-						t.Errorf("the card draws %U as it is; texts %q", r, h.tt.Texts())
-					}
-				}
-			}
+			e := entry{key: "q-" + name, request: &client.RequestEntry{Request: api.NewID(), Kind: api.KindQuestion, Body: questionsOf(tc.q), State: api.RequestPending}}
+			tt := ui.NewTester(func(c *ui.Context) {
+				a.applyTheme(c)
+				ui.Column(c).Fill().Background(palette.bg).Children(func() { a.questionCard(c, thread{Thread: &client.Thread{}}, e) })
+			}, 960, 420)
+			tt.Frame()
+			checkTexts(t, tt.Texts(), tc.q, tc.want)
 		})
 	}
+	t.Run("end to end through questioning", func(t *testing.T) {
+		q := api.Question{Text: "Keep the data? \u202e\u2066no\u2069\u202c", Options: options("Yes", "No")}
+		want := `Keep the data? \u{202E}\u{2066}no\u{2069}\u{202C}`
+		h, _ := questioning(t, []provider.Event{provider.RequestOpened{ID: "ask-1", Kind: api.KindQuestion, Body: questionsOf(q)}})
+		checkTexts(t, h.tt.Texts(), q, want)
+	})
 }
 
 // Answered, the card shows the label picked and the user's own words as

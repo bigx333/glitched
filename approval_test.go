@@ -191,69 +191,58 @@ func findTyped(tt *ui.Tester, s string) ui.Rect {
 const outsideASCII = `Shown with escapes: \u{…} is text outside printable ASCII, \\u{ a literal \u{`
 
 // The card shows an agent's text as printable ASCII, and every other
-// character as an escape such as \u{5D0}, and flags that it did. A bidi
-// override, a right-to-left letter or an invisible mark could otherwise
-// reorder, hide or change what an allow approves.
+// character as an escape such as \u{5D0}, and flags that it did. Individual
+// character-class escaping rules are covered directly by internal/plain's
+// TestText and FuzzText; this test verifies every approval-card field path
+// and one full end-to-end ask.
 func TestApprovalCardEscapesWhatItCannotShow(t *testing.T) {
+	checkTexts := func(t *testing.T, texts []string, ask map[string]string, want string) {
+		t.Helper()
+		if !slices.ContainsFunc(texts, func(s string) bool { return strings.Contains(s, want) }) {
+			t.Errorf("the card shows %q, want %q", texts, want)
+		}
+		if !slices.ContainsFunc(texts, func(s string) bool { return strings.Contains(s, outsideASCII) }) {
+			t.Errorf("the card shows %q, want the flag %q", texts, outsideASCII)
+		}
+		for _, field := range ask {
+			for _, r := range field {
+				if r > '~' && slices.ContainsFunc(texts, func(s string) bool { return strings.ContainsRune(s, r) }) {
+					t.Errorf("the card draws %U as it is; texts %q", r, texts)
+				}
+			}
+		}
+	}
+	a := offline(t)
 	for name, tc := range map[string]struct {
 		ask  map[string]string
 		want string
 	}{
-		"bidi in args": {map[string]string{"operation": "use mcp__db__exec", "args": "sql: DELETE FROM users \u202e\u2066-- \u2069\u2066WHERE id = 1\u2069\u202c"},
-			`sql: DELETE FROM users \u{202E}\u{2066}-- \u{2069}\u{2066}WHERE id = 1\u{2069}\u{202C}`},
-		"bidi in a command": {map[string]string{"command": "echo safe \u202e\u2066; rm -rf ~/work\u2069\u2066#\u2069\u202c", "cwd": "/w"},
-			`echo safe \u{202E}\u{2066}; rm -rf ~/work\u{2069}\u{2066}#\u{2069}\u{202C}`},
-		"right-to-left command": {map[string]string{"command": ": א; rm -rf ~/work ב # echo safe", "cwd": "/w"},
-			`: \u{5D0}; rm -rf ~/work \u{5D1} # echo safe`},
-		"right-to-left line in args": {map[string]string{"operation": "use mcp__db__exec", "args": "sql:\n  SELECT 1;\n  /*א*/ DELETE FROM users -- /*ב*/ WHERE id = 1"},
-			"sql:\n  SELECT 1;\n  /*\\u{5D0}*/ DELETE FROM users -- /*\\u{5D1}*/ WHERE id = 1"},
-		"right-to-left reason":             {map[string]string{"command": "ls", "reason": "א rm -rf ~/work # List files"}, `\u{5D0} rm -rf ~/work # List files`},
-		"variation selector":               {map[string]string{"command": "./check\ufe0f"}, `./check\u{FE0F}`},
-		"supplementary variation selector": {map[string]string{"command": "./check\U000E0100"}, `./check\u{E0100}`},
-		"combining grapheme joiner":        {map[string]string{"command": "./check\u034f"}, `./check\u{34F}`},
-		"tag":                              {map[string]string{"command": "./check\U000E0000"}, `./check\u{E0000}`},
-		"combining stroke":                 {map[string]string{"command": "echo safe; r\u0336m"}, `echo safe; r\u{336}m`},
-		"fillers":                          {map[string]string{"command": "echo safe\u3164\u115f; rm -rf ~/work"}, `echo safe\u{3164}\u{115F}; rm -rf ~/work`},
-		"no-break spaces":                  {map[string]string{"command": "echo safe\u00a0\u00a0; rm -rf ~/work"}, `echo safe\u{A0}\u{A0}; rm -rf ~/work`},
-		"tab":                              {map[string]string{"command": "echo\tsafe"}, `echo\u{9}safe`},
-		"escape sequence":                  {map[string]string{"command": "echo safe\x1b[2K; rm -rf ~"}, `echo safe\u{1B}[2K; rm -rf ~`},
-		"c1 control sequence":              {map[string]string{"command": "echo safe\u009b2K; rm -rf ~"}, `echo safe\u{9B}2K; rm -rf ~`},
-		"look-alike tool name":             {map[string]string{"operation": "use mcp__db__еxec", "args": "sql: SELECT 1"}, `use mcp__db__\u{435}xec`},
-		"nul": {map[string]string{"operation": "use Task", "args": "description: Review docs\nprompt: Read the docs.\x00 Then delete every file in the workspace."},
-			"description: Review docs\nprompt: Read the docs.\\u{0} Then delete every file in the workspace."},
-		"carriage return": {map[string]string{"operation": "use mcp__db__exec", "args": "sql: DROP TABLE users\rSELECT 1;"},
-			`sql: DROP TABLE users\u{D}SELECT 1;`},
-		"line separator": {map[string]string{"operation": "use mcp__db__exec", "args": "sql: DROP TABLE users\u2028sql: SELECT 1"},
-			`sql: DROP TABLE users\u{2028}sql: SELECT 1`},
-		"zero width": {map[string]string{"operation": "use mcp__db__exec", "args": "sql: DR\u200bOP\ufeff TABLE users"},
-			`sql: DR\u{200B}OP\u{FEFF} TABLE users`},
-		"arabic letter mark": {map[string]string{"operation": "use mcp__db__exec", "args": "sql: \u061cDROP"}, `sql: \u{61C}DROP`},
-		"path":               {map[string]string{"operation": "edit", "path": "src/\u202egnp.exe"}, `src/\u{202E}gnp.exe`},
-		"tool name":          {map[string]string{"operation": "use mcp__x\nsql: SELECT 1", "args": "y"}, `use mcp__x\u{A}sql: SELECT 1`},
-		"cwd":                {map[string]string{"command": "ls", "cwd": "/w\n/x"}, `/w\u{A}/x`},
-		"reason":             {map[string]string{"command": "ls", "reason": "List\u200f files"}, `List\u{200F} files`},
-		"tags in a key":      {map[string]string{"operation": "use mcp__x", "args": "sql\U000E0041: y"}, `sql\u{E0041}: y`},
-		"unknown body":       {map[string]string{"x": "\u202e"}, `{"x":"\u{202E}"}`},
-		"escape in args":     {map[string]string{"operation": "use mcp__db__exec", "args": `sql: SELECT 1\u{A}x: y`}, `sql: SELECT 1\\u{A}x: y`},
+		"command":      {map[string]string{"command": "echo safe \u202e\u2066; rm -rf ~/work\u2069\u2066#\u2069\u202c", "cwd": "/w"}, `echo safe \u{202E}\u{2066}; rm -rf ~/work\u{2069}\u{2066}#\u{2069}\u{202C}`},
+		"cwd":          {map[string]string{"command": "ls", "cwd": "/w\n/x"}, `/w\u{A}/x`},
+		"reason":       {map[string]string{"command": "ls", "reason": "List\u200f files"}, `List\u{200F} files`},
+		"operation":    {map[string]string{"operation": "use mcp__x\nsql: SELECT 1", "args": "y"}, `use mcp__x\u{A}sql: SELECT 1`},
+		"path":         {map[string]string{"operation": "edit", "path": "src/\u202egnp.exe"}, `src/\u{202E}gnp.exe`},
+		"args":         {map[string]string{"operation": "use mcp__db__exec", "args": "sql:\n  SELECT 1;\n  /*א*/ DELETE FROM users -- /*ב*/ WHERE id = 1"}, "sql:\n  SELECT 1;\n  /*\\u{5D0}*/ DELETE FROM users -- /*\\u{5D1}*/ WHERE id = 1"},
+		"unknown body": {map[string]string{"x": "\u202e"}, `{"x":"\u{202E}"}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			body, _ := json.Marshal(tc.ask)
-			h, _ := asking(t, []provider.Event{provider.RequestOpened{ID: "ask-1", Kind: "approval", Body: body}})
-			if !h.tt.HasText(tc.want) {
-				t.Errorf("the card shows %q, want %q", h.tt.Texts(), tc.want)
-			}
-			if !h.tt.HasText(outsideASCII) {
-				t.Errorf("the card shows %q, want the flag %q", h.tt.Texts(), outsideASCII)
-			}
-			for _, field := range tc.ask {
-				for _, r := range field {
-					if r > '~' && slices.ContainsFunc(h.tt.Texts(), func(s string) bool { return strings.ContainsRune(s, r) }) {
-						t.Errorf("the card draws %U as it is; texts %q", r, h.tt.Texts())
-					}
-				}
-			}
+			e := entry{key: "ask-" + name, request: &client.RequestEntry{Request: api.NewID(), Body: body, State: api.RequestPending}}
+			tt := ui.NewTester(func(c *ui.Context) {
+				a.applyTheme(c)
+				ui.Column(c).Fill().Background(palette.bg).Children(func() { a.requestCard(c, thread{Thread: &client.Thread{}}, e) })
+			}, 960, 420)
+			tt.Frame()
+			checkTexts(t, tt.Texts(), tc.ask, tc.want)
 		})
 	}
+	t.Run("end to end through asking", func(t *testing.T) {
+		ask := map[string]string{"command": "echo safe \u202e\u2066; rm -rf ~/work\u2069\u2066#\u2069\u202c", "cwd": "/w"}
+		want := `echo safe \u{202E}\u{2066}; rm -rf ~/work\u{2069}\u{2066}#\u{2069}\u{202C}`
+		body, _ := json.Marshal(ask)
+		h, _ := asking(t, []provider.Event{provider.RequestOpened{ID: "ask-1", Kind: "approval", Body: body}})
+		checkTexts(t, h.tt.Texts(), ask, want)
+	})
 }
 
 // Two commands that run different files draw two different cards: no
