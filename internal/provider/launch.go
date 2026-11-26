@@ -124,6 +124,12 @@ func (p Placement) Program(l Launch) (Program, error) {
 
 func (p Placement) find() string {
 	for _, name := range p.Names {
+		if name == "~" || strings.HasPrefix(name, "~/") || strings.HasPrefix(name, "~"+string(filepath.Separator)) {
+			if path, msg := absolute(name); msg == "" && program(path) == "" {
+				return path
+			}
+			continue
+		}
 		if path, err := exec.LookPath(name); err == nil {
 			if abs, err := filepath.Abs(path); err == nil {
 				return abs

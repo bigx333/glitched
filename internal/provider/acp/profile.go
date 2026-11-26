@@ -204,10 +204,9 @@ func (c CustomProfile) ToProfile() (Profile, error) {
 	if name == "" {
 		name = id
 	}
+	// An agent may speak ACP as it starts, with no arguments, as
+	// codex-acp does.
 	args := slices.Clone(c.Args)
-	if len(args) == 0 {
-		args = []string{"acp"}
-	}
 	env := maps.Clone(c.Env)
 	if env == nil {
 		env = map[string]string{}
