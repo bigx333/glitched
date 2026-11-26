@@ -676,9 +676,9 @@ func plural(n int, what string) string {
 
 func counts(c *ui.Context, add, del int) {
 	if add > 0 {
-		ui.Textf(c, "+%d", add).FontSize(11.5).Font("monospace").TextColor(palette.green)
+		ui.Textf(c, "+%d", add).FontSize(11.5).Font("monospace").FontFeatures("tnum").TextColor(palette.green).SingleLine().Shrink(0)
 	}
 	if del > 0 {
-		ui.Textf(c, "−%d", del).FontSize(11.5).Font("monospace").TextColor(palette.red)
+		ui.Textf(c, "−%d", del).FontSize(11.5).Font("monospace").FontFeatures("tnum").TextColor(palette.red).SingleLine().Shrink(0)
 	}
 }

@@ -107,14 +107,20 @@ func TestAMessagesActionsStayOnTheWayDownToThem(t *testing.T) {
 	}
 }
 
-// A command's step says how it went and how long it took, a failed one
-// what it printed, and an edit's step opens its file in the diff.
+// A work log's ledger tags each step with its kind, a failed command
+// with its exit code over what it printed, and an edit's step opens its
+// file in the diff.
 func TestWorkLogSteps(t *testing.T) {
 	h, th := checked(t)
 	h.openWork("Ran 2 commands", "Edit "+sidebarPath)
-	for _, s := range []string{"✓ 0", "✗ 1", " FAIL  Sidebar > sorts threads by updatedAt\n Test Files  1 failed (1)", "3 steps"} {
+	for _, s := range []string{"CMD", "ERR 1", " FAIL  Sidebar > sorts threads by updatedAt\n Test Files  1 failed (1)", "3 steps", "EDIT"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("no %q in the work log; texts %q", s, h.tt.Texts())
+		}
+	}
+	for _, s := range []string{"✓ 0", "✗ 1"} {
+		if h.tt.HasText(s) {
+			t.Errorf("the ledger still marks exits with %q", s)
 		}
 	}
 	h.click("Edit apps/web/src/components/Sidebar.tsx")

@@ -262,10 +262,10 @@ func TestALongTimeline(t *testing.T) {
 		h.tt.Frame()
 		h.tt.Advance(time.Second)
 		// Whether the log whose head is at head shows its first step under
-		// it.
+		// it (past the filter bar on a mixed log).
 		open := func(head ui.Rect) bool {
 			for _, n := range h.tt.AccessAll() {
-				if n.Name == "go test ./..." && n.Bounds.Y > head.Y && n.Bounds.Y < head.Y+head.H+40 {
+				if n.Name == "go test ./..." && n.Bounds.Y > head.Y && n.Bounds.Y < head.Y+head.H+80 {
 					return true
 				}
 			}
@@ -274,7 +274,7 @@ func TestALongTimeline(t *testing.T) {
 		// The last work log's head in view, folded or open.
 		last := func() (head ui.Rect) {
 			for _, n := range h.tt.AccessAll() {
-				if strings.HasPrefix(n.Name, "Ran 1 command · made 1 edit · searched 1 time 40s 3 steps") && !n.Offscreen {
+				if strings.HasPrefix(n.Name, "Ran 1 command · made 1 edit · searched 1 time 40s · 3 steps") && !n.Offscreen {
 					head = n.Bounds
 				}
 			}
