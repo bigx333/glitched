@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"hash/fnv"
@@ -9,8 +10,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
+	"glitched/internal/client"
 	"glitched/internal/jsonfile"
 )
 
@@ -50,19 +51,24 @@ func frozen(m projectMark) bool {
 	return !slices.Contains(projectIcons, m.Icon) || !slices.Contains(projectColors, m.Color)
 }
 
+type iconSet uint8
+
+func (s iconSet) has(i int) bool { return s&(1<<i) != 0 }
+
+func (s *iconSet) add(i int) { *s |= 1 << i }
+
+type pairGrade uint8
+
+const (
+	pairTaken pairGrade = iota
+	pairFreeShown
+	pairFreeAll
+)
+
 // settleMarks gives every shown name a mark. stored is in first-seen order;
 // the result keeps that order, rewrites in place the entries that move, and
 // appends new names (in name order). changed is whether the result differs
 // from stored.
-//
-// While icons go round, a mark seen before keeps its icon unless one seen
-// before it, and shown, holds it; then it moves to a free icon. Past that,
-// icons repeat anyway and a mark seen before never moves: only new names
-// pick, each onto a pair no one shown holds while pairs go round. One this
-// version can't rewrite holds what it's drawn with, shared or not, and takes
-// up only that. Those not shown hold nothing, but a name that moves takes
-// none of their icons as its hash icon, and past 8 a new name keeps off
-// their pairs where it can.
 func settleMarks(stored []projectMark, shown []string) (out []projectMark, changed bool) {
 	out = slices.Clone(stored)
 	want := map[string]bool{}
@@ -104,16 +110,20 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 		name        string
 		icon, color int // the ones to start from: stored, or the hash ones
 		hashIcon    int
+		olderAbsent iconSet
 	}
 	var picks []pick
+	var olderAbsent iconSet
 	clear(seen)
 	for i, m := range out {
-		if !want[m.Name] || seen[m.Name] {
+		if seen[m.Name] {
 			continue
 		}
 		seen[m.Name] = true
 		icon, color := drawn(m)
 		switch {
+		case !want[m.Name]:
+			olderAbsent.add(icon)
 		case frozen(m):
 			if !pairs[[2]int{icon, color}] {
 				hold(icon, color)
@@ -122,7 +132,7 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 			hold(icon, color)
 		default:
 			hi, _ := hashMark(m.Name)
-			picks = append(picks, pick{i, m.Name, icon, color, hi})
+			picks = append(picks, pick{i, m.Name, icon, color, hi, olderAbsent})
 		}
 	}
 	var fresh []string
@@ -134,32 +144,39 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 	slices.Sort(fresh)
 	for _, n := range fresh {
 		hi, hc := hashMark(n)
-		picks = append(picks, pick{-1, n, hi, hc, hi})
+		picks = append(picks, pick{-1, n, hi, hc, hi, olderAbsent})
 	}
 
-	// pickIcon is the first free icon from p's own while icons go round.
-	// Past that, it is from p's hash icon the least used of those with a
-	// pair no one shown or absent has, else with a pair free, else of all.
-	pickIcon := func(p pick) int {
-		n := len(projectIcons)
-		if byIcon {
-			for d := range n {
-				if i := (p.icon + d) % n; iconUses[i] == 0 {
-					return i
+	grade := func(i int) pairGrade {
+		g := pairTaken
+		for c := range projectColors {
+			if pair := [2]int{i, c}; !pairs[pair] {
+				if !absentPairs[pair] {
+					return pairFreeAll
 				}
+				g = pairFreeShown
 			}
 		}
-		grade := func(i int) int {
-			g := 0
-			for c := range projectColors {
-				if pair := [2]int{i, c}; !pairs[pair] {
-					if !absentPairs[pair] {
-						return 2
+		return g
+	}
+	pickIcon := func(p pick) (int, bool) {
+		n := len(projectIcons)
+		if byIcon {
+			free := func(ok func(i int) bool) (int, bool) {
+				for d := range n {
+					if i := (p.icon + d) % n; iconUses[i] == 0 && ok(i) {
+						return i, true
 					}
-					g = 1
 				}
+				return 0, false
 			}
-			return g
+			if i, ok := free(func(i int) bool { return !absentIcons[i] }); ok {
+				return i, true
+			}
+			if i, ok := free(func(i int) bool { return !p.olderAbsent.has(i) }); ok || p.at >= 0 {
+				return i, ok
+			}
+			return free(func(int) bool { return true })
 		}
 		best := p.hashIcon
 		for d := range n {
@@ -168,17 +185,15 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 				best = i
 			}
 		}
-		return best
+		return best, true
 	}
-	// pickColor is p's own colour on icon if that pair is free, else the
-	// first free one from it; past 8, first one no one absent has either.
 	pickColor := func(p pick, icon int) int {
 		n := len(projectColors)
 		free := -1
 		for d := range n {
 			c := (p.color + d) % n
 			if pair := [2]int{icon, c}; !pairs[pair] {
-				if byIcon || !absentPairs[pair] {
+				if !absentPairs[pair] {
 					return c
 				}
 				if free < 0 {
@@ -191,18 +206,20 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 		}
 		return p.color
 	}
-	settle := func(p pick, icon int) {
+	settle := func(p pick, icon int, move bool) {
+		if !move {
+			hold(p.icon, p.color)
+			return
+		}
 		color := pickColor(p, icon)
 		hold(icon, color)
 		m := projectMark{p.name, projectIcons[icon], projectColors[color]}
-		switch {
-		case p.at < 0:
+		if p.at < 0 {
 			out = append(out, m)
-			changed = true
-		default:
+		} else {
 			out[p.at] = m
-			changed = true
 		}
+		changed = true
 	}
 
 	// The first to hash to an icon no one holds takes it, before any other
@@ -210,14 +227,15 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 	// takes it only where no one absent is drawn with it.
 	var rest []pick
 	for _, p := range picks {
-		if iconUses[p.hashIcon] > 0 || p.at >= 0 && absentIcons[p.hashIcon] {
+		if iconUses[p.hashIcon] > 0 || p.at >= 0 && absentIcons[p.hashIcon] || !byIcon && grade(p.hashIcon) < pairFreeAll {
 			rest = append(rest, p)
 			continue
 		}
-		settle(p, p.hashIcon)
+		settle(p, p.hashIcon, true)
 	}
 	for _, p := range rest {
-		settle(p, pickIcon(p))
+		icon, move := pickIcon(p)
+		settle(p, icon, move)
 	}
 	// New names were appended claims first; put them in name order.
 	slices.SortStableFunc(out[len(stored):], func(a, b projectMark) int {
@@ -243,57 +261,80 @@ func marksByName(marks []projectMark) map[string]projectMark {
 func (a *app) marksPath() string { return filepath.Join(a.dir, "marks.json") }
 
 // marksFile is what a stat of marks.json says of it: another window that
-// writes it changes its time or its size, or both. One that writes as
-// many bytes within the same tick of the clock goes unseen till the next
-// write; that is the risk taken for a stat a rebuild, not a read.
-type marksFile struct {
-	mod  time.Time
-	size int64
-}
+// writes it, in place or by moving a file over it, changes its time, its
+// size or the file. One that writes as many bytes in place within the
+// same tick of the clock goes unseen till the next write; that is the
+// risk taken for a stat a rebuild, not a read.
+type marksFile struct{ fi os.FileInfo }
 
 func (a *app) statMarks() marksFile {
 	fi, err := os.Stat(a.marksPath())
 	if err != nil {
 		return marksFile{}
 	}
-	return marksFile{fi.ModTime(), fi.Size()}
+	return marksFile{fi}
 }
 
-func (f marksFile) same(g marksFile) bool { return f.mod.Equal(g.mod) && f.size == g.size }
+func (f marksFile) same(g marksFile) bool {
+	if f.fi == nil || g.fi == nil {
+		return f.fi == g.fi
+	}
+	return os.SameFile(f.fi, g.fi) && f.fi.ModTime().Equal(g.fi.ModTime()) && f.fi.Size() == g.fi.Size()
+}
 
-// decodeMarks is the marks in raw, a JSON value, in their order, and
-// whether raw is an array of marks this version writes. An entry that
-// doesn't decode, or has no name, is skipped. A newer version's extra fields on an entry
-// are dropped when this one writes the entry again.
 func decodeMarks(raw json.RawMessage) (ms []projectMark, ours bool) {
+	if len(raw) == 0 {
+		return nil, true
+	}
 	var entries []json.RawMessage
-	if raw != nil && json.Unmarshal(raw, &entries) != nil {
+	if t := bytes.TrimSpace(raw); len(t) == 0 || t[0] != '[' || json.Unmarshal(t, &entries) != nil {
 		return nil, false
 	}
 	ours = true
 	for _, e := range entries {
+		ours = ours && writtenMark(e)
 		var m projectMark
-		if json.Unmarshal(e, &m) != nil || m.Name == "" {
-			ours = false
-			continue
+		if t := bytes.TrimSpace(e); len(t) > 0 && t[0] == '{' && json.Unmarshal(t, &m) == nil && m.Name != "" {
+			ms = append(ms, m)
 		}
-		ms = append(ms, m)
 	}
 	return ms, ours
 }
 
+func writtenMark(e json.RawMessage) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(e, &fields) != nil || len(fields) != 3 {
+		return false
+	}
+	for _, k := range []string{"name", "icon", "color"} {
+		var v string
+		if f := fields[k]; len(f) == 0 || f[0] != '"' || json.Unmarshal(f, &v) != nil || v == "" {
+			return false
+		}
+	}
+	return true
+}
+
 // loadMarks takes the projects' marks as marks.json holds them. One this
 // version doesn't write is never written here, till it changes.
-func (a *app) loadMarks() {
+func (a *app) loadMarks() (corrupt bool) {
 	a.marksRead, a.marksShown = a.statMarks(), ""
 	var raw json.RawMessage
 	if err := jsonfile.Load(a.marksPath(), &raw); err != nil {
 		log.Printf("glitched: marks: %v", err)
+		if len(a.marks) > 0 {
+			a.heldMarks(false)
+			syntax, kind := (*json.SyntaxError)(nil), (*json.UnmarshalTypeError)(nil)
+			return errors.As(err, &syntax) || errors.As(err, &kind)
+		}
+	} else {
+		a.marksUnsaved = false
 	}
 	ms, ours := decodeMarks(raw)
 	a.heldMarks(!ours)
 	a.marks = ms
 	a.drawnMarks = marksByName(a.marks)
+	return false
 }
 
 // heldMarks is whether marks.json is one this version doesn't write, and
@@ -312,11 +353,24 @@ var errMarksSettled = errors.New("marks settled")
 // errMarksHeld leaves marks.json as it is: another version wrote it.
 var errMarksHeld = errors.New("marks held")
 
+func (a *app) syncMarks() {
+	if a.dir != "" && !a.statMarks().same(a.marksRead) {
+		a.settleShownMarks()
+	}
+}
+
+func (a *app) waitingForLocalSnapshot() bool {
+	if len(a.marks) > 0 || a.dir == "" || a.backend == nil {
+		return false
+	}
+	e := a.localEnv()
+	return e != nil && e.Log().IsZero() && e.Status == client.Status(client.Connecting{})
+}
+
 // settleShownMarks gives the projects the sidebar has a mark each, as
 // settleMarks does, onto what another window wrote to marks.json since,
-// and writes the file only when that changes it. Marks it couldn't save
-// hold here for as long as the app runs. With the same projects shown,
-// and the file as it was, there is nothing to do.
+// and writes the file only when that changes it. With the same projects
+// shown, and the file as it was, there is nothing to do.
 func (a *app) settleShownMarks() {
 	// A file gone leaves the marks here, to write again on this rebuild.
 	rewrite := false
@@ -325,7 +379,7 @@ func (a *app) settleShownMarks() {
 			a.marksRead, rewrite = f, len(a.marks) > 0
 			a.heldMarks(false)
 		} else {
-			a.loadMarks()
+			rewrite = a.loadMarks()
 		}
 	}
 	var names []string
@@ -340,6 +394,14 @@ func (a *app) settleShownMarks() {
 	if shown == a.marksShown && a.drawnMarks != nil && !rewrite {
 		return
 	}
+	if a.waitingForLocalSnapshot() {
+		out, _ := settleMarks(nil, names)
+		a.drawnMarks = marksByName(out)
+		for _, p := range a.projects {
+			a.markProject(p)
+		}
+		return
+	}
 	a.marksShown = shown
 	before := a.marks
 	if out, changed := settleMarks(a.marks, names); changed || rewrite {
@@ -352,12 +414,16 @@ func (a *app) settleShownMarks() {
 					return errMarksHeld
 				}
 				// A file gone, or made anew, leaves the marks here to keep.
-				lost := len(from) == 0 && len(before) > 0
-				if lost {
-					from = before
+				disk := len(from)
+				if disk == 0 || a.marksUnsaved {
+					for _, m := range before {
+						if !slices.ContainsFunc(from, func(o projectMark) bool { return o.Name == m.Name }) {
+							from = append(from, m)
+						}
+					}
 				}
 				out, changed := settleMarks(from, names)
-				if ms = out; !changed && !lost {
+				if ms = out; !changed && len(from) == disk {
 					return errMarksSettled
 				}
 				b, err := json.Marshal(out)
@@ -366,10 +432,11 @@ func (a *app) settleShownMarks() {
 			})
 			switch {
 			case err == nil || errors.Is(err, errMarksSettled):
-				a.marks, a.marksRead = ms, a.statMarks()
+				a.marks, a.marksRead, a.marksUnsaved = ms, a.statMarks(), false
 			case errors.Is(err, errMarksHeld):
 				a.heldMarks(true)
 			default:
+				a.marksUnsaved = true
 				log.Printf("glitched: marks: %v", err)
 			}
 		}

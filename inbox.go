@@ -113,6 +113,7 @@ func (a *app) sortThreads() {
 	}
 	s := &a.sorted
 	if s.items != nil && s.at == at && (s.until.IsZero() || a.now.Before(s.until)) {
+		a.syncMarks()
 		return
 	}
 	a.projects = a.gather()

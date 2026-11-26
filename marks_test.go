@@ -588,9 +588,7 @@ func TestMarksSettleForAnySetOfProjects(t *testing.T) {
 		// P7: shown one way and another by turns, as a server comes and
 		// goes or two windows show different projects, the marks settle in
 		// a round and then stay: one set inside the other, either first;
-		// two that overlap; two apart. Two that overlap, each of 8 or fewer
-		// but more together, can still go round a while: a name moved for
-		// one set may land on an icon one only the other shows has.
+		// two that overlap; two apart.
 		bucket := func() int {
 			switch r.IntN(4) {
 			case 0:
@@ -614,9 +612,6 @@ func TestMarksSettleForAnySetOfProjects(t *testing.T) {
 		case 2:
 			k := 1 + r.IntN(min(na, nb))
 			a, b = u[:na], u[na-k:na-k+nb]
-			if na <= 8 && nb <= 8 && na+nb-k > 8 {
-				continue
-			}
 		case 3:
 			a, b = u[:na], u[na:]
 		}
@@ -1152,12 +1147,11 @@ func TestAMovedProjectKeepsItsColor(t *testing.T) {
 	}
 }
 
-func TestWhileIconsGoRoundAPairOneNotShownHasIsTaken(t *testing.T) {
-	// z, not shown, has code #eab308; aaa moving onto code keeps its color.
+func TestWhileIconsGoRoundAMovedProjectKeepsOffAnIconOneNotShownHas(t *testing.T) {
 	stored := []projectMark{{"z", "code", "#eab308"}, {"openbot", "phone", "#22c55e"}, {"aaa", "phone", "#eab308"}}
 	out, _ := settleMarks(stored, []string{"openbot", "aaa"})
-	if m := out[2]; m != (projectMark{"aaa", "code", "#eab308"}) {
-		t.Errorf("aaa is %v; want code #eab308", m)
+	if m := out[2]; m != (projectMark{"aaa", "global", "#eab308"}) {
+		t.Errorf("aaa is %v; want global #eab308", m)
 	}
 }
 
@@ -1450,8 +1444,6 @@ func TestMarksMadeUnreadableAtTheSameStatAreHeldOnce(t *testing.T) {
 	}
 }
 
-// Two servers' projects and this computer's: nine in all, eight or fewer
-// with either server alone.
 var (
 	hereProjects  = []string{"api", "site", "tools"}
 	firstServer   = []string{"db", "ops", "b", "docs", "sparky"}
@@ -1463,7 +1455,9 @@ var (
 )
 
 func TestMarksSettleInARoundAsServersGoOfflineAndComeBack(t *testing.T) {
-	// All nine, then one server offline, then the other, and so on.
+	if len(withBothNine) != 9 || len(withFirst) > 8 || len(withSecond) > 8 {
+		t.Fatalf("sizes: both=%d first=%d second=%d", len(withBothNine), len(withFirst), len(withSecond))
+	}
 	var s []projectMark
 	for _, shown := range serverByTurns {
 		s, _ = settleMarks(s, shown)
@@ -1479,8 +1473,6 @@ func TestMarksSettleInARoundAsServersGoOfflineAndComeBack(t *testing.T) {
 }
 
 func TestTwoWindowsShowingOverlappingProjectsWriteMarksTwice(t *testing.T) {
-	// marks.json was settled with all nine shown. Each window shows eight
-	// or fewer: neither may keep moving a mark the other moved back.
 	dir := t.TempDir()
 	ms, _ := settleMarks(nil, withBothNine)
 	b, _ := json.Marshal(ms)
@@ -1504,8 +1496,6 @@ func TestTwoWindowsShowingOverlappingProjectsWriteMarksTwice(t *testing.T) {
 }
 
 func TestFourProjectsSettleInARound(t *testing.T) {
-	// Each was seen alone before, on its hash mark: glitched32 and
-	// pstack-t332 share global.
 	stored := []projectMark{
 		{"glitched32", "global", "#8b5cf6"},
 		{"mygo29", "terminal", "#eab308"},
@@ -1515,8 +1505,6 @@ func TestFourProjectsSettleInARound(t *testing.T) {
 }
 
 func TestANewProjectPastEightKeepsOffPairsThoseNotShownHaveOnItsHashIcon(t *testing.T) {
-	// Seven not shown have every pair on phone, openbot's hash icon; nine
-	// shown, none on phone, leave pairs free elsewhere.
 	var stored []projectMark
 	absent := map[projectMark]bool{}
 	for c, color := range projectColors {
@@ -1587,8 +1575,6 @@ func TestAMarkAnotherWindowReplacedAtTheSameSizeAndTimeIsDrawn(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, mtime := readMarks(t, dir)
-	// Another window writes a file of its own, as many bytes, and moves it
-	// over marks.json within the same tick.
 	src := bytes.Replace(old, []byte(`"#ec4899"`), []byte(`"#14b8a6"`), 1)
 	if bytes.Equal(src, old) {
 		t.Fatalf("glitched isn't #ec4899: %s", old)
@@ -1612,8 +1598,6 @@ func TestMarksThatCouldntBeSavedAreSavedInTheOrderSeen(t *testing.T) {
 	log.SetOutput(io.Discard)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 	a := marksApp(dir, "mygo")
-	// marks.json's lock can't be taken for a while: pstack-t3, then
-	// glitched, both hashing to mygo's wind, are marked here alone.
 	lock := filepath.Join(dir, "marks.json.lock")
 	os.Remove(lock)
 	if err := os.Mkdir(lock, 0o700); err != nil {
@@ -1663,10 +1647,6 @@ func TestMarksMadeUnreadableWhileTheAppRunsAreWrittenAgainAsTheyWere(t *testing.
 }
 
 func TestAProjectKeepsItsMarkWhenItsThreadsArriveAfterTheAddedProjects(t *testing.T) {
-	// glitched and mygo, added, hash to wind; openbot, whose thread the
-	// engine has, alone to phone. Before the upgrade each was drawn on its
-	// hash icon; openbot stays on phone though the added projects show
-	// first, while this machine's engine is still reached.
 	dir, _ := marksDir(t, "openbot")
 	rememberedState(t, dir, []string{"/work/glitched", "/work/mygo"}, "")
 	p := &posts{wake: make(chan struct{}, 1)}
@@ -1689,8 +1669,6 @@ func TestAProjectKeepsItsMarkWhenItsThreadsArriveAfterTheAddedProjects(t *testin
 	}
 }
 
-// otherWindowMarks has another window write marks.json, with name's mark
-// changed to m, as a later write than the last.
 func otherWindowMarks(t *testing.T, dir, name string, m projectMark) {
 	t.Helper()
 	ms, mtime := readMarks(t, dir)
@@ -1704,7 +1682,6 @@ func otherWindowMarks(t *testing.T, dir, name string, m projectMark) {
 	os.Chtimes(path, mtime.Add(time.Second), mtime.Add(time.Second))
 }
 
-// quickMarks is each of quick ask's projects' marks, by name.
 func quickMarks(a *app) map[string]projectMark {
 	by := map[string]projectMark{}
 	for _, p := range a.localProjects() {
@@ -1719,7 +1696,6 @@ func TestQuickAskDrawsMarksAsTheyAreSettled(t *testing.T) {
 	h := start(t, dir)
 	h.listed("glitched", "mygo", "pstack-t3")
 
-	// A new project's thread arrives with the window hidden: no frame runs.
 	seed(t, d, "/work/sparky", "A thread in sparky")
 	deadline := time.Now().Add(30 * time.Second)
 	for !slices.ContainsFunc(h.a.recent(), func(th thread) bool { return th.View.Title == "A thread in sparky" }) {
@@ -1738,7 +1714,6 @@ func TestQuickAskDrawsMarksAsTheyAreSettled(t *testing.T) {
 		}
 	}
 
-	// Another window changes glitched's mark.
 	want := projectMark{"glitched", "wind", "#14b8a6"}
 	otherWindowMarks(t, dir, "glitched", want)
 	if got := quickMarks(h.a)["glitched"]; got != want {
