@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"path/filepath"
 	"slices"
@@ -57,7 +58,7 @@ func (h *Host) AskCredentials(ctx context.Context, a api.Ask) (api.Asked, error)
 	if err != nil {
 		return api.Asked{}, err
 	}
-	if !t.Parent.IsZero() && !t.TakenOver {
+	if !t.UserOwned() {
 		return api.Asked{}, errors.New("a child asks its parent for secrets, not the user: report the names you need and why, and the parent asks with request_credentials")
 	}
 	live := t.Live()
@@ -111,7 +112,7 @@ func (h *Host) AskCredentials(ctx context.Context, a api.Ask) (api.Asked, error)
 		h.mu.Unlock()
 	}()
 	body, _ := json.Marshal(a.Credentials)
-	body = secrets.RedactJSON(body, h.vault.Values(a.Thread))
+	body = secrets.RedactJSON(body, h.credentials(a.Thread))
 	if err := h.observe(ctx, a.Thread, engine.Surfaced{Run: key.run, Request: api.NewID(), Dedup: key.dedup, Kind: api.KindCredentials, Body: body}, 0); err != nil {
 		return api.Asked{}, err
 	}
@@ -234,12 +235,59 @@ func (h *Host) answerAsk(b engine.DeliverAnswer) engine.Observation {
 	return engine.Delivered{Request: b.Request}
 }
 
-// credentials are thread's values, for redaction; none without a vault.
-func (h *Host) credentials(thread api.ID) map[string]string {
+// credentialLine is thread and its ancestors, up to api.MaxDepth+1, whose
+// vault values are redacted from thread's output: a parent may hand a child
+// individual secret file paths from the parent's vault. A thread's parent
+// never changes after create, so pump resolves this once per run.
+func (h *Host) credentialLine(thread api.ID) []api.ID {
 	if h.vault == nil {
 		return nil
 	}
-	return h.vault.Values(thread)
+	line := make([]api.ID, 0, api.MaxDepth+1)
+	id := thread
+	for range api.MaxDepth + 1 {
+		line = append(line, id)
+		t, err := h.store.Thread(h.drain, id)
+		if err != nil || t.Deleted || t.Parent.IsZero() {
+			break
+		}
+		id = t.Parent
+	}
+	return line
+}
+
+// credentialsFor is the union of vault values held by line, for redaction.
+func (h *Host) credentialsFor(line []api.ID) map[string]string {
+	if h.vault == nil || len(line) == 0 {
+		return nil
+	}
+	if len(line) == 1 {
+		return h.vault.Values(line[0])
+	}
+	var merged map[string]string
+	for i, id := range line {
+		vals := h.vault.Values(id)
+		if len(vals) == 0 {
+			continue
+		}
+		if merged == nil {
+			merged = make(map[string]string, len(vals))
+		}
+		for k, v := range vals {
+			if existing, ok := merged[k]; !ok {
+				merged[k] = v
+			} else if existing != v {
+				merged[fmt.Sprintf("%s#%d", k, i)] = v
+			}
+		}
+	}
+	return merged
+}
+
+// credentials are thread's and its ancestors' values, for redaction; none
+// without a vault.
+func (h *Host) credentials(thread api.ID) map[string]string {
+	return h.credentialsFor(h.credentialLine(thread))
 }
 
 func isAsk(dedup string) bool { return strings.HasPrefix(dedup, askPrefix) }

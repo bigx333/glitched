@@ -149,10 +149,10 @@ func TestAChildAsksItsParentForSecrets(t *testing.T) {
 		t.Fatal("a thread of the user's lacks request_credentials")
 	}
 	s := (mcp.Launcher{Command: "glitched", Engine: "/tmp/sock"}).ForThread(c.ID, api.AccessAsk, api.RoleDefault, true)
-	if s.Env[mcp.EnvChild] != "1" || strings.Contains(s.Instructions, "ask with request_credentials") {
+	if s.Env[mcp.EnvChild] != "1" || strings.Contains(s.Instructions, "ask with request_credentials") || strings.Contains(s.Instructions, "env script") {
 		t.Fatalf("a child's MCP server: env %+v, instructions %q", s.Env, s.Instructions)
 	}
-	if s := (mcp.Launcher{}).For(o.Thread, api.AccessAsk); s.Env[mcp.EnvChild] != "" || !strings.Contains(s.Instructions, "ask with request_credentials") {
+	if s := (mcp.Launcher{}).For(o.Thread, api.AccessAsk); s.Env[mcp.EnvChild] != "" || !strings.Contains(s.Instructions, "ask with request_credentials") || !strings.Contains(s.Instructions, "never the env script") {
 		t.Fatalf("a top-level thread's MCP server: env %+v, instructions %q", s.Env, s.Instructions)
 	}
 }

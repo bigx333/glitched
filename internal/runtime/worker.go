@@ -392,7 +392,7 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		Session: t.Session, ResumeOnly: b.ResumeOnly, CacheExpires: t.Context.CacheExpires, Tap: h.tap(thread),
 	}
 	if h.mcp != nil {
-		spec.MCP = append(spec.MCP, h.mcp.ForThread(thread, b.Access, t.Role, !t.Parent.IsZero() && !t.TakenOver))
+		spec.MCP = append(spec.MCP, h.mcp.ForThread(thread, b.Access, t.Role, !t.UserOwned()))
 	}
 	if h.vault != nil {
 		dir, err := h.vault.Prepare(thread)

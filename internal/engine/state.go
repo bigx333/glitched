@@ -233,6 +233,10 @@ func (t Thread) settled() bool { return t.Disposition.State == api.Settled }
 // of one on the machine its link came from.
 func (t Thread) child() bool { return !t.Parent.IsZero() || t.Origin != nil }
 
+// UserOwned is whether the thread answers to the user: one of theirs, or a
+// child (local or linked from another machine) they took over.
+func (t Thread) UserOwned() bool { return !t.child() || t.TakenOver }
+
 // stopped is whether the thread's last run was stopped: by the user, or by
 // the engine when it couldn't deliver an answer. A stop reached a run that
 // completed as it landed too. A silent run since, such as an idle

@@ -664,16 +664,17 @@ func (t Thread) Working() bool { return t.Run != RunIdle && t.Run != RunUncertai
 func (t Thread) Silent() bool { return t.Turn != nil && t.Turn.Silent }
 
 // Stoppable is whether the user can stop the thread: it has a live run
-// that isn't silent, or it is a link's thread whose messages wait with
-// no run, on its worktree or its ceiling, where a stop holds them.
+// that isn't silent (or is a quiet Manager wake, which the user can still
+// interrupt), or it is a link's thread whose messages wait with no run, on
+// its worktree or its ceiling, where a stop holds them.
 func (t Thread) Stoppable() bool {
-	return t.Live() && !t.Silent() || t.Origin != nil && !t.Live() && t.Queued > 0 && !t.Resumable
+	return t.Live() && (!t.Silent() || t.Turn != nil && t.Turn.Dismissed) || t.Origin != nil && !t.Live() && t.Queued > 0 && !t.Resumable
 }
 
 // UserOwned is whether the thread answers to the user: one of theirs, or a
-// child they took over. Any other child answers to its parent, which alone
-// hears what it finishes or asks.
-func (t Thread) UserOwned() bool { return t.Parent.IsZero() || t.TakenOver }
+// child (local or linked from another machine) they took over. Any other
+// child answers to its parent, which alone hears what it finishes or asks.
+func (t Thread) UserOwned() bool { return t.Parent.IsZero() && t.Origin == nil || t.TakenOver }
 
 // Live is whether the thread has a run, an uncertain one too. Only an
 // interrupt, a settle or a delete ends an uncertain run.

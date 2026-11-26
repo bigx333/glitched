@@ -139,15 +139,15 @@ func TestDismissedWakeKeepsQueuedSendNowEnabled(t *testing.T) {
 		Run:  api.RunRunning,
 		Turn: &api.Turn{Run: api.NewID(), Silent: true, Dismissed: true},
 	}
-	if !canSteer(dismissed) {
-		t.Fatal("canSteer returned false for a dismissed Manager wake")
+	if !canSteer(dismissed) || !dismissed.Stoppable() {
+		t.Fatalf("dismissed Manager wake: canSteer=%v Stoppable=%v, want true/true", canSteer(dismissed), dismissed.Stoppable())
 	}
 	compacting := api.Thread{
 		Run:  api.RunRunning,
 		Turn: &api.Turn{Run: api.NewID(), Silent: true},
 	}
-	if canSteer(compacting) {
-		t.Fatal("canSteer returned true for a silent compaction run")
+	if canSteer(compacting) || compacting.Stoppable() {
+		t.Fatalf("silent compaction run: canSteer=%v Stoppable=%v, want false/false", canSteer(compacting), compacting.Stoppable())
 	}
 }
 

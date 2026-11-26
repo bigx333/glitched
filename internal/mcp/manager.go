@@ -25,7 +25,7 @@ Shared state
 2. Briefing and gatekeeping. Never act as a pass-through relay.
 - Give every worker a self-contained brief with its scope, definition of done, what is out of scope and, for code changes, an instruction to commit on its worktree branch.
 - Questions. Answer routine worker questions yourself with task_answer. Ask the user only when the call is genuinely theirs, then relay the decision to the worker.
-- Secrets. When a worker says it needs a secret, check that it really does. Call request_credentials yourself once, even when several workers need it, and pass back the env script or file paths, never the values.
+- Secrets. When a worker says it needs a secret, check that it really does. Call request_credentials yourself once, even when several workers need it, and pass back only the individual file paths for the approved secret names (never the env script, never the values).
 - Approvals. When a worker blocks on a permission approval, vet it first. Cancel or re-brief a bogus or off-scope command with task_cancel or task_send without telling the user. Escalate only legitimate approvals.
 - Coordinate shared facts across workers yourself, and never let two workers write the same files.
 

@@ -46,14 +46,15 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 	}()
 
 	commit := func(o engine.Observation) bool { return h.record(thread, o, 0) }
-	redact := func(s string) string { return secrets.Redact(s, h.credentials(thread)) }
-	// Text is shown redacted of the thread's credentials. A timed flush
-	// keeps back an end that could be the start of one; any other shows
-	// it all.
+	credLine := h.credentialLine(thread)
+	redact := func(s string) string { return secrets.Redact(s, h.credentialsFor(credLine)) }
+	// Text is shown redacted of the thread's and its ancestors' credentials.
+	// A timed flush keeps back an end that could be the start of one; any
+	// other shows it all.
 	var text strings.Builder
 	var flush <-chan time.Time
 	flushSome := func(final bool) {
-		shown, kept := secrets.RedactStream(text.String(), h.credentials(thread), final)
+		shown, kept := secrets.RedactStream(text.String(), h.credentialsFor(credLine), final)
 		if shown != "" {
 			commit(engine.Delta{Run: run, Text: shown})
 		}
@@ -71,7 +72,7 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 		if b == nil {
 			return
 		}
-		shown, kept := secrets.RedactStream(b.String(), h.credentials(thread), final)
+		shown, kept := secrets.RedactStream(b.String(), h.credentialsFor(credLine), final)
 		if shown != "" {
 			commit(engine.Subagent{Run: run, Event: api.SubagentDelta{Run: run, Parent: parent, Text: shown}})
 		}
@@ -162,7 +163,7 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				})
 			case provider.RequestOpened:
 				flushText()
-				commit(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: ev.ID, Kind: ev.Kind, Body: secrets.RedactJSON(ev.Body, h.credentials(thread))})
+				commit(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: ev.ID, Kind: ev.Kind, Body: secrets.RedactJSON(ev.Body, h.credentialsFor(credLine))})
 			case provider.RequestWithdrawn:
 				// A withdrawn request doesn't end the agent's text stream, so
 				// keep back any tail that could start a credential.

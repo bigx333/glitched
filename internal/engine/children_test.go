@@ -396,10 +396,13 @@ func TestTheUserTakesAChildOver(t *testing.T) {
 // does.
 func TestALinksThreadsFirstMessageTakesNothingOver(t *testing.T) {
 	th := engine.Apply(engine.Thread{}, engine.Event{Thread: api.NewID(), At: now, Body: api.ThreadCreated{Title: "link", Origin: &api.Origin{Link: api.NewID(), Thread: api.NewID()}}})
+	if th.UserOwned() || engine.View(th).UserOwned() {
+		t.Fatalf("a fresh link's thread is UserOwned: engine=%v view=%v", th.UserOwned(), engine.View(th).UserOwned())
+	}
 	for i, want := range []bool{false, true} {
 		th = engine.Apply(th, engine.Event{At: now, Body: api.MessageQueued{Message: api.NewID(), Text: "go", Mode: api.AfterActive}})
-		if th.TakenOver != want {
-			t.Fatalf("after message %d: TakenOver %v, want %v", i+1, th.TakenOver, want)
+		if th.TakenOver != want || th.UserOwned() != want || engine.View(th).UserOwned() != want {
+			t.Fatalf("after message %d: TakenOver=%v UserOwned=%v view=%v, want %v", i+1, th.TakenOver, th.UserOwned(), engine.View(th).UserOwned(), want)
 		}
 	}
 }

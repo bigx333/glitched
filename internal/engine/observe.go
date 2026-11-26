@@ -482,21 +482,46 @@ func askText(o Reported) string {
 }
 
 // approvalText gives the parent's agent an approval its child waits on, in
-// the task tags askText uses: what the child wants to do, and that only
-// the user grants it.
+// the task tags askText uses: what the child wants to do (from the full
+// request body, unclipped, including cwd, unsandboxed, reason and
+// args/permissions), and that only the user grants it.
 func approvalText(o Reported) string {
-	what := strings.TrimSpace(o.Report.Outcome)
-	if what == "" {
-		var b struct{ Operation, Path, Command string }
-		json.Unmarshal(o.Ask, &b)
+	var b struct {
+		Operation   string `json:"operation"`
+		Path        string `json:"path"`
+		Command     string `json:"command"`
+		Cwd         string `json:"cwd"`
+		Reason      string `json:"reason"`
+		Args        string `json:"args"`
+		Unsandboxed bool   `json:"unsandboxed"`
+	}
+	var lines []string
+	if json.Unmarshal(o.Ask, &b) == nil {
 		switch {
-		case b.Command != "":
-			what = "Wants to run " + b.Command
-		case b.Operation != "":
-			what = strings.TrimSpace("Wants to " + b.Operation + " " + b.Path)
-		default:
-			what = "Waits on an approval"
+		case strings.TrimSpace(b.Command) != "":
+			lines = append(lines, "Wants to run "+strings.TrimSpace(b.Command))
+		case strings.TrimSpace(b.Operation) != "":
+			lines = append(lines, strings.TrimSpace("Wants to "+strings.TrimSpace(b.Operation)+" "+strings.TrimSpace(b.Path)))
 		}
+		if s := strings.TrimSpace(b.Cwd); s != "" {
+			lines = append(lines, "Cwd: "+s)
+		}
+		if b.Unsandboxed {
+			lines = append(lines, "Unsandboxed: true")
+		}
+		if s := strings.TrimSpace(b.Reason); s != "" {
+			lines = append(lines, "Reason: "+s)
+		}
+		if s := strings.TrimSpace(b.Args); s != "" {
+			lines = append(lines, "Details: "+s)
+		}
+	}
+	what := strings.Join(lines, "\n")
+	if what == "" {
+		what = strings.TrimSpace(o.Report.Outcome)
+	}
+	if what == "" {
+		what = "Waits on an approval"
 	}
 	note := "Only the user can grant it: task_answer refuses approvals. Stop a request that is bogus or off its task with task_cancel, or steer the child with task_send; if the work does need it, tell the user what to approve and why."
 	if o.On != "" {

@@ -196,3 +196,46 @@ func TestAnApprovalWakesTheParent(t *testing.T) {
 		t.Fatalf("the run's done report after its approvals: %+v, %v; want its own wake", s, ok)
 	}
 }
+
+// An approval wake carries the full request body for vetting — requested
+// permissions, reason, cwd, unsandboxed flag, and commands longer than the
+// timeline card's 280-character summary — rather than only the clipped outcome.
+func TestAnApprovalWakeIncludesFullDetails(t *testing.T) {
+	p := newThread(t)
+	child, run := api.NewID(), api.NewID()
+
+	perm := engine.Reported{
+		Report:   api.ChildReported{Child: child, Run: run, Kind: api.ReportBlocked, Title: "Audit", Outcome: "Wants to get more access"},
+		Approval: api.NewID(),
+		Ask:      json.RawMessage(`{"operation":"get more access","reason":"fetch upstream schema","args":"network: enabled\nfileSystem: write /etc/hosts"}`),
+	}
+	s, ok := started(p.see(perm))
+	for _, want := range []string{"Wants to get more access", "Reason: fetch upstream schema", "Details: network: enabled\nfileSystem: write /etc/hosts"} {
+		if !ok || !strings.Contains(s.Text, want) {
+			t.Fatalf("permission approval wake = %q (ok=%v), want %q", s.Text, ok, want)
+		}
+	}
+	p.see(engine.Ended{Run: s.Run, Outcome: api.OutcomeCompleted})
+
+	longCmd := "curl -X POST https://api.example.com/deploy " + strings.Repeat("--header 'X-Check: 1' ", 15) + "--data '{\"env\":\"prod\"}'"
+	cmd := engine.Reported{
+		Report:   api.ChildReported{Child: child, Run: run, Kind: api.ReportBlocked, Title: "Deploy", Outcome: "Wants to run " + longCmd[:200] + "…"},
+		Approval: api.NewID(),
+		Ask:      json.RawMessage(`{"operation":"run","command":` + string(mustJSON(t, longCmd)) + `,"cwd":"/repo/deploy","unsandboxed":true,"reason":"needs prod token"}`),
+	}
+	s, ok = started(p.see(cmd))
+	for _, want := range []string{"Wants to run " + longCmd, "Cwd: /repo/deploy", "Unsandboxed: true", "Reason: needs prod token"} {
+		if !ok || !strings.Contains(s.Text, want) {
+			t.Fatalf("long command approval wake = %q (ok=%v), want %q", s.Text, ok, want)
+		}
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
