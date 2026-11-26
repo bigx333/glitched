@@ -436,7 +436,7 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 	}
 	// A turn that failed before its agent took it gave the agent no docs.
 	delivered := slices.ContainsFunc(t.Queue, func(m engine.Message) bool { return m.State == engine.QueueDispatched })
-	if t.Session == "" && !delivered && !b.ResumeOnly && !slashCommand(text) {
+	if forked == nil && !delivered && !b.ResumeOnly && !slashCommand(text) {
 		if docs := loadCoordinatorDocs(b.Workspace, t.Project, t.Role, !t.Parent.IsZero() || t.Origin != nil); docs != "" {
 			text = docs + text
 		}

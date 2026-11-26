@@ -414,10 +414,8 @@ func (d *decision) reported(o Reported) error {
 	if err := d.settle(prior); err != nil || !staysSnoozed {
 		return err
 	}
-	if live := d.t.Live(); live != nil && live.Wake == api.WakeReport {
-		if m, _ := d.t.Message(id); m.Run == live.ID {
-			return nil
-		}
+	if live := d.t.Live(); live != nil && live.Wake != api.NotWake {
+		return nil
 	}
 	return d.emit(api.DispositionChanged{Disposition: api.Disposition{}})
 }

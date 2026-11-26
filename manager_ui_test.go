@@ -229,3 +229,20 @@ func TestManagerFailedSweepSaysSo(t *testing.T) {
 		t.Fatalf("the row says %q, want %q", got, want)
 	}
 }
+
+func TestDismissedWakeKeepsQueuedSendNowEnabled(t *testing.T) {
+	dismissed := api.Thread{
+		Run:  api.RunRunning,
+		Turn: &api.Turn{Run: api.NewID(), Silent: true, Dismissed: true},
+	}
+	if !canSteer(dismissed) {
+		t.Fatal("canSteer returned false for a dismissed Manager wake")
+	}
+	compacting := api.Thread{
+		Run:  api.RunRunning,
+		Turn: &api.Turn{Run: api.NewID(), Silent: true},
+	}
+	if canSteer(compacting) {
+		t.Fatal("canSteer returned true for a silent compaction run")
+	}
+}

@@ -352,6 +352,84 @@ func TestAManagerWhoseFirstTurnNeverReachedItsAgentGetsTheDocsNext(t *testing.T)
 	}
 }
 
+type failingFirstStart struct {
+	*captureAdapter
+	sends atomic.Int32
+}
+
+type failingStartAgent struct {
+	provider.Agent
+	fail    bool
+	session string
+}
+
+func (a *failingStartAgent) Session() string { return a.session }
+
+func (a *failingStartAgent) Do(ctx context.Context, cmd provider.Action) error {
+	if _, ok := cmd.(provider.Start); ok && a.fail {
+		return errors.New("prompt rejected before start")
+	}
+	return a.Agent.Do(ctx, cmd)
+}
+
+func (f *failingFirstStart) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	ag, err := f.captureAdapter.Open(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	return &failingStartAgent{Agent: ag, fail: f.sends.Add(1) == 1, session: "sess-bound-1"}, nil
+}
+
+func TestAManagerWhoseFirstSendFailsAfterSessionBindGetsTheDocsNext(t *testing.T) {
+	ctx := context.Background()
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "WORKERS.md"), []byte("Worker W2 owns phase 7."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(t.TempDir(), "host.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ad := &failingFirstStart{captureAdapter: &captureAdapter{Adapter: fake.New(fake.Turn(false))}}
+	h, err := New(ctx, st, provider.Mux{"fake": ad})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Close() })
+	mgr := api.NewID()
+	submit := func(b api.Intent) {
+		t.Helper()
+		if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: mgr, Body: b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ended := func(n int) {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+			snap, err := h.Read(ctx, api.Query{Thread: mgr})
+			if err == nil && snap.Threads[0].Run == api.RunIdle && len(snap.Threads[0].Requests) == 0 && snap.Threads[0].LastTurn != nil && ad.sends.Load() >= int32(n) {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("turn %d never ended", n)
+			}
+		}
+	}
+	submit(api.ThreadCreate{Workspace: ws, Title: "Manager", Model: api.ModelRef{Provider: "fake", Model: "fake"}, Role: api.RoleManager, Text: "Coordinate"})
+	ended(1)
+	submit(api.MessageDispatch{Text: "Try again", Mode: api.StartNow})
+	ended(2)
+	submit(api.MessageDispatch{Text: "And again", Mode: api.StartNow})
+	ended(3)
+	ad.mu.Lock()
+	starts := slices.Clone(ad.starts)
+	ad.mu.Unlock()
+	if len(starts) != 2 || !strings.Contains(starts[0], "Worker W2 owns phase 7.") || strings.Contains(starts[1], "<workspace_context>") {
+		t.Fatalf("prompts after failed first send with bound session = %q, want docs on retry only", starts)
+	}
+}
+
 func TestASnoozedManagerSweepsWhenItsSnoozeRunsOut(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "host.db"))

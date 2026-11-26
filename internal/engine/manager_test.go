@@ -486,3 +486,29 @@ func TestTurningSweepsOffKeepsTheirPrompt(t *testing.T) {
 		t.Fatalf("sweeps back on = %+v", s)
 	}
 }
+
+func TestTwoWorkerCompletionsKeepSnoozedManagerSnoozed(t *testing.T) {
+	m := newManager(t, nil)
+	d := api.Disposition{State: api.Snoozed, Until: m.at.Add(4 * time.Hour)}
+	m.must(api.InboxSet{Disposition: d})
+
+	m.report(api.ReportDone)
+	if m.th.Live() == nil || m.th.Disposition != d {
+		t.Fatalf("first report: run %v, disposition %+v", m.th.Live(), m.th.Disposition)
+	}
+	m.report(api.ReportDone)
+	if m.th.Disposition != d {
+		t.Fatalf("second report while first wake ran broke snooze: %+v", m.th.Disposition)
+	}
+
+	m.dismiss()
+	m.end()
+	if m.th.Live() == nil || m.th.Disposition != d {
+		t.Fatalf("second wake after first dismissal: run %v, disposition %+v", m.th.Live(), m.th.Disposition)
+	}
+	m.dismiss()
+	m.end()
+	if m.th.Disposition != d {
+		t.Fatalf("after dismissing both wakes disposition = %+v, want %+v", m.th.Disposition, d)
+	}
+}

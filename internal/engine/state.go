@@ -397,7 +397,7 @@ func View(t Thread) api.Thread {
 		v.Origin = &o
 	}
 	if r := t.Live(); r != nil {
-		v.Turn = &api.Turn{Run: r.ID, Model: r.Model, Access: r.Access, Silent: r.quiet()}
+		v.Turn = &api.Turn{Run: r.ID, Model: r.Model, Access: r.Access, Silent: r.quiet(), Dismissed: r.Dismissed}
 	}
 	if t.LastReport != nil {
 		r := *t.LastReport

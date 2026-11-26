@@ -535,10 +535,11 @@ type UsageLimit struct {
 // were. Silent is true for background maintenance runs such as idle
 // compaction.
 type Turn struct {
-	Run    ID       `json:"run"`
-	Model  ModelRef `json:"model"`
-	Access Access   `json:"access"`
-	Silent bool     `json:"silent,omitempty"`
+	Run       ID       `json:"run"`
+	Model     ModelRef `json:"model"`
+	Access    Access   `json:"access"`
+	Silent    bool     `json:"silent,omitempty"`
+	Dismissed bool     `json:"dismissed,omitempty"`
 }
 
 // Thread is the projection a client reads. Working is derived from Run and
