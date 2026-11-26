@@ -41,6 +41,7 @@ type remotes struct {
 	parent     api.ID
 	limits     engine.Limits
 	continueB  bool // B continues the runs its restart lost
+	clockB     func() time.Time
 	steps      func(step string, placeholder api.ID)
 }
 
@@ -117,7 +118,7 @@ func (p *remotes) startB() {
 	p.t.Helper()
 	var d *Daemon
 	rebind(p.t, func() (err error) {
-		d, err = Start(context.Background(), Config{Dir: p.dirB, Hub: true, Epoch: 1, Listen: []string{p.addrB}, ContinueAfterRestart: p.continueB, Providers: provider.Mux{p.model.Provider: p.adB}})
+		d, err = Start(context.Background(), Config{Dir: p.dirB, Hub: true, Epoch: 1, Listen: []string{p.addrB}, ContinueAfterRestart: p.continueB, Clock: p.clockB, Providers: provider.Mux{p.model.Provider: p.adB}})
 		return err
 	})
 	p.b = d
@@ -557,6 +558,12 @@ func TestBNeverCompactsALinksChildAcrossARestartOfA(t *testing.T) {
 	compacted := make(chan struct{})
 	var once sync.Once
 	var mu sync.Mutex
+	cur := time.Now()
+	now := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return cur
+	}
 	var expires time.Time
 	adB := fake.New(fake.Turn(false))
 	adB.Confirms = func(spec provider.SessionSpec) []provider.Event {
@@ -566,25 +573,43 @@ func TestBNeverCompactsALinksChildAcrossARestartOfA(t *testing.T) {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		expires = time.Now().Add(engine.ClaudeCacheTTL/10 + time.Second)
+		expires = cur.Add(engine.ClaudeCacheTTL)
 		return []provider.Event{provider.Context{Used: 10, Window: 100, Model: spec.Model.Model, CacheExpires: expires}}
 	}
 	p := newRemotes(t, adB, "claude", engine.Limits{})
+	// Restart B on the injected clock so the compaction window advances deterministically.
+	p.clockB = now
+	p.stopB()
+	p.startB()
 	kid := p.place("there")
 	until(t, "the first report", func() bool { reports, _ := p.reports(kid); return len(reports) == 1 })
 	r := p.bound(kid)
 	p.stopA()
+	// Advance B's clock into the idle compaction window [start, end) and re-arm timers
+	// so an unguarded thread would compact immediately, then advance past CompactLapse.
 	mu.Lock()
-	past := time.Until(expires) - engine.ClaudeCacheTTL/10 + engine.CompactLapse + 2*time.Second
+	cur = expires.Add(-engine.ClaudeCacheTTL/10 + time.Second)
 	mu.Unlock()
+	p.b.host.SetIdleCompaction(false)
+	p.b.host.SetIdleCompaction(true)
 	select {
 	case <-compacted:
 		t.Fatal("b compacted a link's child on its own")
-	case <-time.After(past):
+	case <-time.After(300 * time.Millisecond):
+	}
+	mu.Lock()
+	cur = expires.Add(-engine.ClaudeCacheTTL/10 + engine.CompactLapse + 2*time.Second)
+	mu.Unlock()
+	p.b.host.SetIdleCompaction(false)
+	p.b.host.SetIdleCompaction(true)
+	select {
+	case <-compacted:
+		t.Fatal("b compacted a link's child on its own")
+	case <-time.After(150 * time.Millisecond):
 	}
 	p.startA()
 	until(t, "the follower back", func() bool { return p.placeholder(kid).Remote.Cursor.Seq > 0 })
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 	if th := p.onB(r.Thread); len(th.Runs) != 1 {
 		t.Fatalf("b ran %d runs on the link's child; want the first only", len(th.Runs))
 	}

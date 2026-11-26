@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +29,29 @@ type app struct {
 	toasts []string
 }
 
+var (
+	sharedBundledDir string
+	signedCacheMu    sync.Mutex
+	signedCache      = map[string]cachedSigned{}
+)
+
+type cachedSigned struct {
+	fsys       fs.FS
+	bundledDir string
+	pub        string
+}
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "glitched-bundled-test")
+	if err != nil {
+		panic(err)
+	}
+	sharedBundledDir = filepath.Join(dir, "all")
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
 func open(t *testing.T) *app {
 	t.Helper()
 	a := &app{t: t, q: make(chan func(), 1024)}
@@ -35,6 +59,7 @@ func open(t *testing.T) *app {
 		Post:        func(fn func()) { a.q <- fn },
 		Logf:        t.Logf,
 		Bundled:     bundled.FS,
+		BundledDir:  sharedBundledDir,
 		ReleaseKeys: []string{bundled.ReleaseKey},
 		CallTimeout: 30 * time.Second,
 		Do: func(_ string, e plugins.Effect) (any, error) {

@@ -28,11 +28,12 @@ type skillsHeader struct {
 func openSkills(t *testing.T, list *api.SkillList, compact bool) *skillsHeader {
 	t.Helper()
 	k := &skillsHeader{t: t, q: make(chan func(), 1024), compact: compact}
-	fsys, release := signedCopy(t, "skills")
+	fsys, bundledDir, release := signedCopy(t, "skills")
 	k.h = plugins.Open(t.TempDir(), plugins.Options{
 		Post:        func(fn func()) { k.q <- fn },
 		Logf:        t.Logf,
 		Bundled:     fsys,
+		BundledDir:  bundledDir,
 		ReleaseKeys: []string{release},
 		CallTimeout: callTimeout,
 		Do: func(_ string, e plugins.Effect) (any, error) {
