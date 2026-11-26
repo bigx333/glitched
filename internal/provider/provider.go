@@ -109,14 +109,18 @@ type NativeFork interface{ Native() bool }
 
 // Grant is how one of Glitched's access levels reaches an agent: the
 // permission mode its session runs in, "" for the agent's own, and what
-// its program starts with besides. Else is the mode it runs in where the
-// agent doesn't offer Mode, as an older version or another account may
-// not. Each adapter keeps Grants for its agent, a Grant per level, as the
-// agent names its own controls.
+// its program starts with besides, as arguments and environment. Else is
+// the mode it runs in where the agent doesn't offer Mode, as an older
+// version or another account may not. Optional has a session that offers
+// neither keep its own mode rather than fail, for an agent whose modes
+// Glitched can only guess. Each adapter keeps Grants for its agent, a
+// Grant per level, as the agent names its own controls.
 type Grant struct {
-	Mode string
-	Else string
-	Args []string
+	Mode     string
+	Else     string
+	Optional bool
+	Args     []string
+	Env      map[string]string
 }
 
 type Grants map[api.Access]Grant

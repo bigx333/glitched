@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -48,6 +49,10 @@ type Profile struct {
 	// IdleCompacts is whether idle compaction applies to a session on the
 	// model; nil applies it to none.
 	IdleCompacts func(model string) bool
+	// CleanupProbe, where set, removes the session a probe of the agent's
+	// models opened, once the probe's agent is gone, for an agent that
+	// keeps every session in its history.
+	CleanupProbe func(ctx context.Context, prog provider.Program, session string)
 }
 
 // Antigravity is Google's Antigravity CLI, agy, from the user's own

@@ -134,7 +134,7 @@ func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
 		return provider.Info{}, err
 	}
 	home, _ := os.UserHomeDir()
-	p, err := launch(ctx, a.Profile, prog, home, "probe-"+api.NewID().String(), nil, nil)
+	p, err := launch(ctx, a.Profile, prog, home, "probe-"+api.NewID().String(), provider.Grant{}, nil)
 	if err != nil {
 		return provider.Info{}, err
 	}
@@ -201,7 +201,7 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	}
 	lost := false
 	if !ok {
-		if p, err = launch(ctx, a.Profile, prog, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String(), a.Profile.Access[spec.Access].Args, spec.Tap); err != nil {
+		if p, err = launch(ctx, a.Profile, prog, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String(), grant, spec.Tap); err != nil {
 			return nil, err
 		}
 		if lost, err = p.open(ctx, spec.Workspace, spec.MCP, spec.Session, spec.ResumeOnly); err != nil {

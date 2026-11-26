@@ -112,22 +112,24 @@ var (
 	_ acpsdk.Client = (*proc)(nil)
 )
 
-// launch starts the agent in dir under mark, with args after the
-// profile's and tap seeing its lines, and initializes it. ctx bounds only
-// the start; the process lives until Close.
-func launch(ctx context.Context, profile Profile, prog provider.Program, dir, mark string, args []string, tap provider.Tap) (*proc, error) {
-	cmd := exec.Command(prog.Path, slices.Concat(profile.Args, prog.Args, args)...)
+// launch starts the agent in dir under mark, with grant's arguments after
+// the profile's and its environment over the profile's, and tap seeing its
+// lines, and initializes it. ctx bounds only the start; the process lives
+// until Close.
+func launch(ctx context.Context, profile Profile, prog provider.Program, dir, mark string, grant provider.Grant, tap provider.Tap) (*proc, error) {
+	cmd := exec.Command(prog.Path, slices.Concat(profile.Args, prog.Args, grant.Args)...)
 	if err := guard(prog.Path); err != nil {
 		return nil, err
 	}
 	cmd.Dir = dir
+	env := profile.Env
 	cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool {
 		k, _, _ := strings.Cut(kv, "=")
-		_, ours := profile.Env[k]
+		_, ours := env[k]
 		return ours || k == procEnv || mcp.Routing(k)
 	})
-	for k, v := range profile.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
+	for _, k := range sortedKeys(env) {
+		cmd.Env = append(cmd.Env, k+"="+env[k])
 	}
 	cmd.Env = prog.Environ(append(cmd.Env, procEnv+"="+mark))
 	cmd.SysProcAttr = sweep.SysProcAttr()
