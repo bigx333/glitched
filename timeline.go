@@ -29,8 +29,9 @@ func (a *app) listFor(id api.ID) *ui.ListState {
 
 // timeline lists the thread's entries, as MyGo's markdown-chat does: the
 // list builds only those in view, starts at the end and follows it as a
-// reply streams in, gliding, until the user scrolls up; scrolling back to
-// the end follows it again. Each entry is in the middle of a row as wide
+// reply streams in, frame for frame, until the user scrolls up; scrolling
+// back to the end follows it again. A thread shorter than the pane starts
+// at its top and grows down. Each entry is in the middle of a row as wide
 // as the pane, so that the wheel scrolls it wherever the pointer is. It
 // fades in as the composer docks from the hero; into a hero, the thread
 // left fades out, sliding up, out of the pointer's way.
@@ -49,10 +50,13 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) (laid bool) {
 	a.keepPlace(t.id(), l, v)
 	l.Key = func(j int) any { return v.key(j) }
 	l.FollowEnd = true
-	l.FollowAnimation = &ui.Smooth
 	// The agents strip sits over the composer: the end clears it too.
 	room := composerRoom + a.agentsRoom(t) + a.queueRoom(t)
-	at := v.thinkingPos(thinkingAt(t, rs))
+	row := thinkingAt(t, rs)
+	at := v.thinkingPos(row)
+	if a.stepsSayWorking(t, rs, row) {
+		at = -1
+	}
 	list := ui.List(c.Key(t.id()), l, v.len(), func(j int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).MaxWidth(contentWidth).Gap(22).Children(func() {
@@ -70,7 +74,7 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) (laid bool) {
 	if leaving {
 		list.Translate(0, -32*(1-tr)).PassThrough()
 	}
-	list.Fill().Padding(20, columnRight, room, columnLeft).Gap(22).Justify(ui.End).
+	list.Fill().Padding(20, columnRight, room, columnLeft).Gap(22).
 		ScrollbarInsets(0, 0, room-40, 0).Opacity(tr).Children(func() {
 		// The hero has its own greeting, over its composer.
 		if len(es) == 0 && remote(t) != nil {
@@ -108,10 +112,23 @@ func thinkingAt(t thread, rs rows) int {
 
 var thinkingLabels = map[api.RunState]string{api.RunStarting: "Thinking…", api.RunRunning: "Thinking…", api.RunStopping: "Stopping…"}
 
+// stepsSayWorking is whether row, the row the thinking row goes under, is
+// a work log whose step is under way, which shows the work itself: a
+// second spinner under it would only say it again. Zen mode's line says
+// the run works, not what it does, and a run stopping says so whatever
+// its steps say.
+func (a *app) stepsSayWorking(t thread, rs rows, row int) bool {
+	if row < 0 || row >= len(rs.es) || a.settings.zen || t.View.Run == api.RunStopping {
+		return false
+	}
+	e := rs.es[row]
+	return e.kind == entryWork && e.working
+}
+
 // thinkingRow says the agent is at work: the steps card's working mark and
 // shimmering label, without the card, at the card header's inset.
 func (a *app) thinkingRow(c *ui.Context, t thread) {
-	ui.Row(c).Key("thinking").Gap(6).AlignItems(ui.Center).Padding(0, 13).Transition(riseIn).Children(func() {
+	ui.Row(c).Key("thinking").Gap(6).AlignItems(ui.Center).Padding(0, 13).Children(func() {
 		a.statusMark(c, statusWorking)
 		shimmerText(c, thinkingLabels[t.View.Run], 12, palette.muted, palette.text)
 	})
@@ -402,7 +419,7 @@ func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 	a.pluginComponent(c, "timeline.message", &t, componentCopy{
 		key: e.key,
 		box: func() ui.Element {
-			return ui.Column(c).Key(e.key).Transition(riseIn)
+			return ui.Column(c).Key(e.key)
 		},
 		context: func(plugins.ThreadRecord) any { return m },
 		native:  func(body *widget.Node) { acted = a.transcriptBody(c, t, rs, i, body) },
@@ -644,15 +661,14 @@ func (a *app) workLog(c *ui.Context, t thread, key string, e entry, files []file
 					chevron(c, open)
 				}).Clicked() {
 					a.collapsed[key] = open
+					a.listFor(t.id()).HoldPlace()
 				}
 			})
 			if !open {
 				return
 			}
-			ui.Column(c).Key("steps").Padding(6, 8, 10).Gap(2).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).
-				ClipY().Transition(fold).Children(func() {
+			ui.Column(c).Key("steps").Padding(6, 8, 10).Gap(2).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
 				for _, w := range e.work {
-					// Each step the agent takes unfolds below the last.
 					a.step(c, t, files, e.run, w)
 				}
 			})
@@ -682,9 +698,9 @@ func (a *app) step(c *ui.Context, t thread, files []fileChange, run api.ID, w cl
 	}
 	var r ui.Element
 	if file >= 0 || sub {
-		r = ghost(c, w.Item, false).Padding(2, 4).Radius(5).Gap(8).ClipY().Transition(fold)
+		r = ghost(c, w.Item, false).Padding(2, 4).Radius(5).Gap(8)
 	} else {
-		r = ui.Row(c).Key(w.Item).Padding(2, 4).Radius(5).Gap(8).AlignItems(ui.Center).ClipY().Transition(fold)
+		r = ui.Row(c).Key(w.Item).Padding(2, 4).Radius(5).Gap(8).AlignItems(ui.Center)
 	}
 	if r.Children(func() {
 		ui.Icon(c, icon).FontSize(12).TextColor(palette.faint)
