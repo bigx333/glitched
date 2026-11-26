@@ -1,7 +1,17 @@
 package acp
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"maps"
+	"os"
+	"os/exec"
+	"regexp"
+	"slices"
 	"strings"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
@@ -43,6 +53,10 @@ type Profile struct {
 	// IdleCompacts is whether idle compaction applies to a session on the
 	// model; nil applies it to none.
 	IdleCompacts func(model string) bool
+	// CleanupProbe, where set, removes the session a probe of the agent's
+	// models opened, once the probe's agent is gone, for an agent that
+	// keeps every session in its history.
+	CleanupProbe func(ctx context.Context, prog provider.Program, session string)
 }
 
 // Antigravity is Google's Antigravity CLI, agy, from the user's own
@@ -81,5 +95,138 @@ var Antigravity = Profile{
 	},
 }
 
-// Profiles are the ACP agents Glitched knows.
-var Profiles = []Profile{Antigravity}
+// Gemini is Google's Gemini CLI running its ACP stdio server.
+var Gemini = Profile{
+	Provider:     "gemini",
+	IdleCompacts: func(model string) bool { return strings.HasPrefix(strings.ToLower(model), "gemini") },
+	Name:         "Gemini CLI",
+	Binaries:     []string{"gemini"},
+	Args:         []string{"--experimental-acp"},
+	Env:          map[string]string{"BROWSER": "true"},
+	Install:      "Gemini CLI is not installed.\nInstall it with: npm install -g @google/gemini-cli\nor set its path in Settings › Providers.",
+	Reserved:     []provider.Reserved{{Flags: []string{"--experimental-acp", "--yolo", "--approval-mode"}}},
+	SignIn:       "Gemini CLI is signed out. Run gemini in Terminal to sign in.",
+	// Gemini CLI refuses autoEdit in a folder the user never trusted, so
+	// Approve for me trusts the workspace; Ask for approval doesn't need to.
+	Access: provider.Grants{
+		api.AccessAsk:       {Mode: "default"},
+		api.AccessAutoEdits: {Mode: "autoEdit", Else: "default", Env: map[string]string{"GEMINI_CLI_TRUST_WORKSPACE": "true"}},
+		api.AccessFull:      {Args: []string{"--yolo"}},
+	},
+	SignedOut: []string{
+		"Authentication required",
+		"Please sign in",
+		"Please log in",
+		"API_KEY",
+	},
+}
+
+// OpenCode is OpenCode's ACP agent server.
+var OpenCode = Profile{
+	Provider: "opencode",
+	Name:     "OpenCode",
+	Binaries: []string{"opencode"},
+	Args:     []string{"acp"},
+	Env:      map[string]string{"BROWSER": "true"},
+	Install:  "OpenCode is not installed.\nInstall it from https://opencode.ai or brew install anomalyco/tap/opencode\nor set its path in Settings › Providers.",
+	SignIn:   "OpenCode needs a model provider configured. Run opencode in Terminal to sign in.",
+	// OpenCode keeps each session it opens, so a probe's would show in the
+	// user's history.
+	CleanupProbe: deleteOpenCodeSession,
+	// OpenCode's session modes are its agents, as build and plan, not
+	// approval levels: each level is a permission config, which
+	// OPENCODE_PERMISSION lays over the user's own.
+	Access: provider.Grants{
+		api.AccessAsk:       {Env: map[string]string{"OPENCODE_PERMISSION": `{"*":"ask","read":"allow","glob":"allow","grep":"allow","list":"allow","todoread":"allow"}`}},
+		api.AccessAutoEdits: {Env: map[string]string{"OPENCODE_PERMISSION": `{"*":"ask","read":"allow","glob":"allow","grep":"allow","list":"allow","todoread":"allow","edit":"allow"}`}},
+		api.AccessFull:      {Env: map[string]string{"OPENCODE_PERMISSION": `{"*":"allow"}`}},
+	},
+	SignedOut: []string{
+		"Authentication required",
+		"Please sign in",
+		"No API key",
+	},
+}
+
+func deleteOpenCodeSession(ctx context.Context, prog provider.Program, session string) {
+	if err := guard(prog.Path); err != nil {
+		slog.Warn("acp: deleting a probe's session", "agent", "OpenCode", "err", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, prog.Path, "session", "delete", session)
+	cmd.Env = prog.Environ(os.Environ())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		slog.Info("acp: OpenCode kept a probe's session", "session", session, "err", err, "said", strings.TrimSpace(string(out)))
+	}
+}
+
+// Profiles are the built-in ACP agents Glitched knows.
+var Profiles = []Profile{Antigravity, Gemini, OpenCode}
+
+// CustomProfile describes a user-configured ACP CLI in engine.json.
+type CustomProfile struct {
+	Provider string            `json:"provider"`
+	Name     string            `json:"name,omitempty"`
+	Binary   string            `json:"binary"`
+	Args     []string          `json:"args,omitempty"`
+	Env      map[string]string `json:"env,omitempty"`
+}
+
+var customProviderIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+
+var reservedProviderIDs = map[string]bool{
+	"claude":      true,
+	"codex":       true,
+	"antigravity": true,
+	"gemini":      true,
+	"opencode":    true,
+	"fake":        true,
+}
+
+// ToProfile validates c and converts it into a runnable ACP Profile.
+func (c CustomProfile) ToProfile() (Profile, error) {
+	id := strings.TrimSpace(c.Provider)
+	if !customProviderIDRe.MatchString(id) {
+		return Profile{}, fmt.Errorf("acp: provider id %q must be 1-32 lowercase letters, digits, '-' or '_'", c.Provider)
+	}
+	if reservedProviderIDs[id] {
+		return Profile{}, fmt.Errorf("acp: provider id %q is reserved for a built-in provider", id)
+	}
+	bin := strings.TrimSpace(c.Binary)
+	if bin == "" {
+		return Profile{}, errors.New("acp: binary command or path is required")
+	}
+	name := strings.TrimSpace(c.Name)
+	if name == "" {
+		name = id
+	}
+	args := slices.Clone(c.Args)
+	env := maps.Clone(c.Env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	if _, ok := env["BROWSER"]; !ok {
+		env["BROWSER"] = "true"
+	}
+	return Profile{
+		Provider: id,
+		Name:     name,
+		Binaries: []string{bin},
+		Args:     args,
+		Env:      env,
+		Install:  fmt.Sprintf("%s is not installed.\nCheck its binary path (%s) in Settings › Providers.", name, bin),
+		SignIn:   fmt.Sprintf("%s requires authentication. Run %s in Terminal to sign in.", name, bin),
+		Access: provider.Grants{
+			api.AccessAsk:       {Mode: "default", Optional: true},
+			api.AccessAutoEdits: {Mode: "auto", Else: "default", Optional: true},
+			api.AccessFull:      {Mode: "bypassPermissions", Else: "yolo", Optional: true},
+		},
+		SignedOut: []string{
+			"Authentication required",
+			"Please sign in",
+			"Please log in",
+		},
+	}, nil
+}

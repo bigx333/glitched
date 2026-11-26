@@ -113,14 +113,9 @@ func (g *Agent) reportLocked() {
 	}
 }
 
-// grantedAt is the access the session's mode makes, by the profile's
-// grants read backwards. A level reached by arguments is confirmed by the
-// process that started with them, which is how its run got it: agy says
-// nothing more of them. A mode no grant names lets the agent do no more
-// than ask.
 func (g *Agent) grantedAt(mode, refused string) (provider.Granted, bool) {
 	grants, asked := g.p.profile.Access, g.spec.Access
-	if len(grants[asked].Args) > 0 {
+	if grants[asked].ByProcess() {
 		return provider.Granted{Access: asked, Mode: mode}, true
 	}
 	if mode == "" {

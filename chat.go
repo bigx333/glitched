@@ -7,6 +7,7 @@ import (
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/client"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/widget"
 )

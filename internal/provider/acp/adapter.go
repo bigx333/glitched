@@ -134,14 +134,21 @@ func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
 		return provider.Info{}, err
 	}
 	home, _ := os.UserHomeDir()
-	p, err := launch(ctx, a.Profile, prog, home, "probe-"+api.NewID().String(), nil, nil)
+	p, err := launch(ctx, a.Profile, prog, home, "probe-"+api.NewID().String(), provider.Grant{}, nil)
 	if err != nil {
 		return provider.Info{}, err
 	}
-	defer p.discard()
+	session := ""
+	defer func() {
+		p.discard()
+		if session != "" && a.Profile.CleanupProbe != nil {
+			a.Profile.CleanupProbe(context.WithoutCancel(ctx), prog, session)
+		}
+	}()
 	if _, err := p.open(ctx, home, nil, "", false); err != nil {
 		return provider.Info{}, err
 	}
+	session = p.sessionID()
 	models, err := p.models(ctx)
 	if err != nil {
 		return provider.Info{}, err
@@ -185,7 +192,7 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	grant := a.Profile.Access[spec.Access]
 	configure := func() error {
 		refused, err := p.configure(ctx, spec.Model, grant)
-		if err == nil && grant.Else != "" {
+		if err == nil && spec.Access == api.AccessAutoEdits && grant.Else != "" {
 			a.noAuto.Store(&refused)
 		}
 		return err
@@ -201,7 +208,7 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	}
 	lost := false
 	if !ok {
-		if p, err = launch(ctx, a.Profile, prog, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String(), a.Profile.Access[spec.Access].Args, spec.Tap); err != nil {
+		if p, err = launch(ctx, a.Profile, prog, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String(), grant, spec.Tap); err != nil {
 			return nil, err
 		}
 		if lost, err = p.open(ctx, spec.Workspace, spec.MCP, spec.Session, spec.ResumeOnly); err != nil {
