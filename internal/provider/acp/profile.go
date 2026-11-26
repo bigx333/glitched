@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
+	"os"
+	"os/exec"
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
@@ -102,9 +106,11 @@ var Gemini = Profile{
 	Install:      "Gemini CLI is not installed.\nInstall it with: npm install -g @google/gemini-cli\nor set its path in Settings › Providers.",
 	Reserved:     []provider.Reserved{{Flags: []string{"--experimental-acp", "--yolo", "--approval-mode"}}},
 	SignIn:       "Gemini CLI is signed out. Run gemini in Terminal to sign in.",
+	// Gemini CLI refuses autoEdit in a folder the user never trusted, so
+	// Approve for me trusts the workspace; Ask for approval doesn't need to.
 	Access: provider.Grants{
 		api.AccessAsk:       {Mode: "default"},
-		api.AccessAutoEdits: {Mode: "autoEdit", Else: "default"},
+		api.AccessAutoEdits: {Mode: "autoEdit", Else: "default", Env: map[string]string{"GEMINI_CLI_TRUST_WORKSPACE": "true"}},
 		api.AccessFull:      {Args: []string{"--yolo"}},
 	},
 	SignedOut: []string{
@@ -124,16 +130,38 @@ var OpenCode = Profile{
 	Env:      map[string]string{"BROWSER": "true"},
 	Install:  "OpenCode is not installed.\nInstall it from https://opencode.ai or brew install anomalyco/tap/opencode\nor set its path in Settings › Providers.",
 	SignIn:   "OpenCode needs a model provider configured. Run opencode in Terminal to sign in.",
+	// OpenCode keeps each session it opens, so a probe's would show in the
+	// user's history.
+	CleanupProbe: deleteOpenCodeSession,
+	// OpenCode's session modes are its agents, as build and plan, not
+	// approval levels: each level is a permission config, which
+	// OPENCODE_PERMISSION lays over the user's own.
 	Access: provider.Grants{
-		api.AccessAsk:       {Mode: "default"},
-		api.AccessAutoEdits: {Mode: "auto", Else: "default"},
-		api.AccessFull:      {Mode: "yolo", Else: "auto"},
+		api.AccessAsk:       {Env: map[string]string{"OPENCODE_PERMISSION": `{"*":"ask","read":"allow","glob":"allow","grep":"allow","list":"allow","todoread":"allow"}`}},
+		api.AccessAutoEdits: {Env: map[string]string{"OPENCODE_PERMISSION": `{"*":"ask","read":"allow","glob":"allow","grep":"allow","list":"allow","todoread":"allow","edit":"allow"}`}},
+		api.AccessFull:      {Env: map[string]string{"OPENCODE_PERMISSION": `{"*":"allow"}`}},
 	},
 	SignedOut: []string{
 		"Authentication required",
 		"Please sign in",
 		"No API key",
 	},
+}
+
+// deleteOpenCodeSession deletes the session from OpenCode's history, with
+// its own CLI, and only logs a failure: a probe's leftover is no error.
+func deleteOpenCodeSession(ctx context.Context, prog provider.Program, session string) {
+	if err := guard(prog.Path); err != nil {
+		slog.Warn("acp: deleting a probe's session", "agent", "OpenCode", "err", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, prog.Path, "session", "delete", session)
+	cmd.Env = prog.Environ(os.Environ())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		slog.Info("acp: OpenCode kept a probe's session", "session", session, "err", err, "said", strings.TrimSpace(string(out)))
+	}
 }
 
 // Profiles are the built-in ACP agents Glitched knows.
@@ -195,10 +223,12 @@ func (c CustomProfile) ToProfile() (Profile, error) {
 		Env:      env,
 		Install:  fmt.Sprintf("%s is not installed.\nCheck its binary path (%s) in Settings › Providers.", name, bin),
 		SignIn:   fmt.Sprintf("%s requires authentication. Run %s in Terminal to sign in.", name, bin),
+		// Glitched can only guess a custom agent's modes, so a session that
+		// offers none of these keeps its own.
 		Access: provider.Grants{
-			api.AccessAsk:       {Mode: "default"},
-			api.AccessAutoEdits: {Mode: "auto", Else: "default"},
-			api.AccessFull:      {Mode: "bypassPermissions", Else: "auto"},
+			api.AccessAsk:       {Mode: "default", Optional: true},
+			api.AccessAutoEdits: {Mode: "auto", Else: "default", Optional: true},
+			api.AccessFull:      {Mode: "bypassPermissions", Else: "yolo", Optional: true},
 		},
 		SignedOut: []string{
 			"Authentication required",

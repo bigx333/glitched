@@ -122,7 +122,11 @@ func launch(ctx context.Context, profile Profile, prog provider.Program, dir, ma
 		return nil, err
 	}
 	cmd.Dir = dir
-	env := profile.Env
+	env := maps.Clone(profile.Env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	maps.Copy(env, grant.Env)
 	cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool {
 		k, _, _ := strings.Cut(kv, "=")
 		_, ours := env[k]
@@ -395,7 +399,15 @@ func (p *proc) configure(ctx context.Context, ref api.ModelRef, g provider.Grant
 	case g.Else != "" && !moded:
 		refused = p.profile.Name + "'s session offers no modes"
 	case g.Else != "" && !slices.Contains(offered, mode):
-		refused, mode = p.profile.Name+" doesn't offer its "+mode+" mode", g.Else
+		refused = p.profile.Name + " doesn't offer its " + mode + " mode"
+		// An Else the session doesn't offer either would be refused: the
+		// session keeps its own mode.
+		mode = ""
+		if slices.Contains(offered, g.Else) {
+			mode = g.Else
+		}
+	case g.Optional && moded && mode != "" && !slices.Contains(offered, mode):
+		mode = ""
 	}
 	p.mu.Lock()
 	p.refused = refused
