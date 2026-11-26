@@ -344,8 +344,9 @@ func (a *app) composerInput(c *ui.Context, t thread, rs rows, fullW, frameW floa
 		ahead := k == 0 && (a.composerOpened || a.drafting())
 		if k == 0 && !ahead {
 			// Compact, there's no Send to stop the agent with: ⌘⏎
-			// still does, as it does from the full composer.
-			if t.View.Stoppable() && a.message(t) == "" && c.Shortcut(ui.Cmd, ui.KeyEnter) {
+			// still does, as it does from the full composer, but not
+			// a spent chord's, whose key it takes all the same.
+			if t.View.Stoppable() && a.message(t) == "" && c.Shortcut(ui.Cmd, ui.KeyEnter) && !a.spent {
 				a.backend.Interrupt(t.env, t.id())
 			}
 			return
@@ -594,15 +595,25 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 // alternate send does; while it waits on a request, the draft steers, as
 // a send does in T3 Code with an approval shown, since a queued message
 // would wait for an answer. ⌘⏎ is how a code block sends: with a block
-// open, it steers, and doesn't stop the agent.
+// open, it steers, and doesn't stop the agent. A ⌘⏎ that sent or queued
+// the draft spends its chord: held on, it answers no card, and sends,
+// queues or stops nothing more, nor does a ⌘⏎ of its hold taken once ⌘
+// is up, until ⌘ goes down again.
 func (a *app) sendOrStop(t thread, clicked bool) {
+	if !clicked && a.spent {
+		return
+	}
+	m := a.message(t)
 	switch {
-	case a.queues(t) && a.message(t) != "" && !clicked:
+	case a.queues(t) && m != "" && !clicked:
 		a.queue(t)
-	case !t.View.Stoppable() || a.message(t) != "":
+	case !t.View.Stoppable() || m != "":
 		a.send(t)
 	case clicked || !a.code.on:
 		a.backend.Interrupt(t.env, t.id())
+	}
+	if !clicked && m != "" && a.message(t) == "" {
+		a.spent = true
 	}
 }
 

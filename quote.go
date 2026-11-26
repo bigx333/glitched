@@ -444,9 +444,12 @@ func (a *app) quoteBarAt(c *ui.Context, t thread, at ui.Element, spot quoteSpot)
 				Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).Padding(6, 8).
 				FontSize(12.5).Grow(1).Shrink(1)
 			// ⌘⏎ too, which would otherwise reach the composer's, stopping
-			// the agent or sending the draft.
+			// the agent or sending the draft. Held on once the ask went,
+			// that chord is spent, as the composer's ⌘⏎ that sent the
+			// draft is.
 			if cmdEnter := in.Shortcut(ui.Cmd, ui.KeyEnter); (in.Submitted() || cmdEnter) && strings.TrimSpace(s.ask) != "" {
 				if ask := strings.TrimSpace(s.ask); a.sendText(t, blockquote(s.text)+"\n\n"+ask, ask) {
+					a.spent = a.spent || cmdEnter
 					a.closeQuote()
 					// Not back to the reply, which takes no typing.
 					a.draftArea.Focus()

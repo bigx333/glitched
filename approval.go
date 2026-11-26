@@ -477,7 +477,8 @@ const dwell = 300 * time.Millisecond
 // dwell before the press began, and a key only the keyed card, which
 // showed its start and its keys before ⌘ went down, so that a key held,
 // repeating, answers no card that came after the one it answered, nor
-// one keyed after it. Deny on its button answers then, as the
+// one keyed after it, nor any while ⌘ stays down after its ⌘⏎ sent the
+// draft. Deny on its button answers then, as the
 // user looks at it; else it answers a card that drew every line it holds,
 // and whose start the window draws. A card with a line no frame drew
 // scrolls that line into view; one whose start is out of view brings it
@@ -824,17 +825,13 @@ func (a *app) keyedRequest(t thread, rs rows) *client.RequestEntry {
 // approvalKeys answer a waiting request from the keyboard while the
 // composer holds nothing: ⌘⏎ allows it once, as it would send a draft,
 // and ⇧⌘D denies it, as press says, and its answers show the keys. With a
-// draft, ⌘⏎ sends it, which steers the agent. They keep when ⌘ went down,
-// and when a frame first showed the keyed card's keys. Under an overlay of
-// the app they wait, taken from the composer, whose ⌘⏎ would stop the
-// turn. Questions take keys of in, the chat's pane, as questionKeys says.
+// draft, ⌘⏎ sends it, which steers the agent, and that chord answers no
+// card: it is spent until ⌘ goes down again. They keep when a frame first showed the keyed
+// card's keys, and read when ⌘ went down, which each frame keeps, on any
+// page. Under an overlay of the app they wait, taken from the composer,
+// whose ⌘⏎ would stop the turn. Questions take keys of in, the chat's
+// pane, as questionKeys says.
 func (a *app) approvalKeys(c *ui.Context, in ui.Element, t thread, rs rows) {
-	switch {
-	case c.Modifiers()&ui.Cmd == 0:
-		a.chord = time.Time{}
-	case a.chord.IsZero():
-		a.chord = a.now
-	}
 	r := a.keyedRequest(t, rs)
 	var keyed api.ID
 	if r != nil {
@@ -872,9 +869,11 @@ func (a *app) approvalKeys(c *ui.Context, in ui.Element, t thread, rs rows) {
 }
 
 // keyedShown is whether ⌘ went down after a frame showed the keyed card
-// with its keys: a chord held from before acts on no card keyed since.
+// with its keys, and the chord is not spent: a chord held from before
+// acts on no card keyed since, and one whose ⌘⏎ sent the draft, or did
+// what else spends it, on none: it is spent until ⌘ goes down again.
 func (a *app) keyedShown() bool {
-	return !a.keyedSince.IsZero() && a.chord.After(a.keyedSince)
+	return !a.spent && !a.keyedSince.IsZero() && a.chord.After(a.keyedSince)
 }
 
 // responding is the answer to the request sent from here and not landed,
