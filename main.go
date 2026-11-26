@@ -810,6 +810,8 @@ func newRouter() *ui.Router {
 }
 
 func (a *app) view(c *ui.Context) {
+	a.models.inFrame, a.models.frameOffered = true, nil
+	defer func() { a.models.inFrame, a.models.frameOffered = false, nil }()
 	// The window's vibrancy is the system's material, in the system's
 	// appearance: the sidebar shows it while the app's theme matches, and
 	// the Liquid Glass setting is on.
