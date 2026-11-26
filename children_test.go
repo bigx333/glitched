@@ -719,18 +719,19 @@ func TestALiftedChildsChildIsntLiftedToo(t *testing.T) {
 	}
 }
 
+// A child the user took over tells them itself what it asks and that its
+// turn ended, as a thread of theirs does, never on its parent. Its done
+// report wakes the parent, whose own turn's end tells.
 func TestAChildsReportNotifies(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		ask    bool
-		opened bool // the parent's transcript open, the chat showing it
-		want   string
+		name         string
+		ask          bool
+		opened       bool // the parent's transcript open, the chat showing it
+		kid, parents []string
 	}{
-		{"blocked", true, false, "Write the tests: Needs you"},
-		// A done report tells nothing: the child's turn's end told of it.
-		// The report wakes the parent, whose own turn's end tells.
-		{"done", false, false, "Done. Your turn."},
-		{"blocked, the parent shown", true, true, "Write the tests: Needs you"},
+		{"blocked", true, false, []string{"Fake wants to edit main.go"}, nil},
+		{"done", false, false, []string{"Done. Your turn."}, []string{"Done. Your turn."}},
+		{"blocked, the parent shown", true, true, []string{"Fake wants to edit main.go"}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := tempDir(t)
@@ -750,39 +751,101 @@ func TestAChildsReportNotifies(t *testing.T) {
 			if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: kid, Body: api.MessageDispatch{Text: "go"}}); err != nil {
 				t.Fatal(err)
 			}
-			reports := func() []mygo.NotificationOptions {
-				var rs []mygo.NotificationOptions
+			on := func(id api.ID) []string {
+				var rs []string
 				for _, o := range got {
-					if o.ID == "thread:"+top.String() {
-						rs = append(rs, o)
+					if o.ID == "thread:"+id.String() {
+						rs = append(rs, o.Body)
 					}
 				}
 				return rs
 			}
-			h.until("a notification on the parent", func() bool { return len(reports()) > 0 })
+			h.until("the notifications", func() bool { return len(on(kid)) > 0 && len(on(top)) >= len(tc.parents) })
+			if !tc.ask {
+				awaitReports(t, d, top, 1)
+				settled(t, d.Endpoint(), top)
+			}
 			for range 5 {
 				h.p.run()
 				h.tt.Advance(100 * time.Millisecond)
 			}
-			if rs := reports(); len(rs) != 1 || rs[0].Title != "Ship the sidebar sort" || rs[0].Body != tc.want {
-				t.Fatalf("notifications on the parent: %+v; want one, %q", rs, tc.want)
+			if rs := on(kid); !slices.Equal(rs, tc.kid) {
+				t.Errorf("notifications on the child: %q; want %q", rs, tc.kid)
+			}
+			if rs := on(top); !slices.Equal(rs, tc.parents) {
+				t.Errorf("notifications on the parent: %q; want %q", rs, tc.parents)
 			}
 		})
 	}
 }
 
-// With the parent's transcript closed, a child's report says Needs you only
-// when that child asks: a sibling asked earlier, and was told of then, is
-// not told of again when another child is done.
+// A child that answers to its parent tells the user nothing, whether it
+// asks or ends: its parent hears of it, and the parent's own turn's end
+// tells, on the parent.
+func TestAChildThatAnswersToItsParentNeverNotifies(t *testing.T) {
+	for _, ask := range []bool{true, false} {
+		t.Run(fmt.Sprint("ask ", ask), func(t *testing.T) {
+			dir := tempDir(t)
+			d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(ask)))
+			top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+			h := start(t, dir)
+			var got []mygo.NotificationOptions
+			h.a.notify = func(o mygo.NotificationOptions) { got = append(got, o) }
+			h.thread("Ship the sidebar sort")
+			var kid api.ID
+			if ask {
+				// The parent's turn waits on its own approval and starts the
+				// child, which asks and never settles, as seedChild waits.
+				dispatch(t, d, top)
+				h.until("the parent's ask", func() bool { return len(h.local().Threads[top].View.Requests) > 0 })
+				snap, err := d.Endpoint().Read(context.Background(), api.Query{Thread: top})
+				if err != nil {
+					t.Fatal(err)
+				}
+				kid = api.NewID()
+				if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: kid, Body: api.ThreadCreate{Workspace: snap.Threads[0].Workspace,
+					Title: "Write the tests", Model: snap.Threads[0].Model, Access: snap.Threads[0].Access, Parent: top, Run: liveRun(t, snap.Events), Text: "go"}}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				kid = seedChild(t, d, top, "Write the tests", "go")
+			}
+			awaitReports(t, d, top, 1)
+			h.until("the child's ask or end", func() bool {
+				th := h.local().Threads[kid]
+				return th != nil && (len(th.View.Requests) > 0 || th.View.LastTurn != nil)
+			})
+			h.until("the parent's notification", func() bool {
+				return slices.ContainsFunc(got, func(o mygo.NotificationOptions) bool { return o.ID == "thread:"+top.String() })
+			})
+			for range 5 {
+				h.p.run()
+				h.tt.Advance(100 * time.Millisecond)
+			}
+			if v := h.local().Threads[kid].View; v.TakenOver {
+				t.Fatal("the parent's child shows as taken over")
+			}
+			for _, o := range got {
+				if o.ID != "thread:"+top.String() {
+					t.Errorf("a notification not on the parent: %+v", o)
+				}
+			}
+		})
+	}
+}
+
+// With the parent's transcript closed, each child the user took over tells
+// of its own ask, and only a done report's wake tells on the parent.
 func TestAReportTellsOnlyOfItsChild(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		ask  bool // the second child asks too
-		want []string
+		name    string
+		ask     bool // the second child asks too
+		kids    []string
+		parents []string
 	}{
 		// The second child's done report wakes the parent, whose turn ends.
-		{"done", false, []string{"Write the tests: Needs you", "Done. Your turn."}},
-		{"blocked", true, []string{"Write the tests: Needs you", "Run the linter: Needs you"}},
+		{"done", false, []string{"Write the tests: Fake wants to edit main.go", "Run the linter: Done. Your turn."}, []string{"Done. Your turn."}},
+		{"blocked", true, []string{"Write the tests: Fake wants to edit main.go", "Run the linter: Fake wants to edit main.go"}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := tempDir(t)
@@ -799,14 +862,16 @@ func TestAReportTellsOnlyOfItsChild(t *testing.T) {
 			h.thread("Write the tests")
 			h.thread("Run the linter")
 			h.tt.Frame()
-			reports := func() []string {
-				var rs []string
+			var kids, parents []string
+			collect := func() {
+				kids, parents = nil, nil
 				for _, o := range got {
 					if o.ID == "thread:"+top.String() {
-						rs = append(rs, o.Body)
+						parents = append(parents, o.Body)
+					} else {
+						kids = append(kids, o.Title+": "+o.Body)
 					}
 				}
-				return rs
 			}
 			go_ := func(id api.ID) {
 				if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.MessageDispatch{Text: "go"}}); err != nil {
@@ -814,10 +879,13 @@ func TestAReportTellsOnlyOfItsChild(t *testing.T) {
 				}
 			}
 			go_(first)
-			h.until("the first child's report", func() bool { return len(reports()) == 1 })
+			h.until("the first child's ask", func() bool { collect(); return len(kids) == 1 })
 			at := parent.View.Reported
 			go_(second)
-			h.until("the second child's report", func() bool { return parent.View.Reported.After(at) && len(reports()) == len(tc.want) })
+			h.until("the second child's report", func() bool {
+				collect()
+				return parent.View.Reported.After(at) && len(kids) == len(tc.kids) && len(parents) == len(tc.parents)
+			})
 			for range 5 {
 				h.p.run()
 				h.tt.Advance(100 * time.Millisecond)
@@ -825,8 +893,9 @@ func TestAReportTellsOnlyOfItsChild(t *testing.T) {
 			if parent.Transcript != nil {
 				t.Fatal("the parent's transcript is open; this test needs it closed")
 			}
-			if rs := reports(); !slices.Equal(rs, tc.want) {
-				t.Fatalf("notifications on the parent: %q; want %q", rs, tc.want)
+			collect()
+			if !slices.Equal(kids, tc.kids) || !slices.Equal(parents, tc.parents) {
+				t.Fatalf("notifications on the children %q, on the parent %q; want %q, %q", kids, parents, tc.kids, tc.parents)
 			}
 		})
 	}

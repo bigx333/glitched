@@ -50,8 +50,9 @@ type DeliverAnswer struct {
 // ReportToParent posts a child's report in its parent's log: Title is the
 // child's, Kind how its run went; Error is a failed run's, Ask the body of
 // the request a blocked one waits on, and Question that request when it
-// is a question, which the parent's agent may answer. Branch is the
-// child's, where it works in a worktree.
+// is a question, which the parent's agent may answer, or Approval when it
+// is an approval, which the parent's agent vets and only the user grants.
+// Branch is the child's, where it works in a worktree.
 //
 // A remote child's report carries what its machine said: Reply is what a
 // done run said last, which its log here doesn't hold, and On the label
@@ -62,6 +63,7 @@ type ReportToParent struct {
 	Title, Error       string
 	Ask                json.RawMessage
 	Question           api.ID  `json:",omitzero"`
+	Approval           api.ID  `json:",omitzero"`
 	Branch             string  `json:",omitempty"`
 	Reply              *string `json:",omitempty"`
 	On                 string  `json:",omitempty"`
@@ -373,12 +375,14 @@ type Rewound struct{}
 // Reported is a child's report, observed on its parent: what the runtime
 // made of a ReportToParent. Reply is what the child's run said last, or
 // why it failed, for the parent's agent, and Branch the child's. Question
-// is the question request a blocked child waits on, and Ask its body.
+// is the question request a blocked child waits on, Approval the approval
+// one, and Ask its body.
 type Reported struct {
 	Report   api.ChildReported
 	Reply    string
 	Branch   string
 	Question api.ID
+	Approval api.ID
 	Ask      json.RawMessage
 	// On is the label of the machine a remote child runs on, where the
 	// user answers its question.
@@ -463,7 +467,7 @@ type RemoteSeen struct {
 // RemoteReport is one report of a remote child's: of its run Run, by Key,
 // the run of a turn's end or the request of one it waits on. Reply is
 // what a done run said last, Ask the body of the request a blocked one
-// waits on, and Question that request when it is a question.
+// waits on, and Question or Approval that request when it is one.
 type RemoteReport struct {
 	Key, Run api.ID
 	Kind     api.ReportKind
@@ -471,6 +475,7 @@ type RemoteReport struct {
 	Reply    string
 	Ask      json.RawMessage
 	Question api.ID
+	Approval api.ID
 }
 
 // RemoteLost is a placeholder this engine no longer follows, and why, on

@@ -1010,7 +1010,9 @@ func (a *app) follow() {
 }
 
 // changed runs after each change the manager posts: the shown thread's
-// transcript stays open, and each turn that ended since is told of once.
+// transcript stays open, and each turn that ended since is told of once,
+// on a thread that answers to the user. A child's ended turns are marked
+// too, so taking it over later tells of none of them.
 func (a *app) changed() {
 	a.posts++
 	a.follow()
@@ -1023,7 +1025,7 @@ func (a *app) changed() {
 			}
 			seen, known := a.ended[id]
 			a.ended[id] = ended
-			if !known || !ended.After(seen) {
+			if !known || !ended.After(seen) || !th.View.UserOwned() {
 				continue
 			}
 			a.notifyFinished(thread{e, th})

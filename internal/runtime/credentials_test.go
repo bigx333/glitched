@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/engine"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 	"glitched/internal/runtime"
@@ -432,5 +433,191 @@ func TestCredentialsAskWaitingForTheStartTimesOut(t *testing.T) {
 	submit(t, h, thread, dispatch("go", api.StartNow))
 	if got := wait(t, q.asked); got.err != nil || got.asked.Status != api.AskTimedOut {
 		t.Fatalf("the ask returned %+v, %v, want it timed out", got.asked, got.err)
+	}
+}
+
+// A child that answers to its parent asks it for secrets, not the user:
+// the engine refuses its ask. One the user took over asks them, as a
+// thread of theirs does.
+func TestCredentialsAChildAsksItsParent(t *testing.T) {
+	st, err := store.Open(dbPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ad := fake.New(fake.Turn(true))
+	h, err := runtime.New(ctx, st, provider.Mux{"fake": ad}, runtime.WithVault(secrets.New(t.TempDir())))
+	if err != nil {
+		st.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Kill(); st.Close() })
+	parent := newThread(t, h)
+	kid, err := newChild(t, h, ad, parent, api.AccessAsk, fake.Child{Title: "deploy", Task: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	th := until(t, h, kid, "the child's approval", waiting)
+	ask := api.Ask{Thread: kid, Access: th.Turn.Access, Call: "c", Credentials: probeAsk}
+	if _, err := h.AskCredentials(ctx, ask); err == nil || !strings.Contains(err.Error(), "parent") {
+		t.Fatalf("a child's ask: %v; want it refused, for its parent to ask", err)
+	}
+	submit(t, h, kid, dispatch("mine now", api.AfterActive))
+	until(t, h, kid, "the takeover", func(th api.Thread) bool { return th.TakenOver })
+	c, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { _, err := h.AskCredentials(c, ask); done <- err }()
+	until(t, h, kid, "the taken-over child's request", func(th api.Thread) bool {
+		return slices.ContainsFunc(th.Requests, func(r api.Request) bool { return r.Kind == api.KindCredentials })
+	})
+	cancel()
+	<-done
+}
+
+// A linked child (Origin != nil, Parent zero) also answers to its parent
+// until taken over: AskCredentials is refused before takeover and opens
+// once the user takes it over.
+func TestCredentialsALinkedChildAsksItsParent(t *testing.T) {
+	st, err := store.Open(dbPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkID := api.NewID()
+	st.SetLinks(func(id api.ID) (api.Link, error) {
+		if id == linkID {
+			return api.Link{ID: linkID, Access: api.AccessFull}, nil
+		}
+		return api.Link{}, api.ErrNotFound
+	})
+	linked, ws := api.NewID(), t.TempDir()
+	if _, err := st.Submit(ctx, api.Command{ID: api.NewID(), Target: linked, Body: api.ThreadCreate{
+		Title: "remote worker", Model: api.ModelRef{Provider: "fake", Model: "fake"},
+		Access: api.AccessAsk, Text: "go",
+		Origin:     &api.Origin{Engine: api.NewID(), Thread: api.NewID(), Title: "parent", Depth: 1, Access: api.AccessFull, Link: linkID},
+		Repository: &api.Repository{Root: "root", Branch: "main"},
+		Project:    ws, Worktree: &api.NewWorktree{Base: "abc"},
+	}}, time.Now()); err != nil {
+		st.Close()
+		t.Fatal(err)
+	}
+	eff, ok, err := st.Lease(ctx, nil)
+	if err != nil || !ok {
+		st.Close()
+		t.Fatalf("lease worktree.make: ok=%v err=%v", ok, err)
+	}
+	if _, err := st.Observe(ctx, linked, engine.WorktreeReady{Workspace: ws, Branch: "glitched/x"}, time.Now(), eff.ID); err != nil {
+		st.Close()
+		t.Fatal(err)
+	}
+	ad := fake.New(fake.Turn(true))
+	h, err := runtime.New(ctx, st, provider.Mux{"fake": ad}, runtime.WithVault(secrets.New(t.TempDir())))
+	if err != nil {
+		st.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Kill(); st.Close() })
+	th := until(t, h, linked, "the linked child's approval", waiting)
+	if th.UserOwned() {
+		t.Fatalf("untaken linked child reported UserOwned=true: %+v", th)
+	}
+	ask := api.Ask{Thread: linked, Access: th.Turn.Access, Call: "c", Credentials: probeAsk}
+	if _, err := h.AskCredentials(ctx, ask); err == nil || !strings.Contains(err.Error(), "parent") {
+		t.Fatalf("a linked child's ask: %v; want it refused, for its parent to ask", err)
+	}
+	submit(t, h, linked, dispatch("mine now", api.AfterActive))
+	until(t, h, linked, "the takeover", func(th api.Thread) bool { return th.TakenOver && th.UserOwned() })
+	c, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { _, err := h.AskCredentials(c, ask); done <- err }()
+	until(t, h, linked, "the taken-over linked child's request", func(th api.Thread) bool {
+		return slices.ContainsFunc(th.Requests, func(r api.Request) bool { return r.Kind == api.KindCredentials })
+	})
+	cancel()
+	<-done
+}
+
+// A parent's vault secrets are redacted from its child's output streams,
+// work items, and surfaced requests, so handing a child a parent secret's
+// file path never leaks the value into the child's log.
+func TestCredentialsParentSecretsAreRedactedInChildOutput(t *testing.T) {
+	st, err := store.Open(dbPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	vault := secrets.New(t.TempDir())
+	childEvents := []provider.Event{
+		provider.TextDelta{Text: "token=" + probe[:8]},
+		provider.TextDelta{Text: probe[8:] + " done"},
+		provider.Work{Item: "cmd-1", Kind: "command", Title: "curl -H " + probe, Status: api.WorkFailed, Output: "leaked " + probe},
+	}
+	ad := fake.New(childEvents)
+	h, err := runtime.New(ctx, st, provider.Mux{"fake": ad}, runtime.WithVault(vault))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Kill()
+	parent := newThread(t, h)
+	if err := vault.Put(parent, map[string]string{"GLX_PROBE": probe}); err != nil {
+		t.Fatal(err)
+	}
+	kid, err := newChild(t, h, ad, parent, api.AccessAsk, fake.Child{Title: "deploy", Task: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	until(t, h, kid, "the child turn", idle)
+	evs := events(t, h, kid)
+	for _, e := range evs {
+		b, _ := json.Marshal(e)
+		if strings.Contains(string(b), probe) {
+			t.Errorf("child event %s leaked parent secret: %s", e.Type, b)
+		}
+	}
+	if text := transcript(t, evs); !strings.Contains(text, "[GLX_PROBE]") {
+		t.Errorf("child transcript = %q, want [GLX_PROBE]", text)
+	}
+}
+
+// Rotating or forgetting a parent's credential still redacts the previous
+// values in an active child's output so stale values read earlier never
+// leak into the child transcript.
+func TestCredentialsRotatedOrForgottenParentSecretsStayRedactedInChildOutput(t *testing.T) {
+	st, err := store.Open(dbPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	vault := secrets.New(t.TempDir())
+	const rotated = "rotated-secret-9999"
+	childEvents := []provider.Event{
+		provider.TextDelta{Text: "old=" + probe + " new=" + rotated},
+	}
+	ad := fake.New(childEvents)
+	h, err := runtime.New(ctx, st, provider.Mux{"fake": ad}, runtime.WithVault(vault))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Kill()
+	parent := newThread(t, h)
+	if err := vault.Put(parent, map[string]string{"GLX_PROBE": probe}); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.Put(parent, map[string]string{"GLX_PROBE": rotated}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.ForgetCredentials(ctx, parent); err != nil {
+		t.Fatal(err)
+	}
+	kid, err := newChild(t, h, ad, parent, api.AccessAsk, fake.Child{Title: "deploy", Task: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	until(t, h, kid, "the child turn", idle)
+	for _, e := range events(t, h, kid) {
+		b, _ := json.Marshal(e)
+		for _, secret := range []string{probe, rotated} {
+			if strings.Contains(string(b), secret) {
+				t.Errorf("child event %s leaked rotated/forgotten parent secret %q: %s", e.Type, secret, b)
+			}
+		}
 	}
 }

@@ -151,7 +151,8 @@ func treeFixture(t *testing.T) (*bridge, *fake.Adapter, *Manager, *gui, *Env, ap
 
 // spawnUnder has a turn of parent's start a child at work on the engine,
 // as an agent's delegate_task call does, and returns it once the child
-// waits on its approval and the parent's turn ended.
+// waits on its approval and the parent's turns ended: the one that started
+// it, and the wake its approval brought, whose ask the user allows.
 func spawnUnder(t *testing.T, b *bridge, ad *fake.Adapter, parent api.ID, title string) api.ID {
 	t.Helper()
 	ad.Spawns(b.Endpoint, title, fake.Child{Title: title, Task: "work"})
@@ -163,7 +164,11 @@ func spawnUnder(t *testing.T, b *bridge, ad *fake.Adapter, parent api.ID, title 
 	engineUntil(t, b, "the child at work", func() bool {
 		k, kok := engineView(t, b, child)
 		p, _ := engineView(t, b, parent)
-		return kok && k.Run == api.RunWaiting && p.Run == api.RunIdle
+		for _, r := range p.Requests {
+			b.Endpoint.Submit(context.Background(), api.Command{ID: api.NewID(), Target: parent, Body: api.RequestRespond{Request: r.ID, Generation: r.Generation, Answer: []byte(`{"allow":true}`)}})
+		}
+		woke := p.LastReport != nil && p.LastReport.Child == child
+		return kok && k.Run == api.RunWaiting && woke && p.Run == api.RunIdle && p.Queued == 0
 	})
 	return child
 }

@@ -701,7 +701,7 @@ func ids(ctx context.Context, q querier, query string, args ...any) ([]api.ID, e
 }
 
 const threadSelectCols = `id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
-	parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote, origin, role, sweep, last_sweep, alerted`
+	parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote, origin, role, sweep, last_sweep, alerted, taken_over`
 
 func scanThreadRow(row interface{ Scan(...any) error }, t *engine.Thread) error {
 	var model []byte
@@ -710,7 +710,7 @@ func scanThreadRow(row interface{ Scan(...any) error }, t *engine.Thread) error 
 	var updated int64
 	err := row.Scan(idScan{&t.ID}, &t.Workspace, &t.Title, &model, &t.Access, &t.Revision, &t.OwnerEpoch,
 		&t.Generation, &t.Disposition.State, &until, &updated, &t.Deleted, idScan{&t.Parent}, &t.Tokens, &reported, &report, &t.Session,
-		&t.Project, &t.Branch, &t.Context.Used, &t.Context.Window, &t.Context.Stale, &t.Context.Model, &granted, &cacheExpires, &remote, &origin, &t.Role, &sweep, &lastSweep, &alerted)
+		&t.Project, &t.Branch, &t.Context.Used, &t.Context.Window, &t.Context.Stale, &t.Context.Model, &granted, &cacheExpires, &remote, &origin, &t.Role, &sweep, &lastSweep, &alerted, &t.TakenOver)
 	if err != nil {
 		return err
 	}
@@ -1024,8 +1024,8 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 		report = string(b)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO threads (id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
-			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote, origin, role, sweep, last_sweep, alerted)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote, origin, role, sweep, last_sweep, alerted, taken_over)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET workspace = excluded.workspace, title = excluded.title, model = excluded.model,
 			access = excluded.access, revision = excluded.revision, owner_epoch = excluded.owner_epoch, generation = excluded.generation,
 			disposition = excluded.disposition, until = excluded.until, updated_at = excluded.updated_at, deleted = excluded.deleted,
@@ -1033,10 +1033,10 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 			report = excluded.report, session = excluded.session, project = excluded.project, branch = excluded.branch,
 			context_used = excluded.context_used, context_window = excluded.context_window, context_stale = excluded.context_stale,
 			context_model = excluded.context_model, granted = excluded.granted, context_cache_expires = excluded.context_cache_expires,
-			remote = excluded.remote, origin = excluded.origin, role = excluded.role, sweep = excluded.sweep, last_sweep = excluded.last_sweep, alerted = excluded.alerted`,
+			remote = excluded.remote, origin = excluded.origin, role = excluded.role, sweep = excluded.sweep, last_sweep = excluded.last_sweep, alerted = excluded.alerted, taken_over = excluded.taken_over`,
 		t.ID[:], t.Workspace, t.Title, string(model), t.Access, t.Revision, t.OwnerEpoch, t.Generation, t.Disposition.State, until,
 		t.UpdatedAt.UnixNano(), t.Deleted, nullID(t.Parent), t.Tokens, reported, report, t.Session, t.Project, t.Branch,
-		t.Context.Used, t.Context.Window, t.Context.Stale, t.Context.Model, granted, cacheExpires, remote, origin, t.Role, sweep, lastSweep, alerted); err != nil {
+		t.Context.Used, t.Context.Window, t.Context.Stale, t.Context.Model, granted, cacheExpires, remote, origin, t.Role, sweep, lastSweep, alerted, t.TakenOver); err != nil {
 		return err
 	}
 	for i, r := range t.Runs {

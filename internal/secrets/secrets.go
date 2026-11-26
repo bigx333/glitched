@@ -150,6 +150,33 @@ func (v *Vault) Values(thread api.ID) map[string]string {
 	return all
 }
 
+// RedactValues returns every value thread currently holds or previously
+// held while the vault was in use (including rotated or forgotten values),
+// for output redaction.
+func (v *Vault) RedactValues(thread api.ID) map[string]string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	cur, _ := v.valuesLocked(thread)
+	ever := v.ever[thread]
+	if len(cur) == 0 && len(ever) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(cur)+len(ever))
+	for k, val := range cur {
+		out[k] = val
+	}
+	for k, vals := range ever {
+		for i, val := range vals {
+			if existing, ok := out[k]; !ok {
+				out[k] = val
+			} else if existing != val {
+				out[fmt.Sprintf("%s#%d", k, i+1)] = val
+			}
+		}
+	}
+	return out
+}
+
 func (v *Vault) valuesLocked(thread api.ID) (map[string]string, error) {
 	if v.deleted[thread] {
 		return nil, ErrDeleted
@@ -162,9 +189,22 @@ func (v *Vault) valuesLocked(thread api.ID) (map[string]string, error) {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
+	envInfo, _ := os.Lstat(filepath.Join(v.Dir(thread), EnvScript))
 	for _, e := range entries {
-		if !e.Type().IsRegular() || !api.ValidName(e.Name()) || e.Name() == EnvScript {
+		if !e.Type().IsRegular() || e.Name() == EnvScript {
 			continue
+		}
+		if !api.ValidName(e.Name()) {
+			// A vault written by an earlier build on a case-sensitive volume
+			// may hold a legacy ENV file distinct from EnvScript; keep reading
+			// it so redaction never drops existing secrets on upgrade.
+			if !strings.EqualFold(e.Name(), EnvScript) {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil || (envInfo != nil && os.SameFile(info, envInfo)) {
+				continue
+			}
 		}
 		b, err := os.ReadFile(filepath.Join(v.Dir(thread), e.Name()))
 		if err != nil {
@@ -260,12 +300,18 @@ func (v *Vault) everLocked(thread api.ID, name, value string) {
 	}
 }
 
-// Forget deletes thread's folder and everything in it.
+// Forget deletes thread's folder and everything in it, after recording any
+// on-disk values in v.ever so active consumers still redact them after a
+// restart. If reading the folder fails, it returns the error without
+// deleting the folder so no unread secret is lost.
 func (v *Vault) Forget(thread api.ID) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	defer v.publishLocked()
 	defer v.checkLocked(thread)
+	if _, err := v.valuesLocked(thread); err != nil && !errors.Is(err, ErrDeleted) {
+		return err
+	}
 	delete(v.loaded, thread)
 	return os.RemoveAll(v.Dir(thread))
 }

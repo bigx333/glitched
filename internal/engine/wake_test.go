@@ -1,6 +1,7 @@
 package engine_test
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -162,4 +163,79 @@ func TestAReplayedReportWakesOnce(t *testing.T) {
 	if s, ok := started(p.see(engine.Ended{Run: s.Run, Outcome: api.OutcomeCompleted})); ok {
 		t.Errorf("the wake's turn ended and started %+v", s)
 	}
+}
+
+// A child's approval wakes its parent, a wake for each request apart from
+// its run's: the parent's agent learns which child waits on what, and that
+// only the user grants it. A replayed report wakes nothing more.
+func TestAnApprovalWakesTheParent(t *testing.T) {
+	p := newThread(t)
+	child, run := api.NewID(), api.NewID()
+	approval := func(id api.ID, outcome string) engine.Reported {
+		return engine.Reported{Report: api.ChildReported{Child: child, Run: run, Kind: api.ReportBlocked, Title: "Deploy it", Outcome: outcome},
+			Approval: id, Ask: json.RawMessage(`{"operation":"run","command":"kubectl apply -f prod.yaml"}`)}
+	}
+	first, second := api.NewID(), api.NewID()
+	s, ok := started(p.see(approval(first, "Wants to run kubectl apply -f prod.yaml")))
+	for _, want := range []string{`<task id="` + child.String() + `"`, `state="waiting_on_approval"`, `request="` + first.String() + `"`, "Wants to run kubectl apply -f prod.yaml", "task_answer refuses approvals", "task_cancel"} {
+		if !ok || !strings.Contains(s.Text, want) {
+			t.Fatalf("the approval's wake: %+v, %v; want its text to hold %q", s, ok, want)
+		}
+	}
+	p.see(engine.Ended{Run: s.Run, Outcome: api.OutcomeCompleted})
+	if s, ok := started(p.see(approval(first, ""))); ok {
+		t.Fatalf("a replayed approval started %+v", s)
+	}
+	s, ok = started(p.see(approval(second, "")))
+	if !ok || !strings.Contains(s.Text, `request="`+second.String()+`"`) || !strings.Contains(s.Text, "Wants to run kubectl apply -f prod.yaml") {
+		t.Fatalf("the run's second approval, its outcome unsaid: %+v, %v; want its own wake, from its body", s, ok)
+	}
+	p.see(engine.Ended{Run: s.Run, Outcome: api.OutcomeCompleted})
+	done := engine.Reported{Report: api.ChildReported{Child: child, Run: run, Kind: api.ReportDone, Title: "Deploy it", Outcome: "Deployed."}}
+	if s, ok := started(p.see(done)); !ok || !strings.Contains(s.Text, "Deployed.") {
+		t.Fatalf("the run's done report after its approvals: %+v, %v; want its own wake", s, ok)
+	}
+}
+
+// An approval wake carries the full request body for vetting — requested
+// permissions, reason, cwd, unsandboxed flag, and commands longer than the
+// timeline card's 280-character summary — rather than only the clipped outcome.
+func TestAnApprovalWakeIncludesFullDetails(t *testing.T) {
+	p := newThread(t)
+	child, run := api.NewID(), api.NewID()
+
+	perm := engine.Reported{
+		Report:   api.ChildReported{Child: child, Run: run, Kind: api.ReportBlocked, Title: "Audit", Outcome: "Wants to get more access"},
+		Approval: api.NewID(),
+		Ask:      json.RawMessage(`{"operation":"get more access","reason":"fetch upstream schema","args":"network: enabled\nfileSystem: write /etc/hosts"}`),
+	}
+	s, ok := started(p.see(perm))
+	for _, want := range []string{"Wants to get more access", "Reason: fetch upstream schema", "Details: network: enabled\nfileSystem: write /etc/hosts"} {
+		if !ok || !strings.Contains(s.Text, want) {
+			t.Fatalf("permission approval wake = %q (ok=%v), want %q", s.Text, ok, want)
+		}
+	}
+	p.see(engine.Ended{Run: s.Run, Outcome: api.OutcomeCompleted})
+
+	longCmd := "curl -X POST https://api.example.com/deploy " + strings.Repeat("--header 'X-Check: 1' ", 15) + "--data '{\"env\":\"prod\"}'"
+	cmd := engine.Reported{
+		Report:   api.ChildReported{Child: child, Run: run, Kind: api.ReportBlocked, Title: "Deploy", Outcome: "Wants to run " + longCmd[:200] + "…"},
+		Approval: api.NewID(),
+		Ask:      json.RawMessage(`{"operation":"run","command":` + string(mustJSON(t, longCmd)) + `,"cwd":"/repo/deploy","unsandboxed":true,"reason":"needs prod token"}`),
+	}
+	s, ok = started(p.see(cmd))
+	for _, want := range []string{"Wants to run " + longCmd, "Cwd: /repo/deploy", "Unsandboxed: true", "Reason: needs prod token"} {
+		if !ok || !strings.Contains(s.Text, want) {
+			t.Fatalf("long command approval wake = %q (ok=%v), want %q", s.Text, ok, want)
+		}
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

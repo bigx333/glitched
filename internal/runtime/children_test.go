@@ -34,6 +34,7 @@ func newChild(t *testing.T, ep api.Endpoint, ad spawner, parent api.ID, access a
 	ad.Spawns(ep, text, kids...)
 	run := submit(t, ep, parent, dispatch(text, api.AfterActive)).Command
 	until(t, ep, parent, "the spawning turn", func(th api.Thread) bool {
+		allow(ep, th)
 		return th.Run == api.RunIdle && th.Queued == 0 && ended(t, ep, parent, run)
 	})
 	child := fake.ChildOf(run, 0)
@@ -42,6 +43,17 @@ func newChild(t *testing.T, ep api.Endpoint, ad spawner, parent api.ID, access a
 		t.Fatalf("the spawning turn ended before the engine answered its create")
 	}
 	return child, err
+}
+
+// allow allows the approvals th waits on, as the user would: an asking
+// child's approval wakes its parent, whose turn, on an asking adapter,
+// asks too.
+func allow(ep api.Endpoint, th api.Thread) {
+	for _, r := range th.Requests {
+		if r.Kind == api.KindApproval {
+			ep.Submit(ctx, api.Command{ID: api.NewID(), Target: th.ID, Body: api.RequestRespond{Request: r.ID, Generation: r.Generation, Answer: []byte(`{"allow":true}`)}})
+		}
+	}
 }
 
 // ended is whether run's turn on thread ended.

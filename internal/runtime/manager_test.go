@@ -162,7 +162,7 @@ func (a *holdAgent) Next(ctx context.Context) (provider.Event, error) {
 	}
 }
 
-func TestManagerScheduledSweepFiresAndDismissesSilently(t *testing.T) {
+func TestAScheduledSweepIsQuietUntilRaised(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "host.db"))
 	if err != nil {
@@ -220,20 +220,21 @@ func TestManagerScheduledSweepFiresAndDismissesSilently(t *testing.T) {
 		t.Fatal("timed out waiting for scheduled sweep to start")
 	}
 
-	if _, err := h.Submit(ctx, api.Command{
-		ID:     api.NewID(),
-		Target: mgr,
-		Body:   api.WakeDismiss{Run: runID, Reason: "no changes needed"},
-	}); err != nil {
-		t.Fatalf("WakeDismiss: %v", err)
-	}
-
 	snap, err := h.Read(ctx, api.Query{Thread: mgr})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snap.Threads[0].Turn == nil || !snap.Threads[0].Turn.Silent || snap.Threads[0].Working() {
-		t.Fatalf("expected silent non-working turn after WakeDismiss, got %+v", snap.Threads[0])
+	if v := snap.Threads[0]; v.Turn == nil || !v.Turn.Silent || v.Working() {
+		t.Fatalf("a scheduled sweep shows %+v, want it quiet", v)
+	}
+	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: mgr, Body: api.WakeRaise{Run: runID, Reason: "a worker failed"}}); err != nil {
+		t.Fatalf("WakeRaise: %v", err)
+	}
+	if snap, err = h.Read(ctx, api.Query{Thread: mgr}); err != nil {
+		t.Fatal(err)
+	}
+	if v := snap.Threads[0]; v.Turn == nil || v.Turn.Silent || !v.Working() {
+		t.Fatalf("a raised sweep shows %+v, want it the user's", v)
 	}
 }
 
@@ -465,13 +466,7 @@ func TestARunSweepSweepsAnIdleManagerNow(t *testing.T) {
 	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: mgr, Body: api.SweepRun{}}); !errors.As(err, new(*api.RejectedError)) {
 		t.Fatalf("a second SweepRun while the first runs = %v, want RejectedError", err)
 	}
-	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: mgr, Body: api.WakeDismiss{Run: run}}); err != nil {
-		t.Fatalf("WakeDismiss of the sweep: %v", err)
-	}
-	if snap, err = h.Read(ctx, api.Query{Thread: mgr}); err != nil {
-		t.Fatal(err)
-	}
-	if v := snap.Threads[0]; v.Turn == nil || !v.Turn.Silent || v.Working() {
-		t.Fatalf("a dismissed sweep shows %+v, want it silent", v.Turn)
+	if !v.Turn.Silent || v.Working() {
+		t.Fatalf("a sweep run by hand shows %+v, want it quiet", v.Turn)
 	}
 }

@@ -29,15 +29,15 @@ type Config struct {
 	// posted, and must not block; the GUI passes its window's Update.
 	Post func(fn func())
 	// Asked, when set, runs on the Post thread once for each thread that
-	// asks the user something the user has not heard of. A child is told
-	// of on its Blocked report, or on a reconnect that finds the ask,
-	// whichever the env sees first; nothing it asks at its first snapshot
-	// of a log is told of but by a report after, or a reconnect that finds
-	// its parent reported to while away. A thread of the user's, whose
-	// parent is zero, is told of on the view that first asks it, or on a
-	// reconnect that finds the ask; not for what it asks at the first
-	// snapshot of a log.
-	Asked func(e *Env, parent, child api.ID)
+	// answers to the user (api.Thread.UserOwned) and asks them something
+	// they have not heard of. A child that answers to its parent asks its
+	// parent instead, so it never runs Asked, nor does what it asked before
+	// the user took it over. A thread is told of on the view that first asks
+	// it, on a child's Blocked report, or on a reconnect that finds the
+	// ask, whichever the env sees first; nothing it asks at its first
+	// snapshot of a log is told of but by a report after, or a reconnect
+	// that finds its parent reported to while away.
+	Asked func(e *Env, thread api.ID)
 	// Engine, when set, changes how an engine embedded here serves, after
 	// engine.json: the GUI has it run the real Claude Code. Left nil, as a
 	// test leaves it, the engine plays every provider with the fake.
@@ -466,7 +466,7 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 		if m.view(e, *it.Thread) {
 			m.reported(e, *it.Thread.LastReport)
 		}
-		if th := e.Threads[it.Thread.ID]; th != nil && it.Thread.Parent.IsZero() {
+		if th := e.Threads[it.Thread.ID]; th != nil {
 			m.tell(e, th, before)
 		}
 	}
@@ -480,8 +480,10 @@ func (m *Manager) reported(e *Env, r api.Report) {
 	}
 }
 
-// tell tells of th if it asks a request the user heard less of than
-// enough, and marks all it asks as told of.
+// tell tells of th if it answers to the user and asks a request the user
+// heard less of than enough, and marks all it asks as told of. What a
+// child that answers to its parent asks is marked too, so taking it over
+// later tells of nothing it asked before.
 func (m *Manager) tell(e *Env, th *Thread, enough heard) {
 	if !slices.ContainsFunc(th.View.Requests, func(r api.Request) bool { return th.told[r.ID] < enough }) {
 		return
@@ -489,8 +491,8 @@ func (m *Manager) tell(e *Env, th *Thread, enough heard) {
 	for _, r := range th.View.Requests {
 		th.told[r.ID] = notified
 	}
-	if m.cfg.Asked != nil {
-		m.cfg.Asked(e, th.View.Parent, th.View.ID)
+	if m.cfg.Asked != nil && th.View.UserOwned() {
+		m.cfg.Asked(e, th.View.ID)
 	}
 }
 

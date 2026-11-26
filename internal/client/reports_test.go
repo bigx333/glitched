@@ -29,7 +29,7 @@ func newShelled(t *testing.T) *shelled {
 	}
 	t.Cleanup(func() { st.Close() })
 	sh := &shelled{t: t, st: st}
-	sh.m = New(Config{Post: func(fn func()) { fn() }, Asked: func(_ *Env, _, child api.ID) { sh.told = append(sh.told, child) }})
+	sh.m = New(Config{Post: func(fn func()) { fn() }, Asked: func(_ *Env, child api.ID) { sh.told = append(sh.told, child) }})
 	t.Cleanup(func() { sh.m.Close() })
 	sh.e = &Env{ctx: sh.m.ctx, Threads: map[api.ID]*Thread{}}
 	st.OnCommit(func(c store.Commit) { sh.views = append(sh.views, c.Threads...) })
@@ -74,23 +74,33 @@ func (sh *shelled) ask(parent api.ID, at time.Time) api.ID {
 	return child
 }
 
-// asking starts a turn on a new child of parent's that asks the user.
-// report logs its Blocked report to parent, which the runtime does in a
-// later commit.
+// asking starts a turn on a new child of parent's that asks the user, a
+// turn the user started, which takes the child over. report logs its
+// Blocked report to parent, which the runtime does in a later commit.
 func (sh *shelled) asking(parent api.ID, at time.Time) (child api.ID, report func()) {
+	return sh.askingAs(parent, at, true)
+}
+
+// askingAs is asking, with the child's turn the user's, which takes it
+// over, or its parent's, its create's task.
+func (sh *shelled) askingAs(parent api.ID, at time.Time, user bool) (child api.ID, report func()) {
 	sh.t.Helper()
 	ctx := context.Background()
 	child = api.NewID()
-	submit := func(body api.Intent) api.ID {
-		sh.t.Helper()
-		c := api.Command{ID: api.NewID(), Target: child, Body: body}
-		if _, err := sh.st.Submit(ctx, c, at); err != nil {
+	create := api.Command{ID: api.NewID(), Target: child, Body: api.ThreadCreate{Workspace: "w", Title: "child", Model: api.ModelRef{Provider: "fake"}, Parent: parent}}
+	run := create.ID
+	if user {
+		sh.spawn(parent, at, create)
+		run = api.NewID()
+		if _, err := sh.st.Submit(ctx, api.Command{ID: run, Target: child, Body: api.MessageDispatch{Text: "go", Mode: api.StartNow}}, at); err != nil {
 			sh.t.Fatal(err)
 		}
-		return c.ID
+	} else {
+		b := create.Body.(api.ThreadCreate)
+		b.Text = "go"
+		create.Body = b
+		sh.spawn(parent, at, create)
 	}
-	sh.spawn(parent, at, api.Command{ID: api.NewID(), Target: child, Body: api.ThreadCreate{Workspace: "w", Title: "child", Model: api.ModelRef{Provider: "fake"}, Parent: parent}})
-	run := submit(api.MessageDispatch{Text: "go", Mode: api.StartNow})
 	e, ok, err := sh.st.Lease(ctx, func() []api.ID { return nil })
 	for err == nil && ok && e.Thread != child { // another child's report
 		e, ok, err = sh.st.Lease(ctx, func() []api.ID { return nil })
@@ -228,8 +238,9 @@ func TestAnAskFromBeforeTheFirstSnapshotIsToldOfThoughASiblingReportedAfter(t *t
 	sh.want(a)
 }
 
-// A duplicate that comes back starts over as on a first snapshot, and is
-// told of an ask it saw then, which reports with a sibling's Done after.
+// A child the user took over is told of as it asks. A duplicate that comes
+// back starts over as on a first snapshot, and is told of the ask again by
+// its report, which comes with a sibling's Done after.
 func TestAnAskSeenByAReturningDuplicateIsToldOfThoughASiblingReportedAfter(t *testing.T) {
 	sh := newShelled(t)
 	p := sh.create("Parent")
@@ -237,12 +248,36 @@ func TestAnAskSeenByAReturningDuplicateIsToldOfThoughASiblingReportedAfter(t *te
 	at := time.Unix(1001, 0)
 	a, report := sh.asking(p, at)
 	sh.send()
+	sh.want(a)
 	sh.m.down(sh.e, Duplicate{Of: "other"})
 	sh.connect()
 	report()
 	sh.finish(p, at)
 	sh.connect()
-	sh.want(a)
+	sh.want(a, a)
 	sh.connect()
-	sh.want(a)
+	sh.want(a, a)
+}
+
+// A child that answers to its parent asks the parent, not the user: its
+// ask is never told of, live or across a reconnect, while one the user
+// took over is.
+func TestAChildThatAnswersToItsParentIsNeverToldOf(t *testing.T) {
+	sh := newShelled(t)
+	p := sh.create("Parent")
+	sh.connect()
+	at := time.Unix(1001, 0)
+	quiet, report := sh.askingAs(p, at, false)
+	sh.send()
+	report()
+	sh.send()
+	sh.want()
+	if v := sh.e.Threads[quiet].View; v.TakenOver || v.UserOwned() || len(v.Requests) != 1 {
+		t.Fatalf("the parent's child: TakenOver %v, UserOwned %v, requests %v; want its own, asking", v.TakenOver, v.UserOwned(), v.Requests)
+	}
+	taken := sh.ask(p, at)
+	sh.send()
+	sh.want(taken)
+	sh.connect()
+	sh.want(taken)
 }

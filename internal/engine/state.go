@@ -55,6 +55,7 @@ type Thread struct {
 	Deleted     bool // the tombstone: nothing reaches the thread again
 	UpdatedAt   time.Time
 	Parent      api.ID      // the thread that started this one; zero for the user's
+	TakenOver   bool        // a child whose last message or stop was the user's
 	Tokens      int64       // what the thread's own turns used
 	Context     api.Context // how full its context is; zero until an agent says
 	Session     string      // the provider's id for the thread's conversation; "" until a run binds one
@@ -97,7 +98,8 @@ type Run struct {
 	// Wake is why the engine started the run on its own; NotWake for a
 	// turn the user asked for or joined. Woke is when it was admitted,
 	// and Prior the thread's UpdatedAt before it. Dismissed is a wake
-	// its Manager quieted: the thread shows it as it does a silent run.
+	// that is quiet, as a Manager's is admitted: the thread shows it as it
+	// does a silent run, until something raises it.
 	Wake      api.WakeKind
 	Woke      time.Time
 	Prior     time.Time
@@ -231,6 +233,10 @@ func (t Thread) settled() bool { return t.Disposition.State == api.Settled }
 // of one on the machine its link came from.
 func (t Thread) child() bool { return !t.Parent.IsZero() || t.Origin != nil }
 
+// UserOwned is whether the thread answers to the user: one of theirs, or a
+// child (local or linked from another machine) they took over.
+func (t Thread) UserOwned() bool { return !t.child() || t.TakenOver }
+
 // stopped is whether the thread's last run was stopped: by the user, or by
 // the engine when it couldn't deliver an answer. A stop reached a run that
 // completed as it landed too. A silent run since, such as an idle
@@ -363,6 +369,7 @@ func View(t Thread) api.Thread {
 		UpdatedAt:   t.UpdatedAt,
 		Deleted:     t.Deleted,
 		Parent:      t.Parent,
+		TakenOver:   t.TakenOver || t.Remote != nil && t.Remote.Taken,
 		Tokens:      t.Tokens,
 		Reported:    t.Reported,
 		Confirmed:   t.Confirmed,

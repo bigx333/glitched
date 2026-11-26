@@ -139,15 +139,24 @@ func TestDismissedWakeKeepsQueuedSendNowEnabled(t *testing.T) {
 		Run:  api.RunRunning,
 		Turn: &api.Turn{Run: api.NewID(), Silent: true, Dismissed: true},
 	}
-	if !canSteer(dismissed) {
-		t.Fatal("canSteer returned false for a dismissed Manager wake")
+	if !canSteer(dismissed) || !dismissed.Stoppable() || !activeTurn(dismissed) {
+		t.Fatalf("dismissed Manager wake: canSteer=%v Stoppable=%v activeTurn=%v, want true/true/true", canSteer(dismissed), dismissed.Stoppable(), activeTurn(dismissed))
+	}
+	a := &app{}
+	if !a.queues(thread{Thread: &client.Thread{View: dismissed}}) {
+		t.Fatal("queues returned false for a quiet Manager wake")
+	}
+	waitingDismissed := dismissed
+	waitingDismissed.Run = api.RunWaiting
+	if a.queues(thread{Thread: &client.Thread{View: waitingDismissed}}) {
+		t.Fatal("queues returned true while waiting on a request")
 	}
 	compacting := api.Thread{
 		Run:  api.RunRunning,
 		Turn: &api.Turn{Run: api.NewID(), Silent: true},
 	}
-	if canSteer(compacting) {
-		t.Fatal("canSteer returned true for a silent compaction run")
+	if canSteer(compacting) || compacting.Stoppable() || activeTurn(compacting) || a.queues(thread{Thread: &client.Thread{View: compacting}}) {
+		t.Fatalf("silent compaction run: canSteer=%v Stoppable=%v activeTurn=%v, want all false", canSteer(compacting), compacting.Stoppable(), activeTurn(compacting))
 	}
 }
 
@@ -536,5 +545,39 @@ func TestManagerSweepTimingAndDocsTotalCap(t *testing.T) {
 	}
 	if len(docs) != 3 || docs[0].omitted || docs[1].omitted || !docs[2].omitted {
 		t.Fatalf("docs omitted flags = [%v, %v, %v], want [false, false, true]", docs[0].omitted, docs[1].omitted, docs[2].omitted)
+	}
+}
+
+// The Manager's row and the Managers' count say Needs you for what the
+// Manager asks or failed, and for a worker the user took over; what its
+// other workers ask or fail is the Manager's to vet, which its overview
+// still shows.
+func TestTheManagersRowNeedsYouOnlyForWhatReachesTheUser(t *testing.T) {
+	h, id := managerFixture(t, t.TempDir(), nil, "Worker one")
+	mgr := thread{h.local(), h.local().Threads[id]}
+	worker := h.thread("Worker one")
+	row := func() bool {
+		h.tt.Advance(time.Second)
+		return managerNeedsUser(mgr, h.a.shown(mgr)) && h.tt.HasText("Needs you")
+	}
+	if row() {
+		t.Fatalf("nothing waits, yet the row says %q", h.tt.Texts())
+	}
+	worker.View.LastTurn = &api.TurnResult{Outcome: api.OutcomeFailed, Ended: time.Now()}
+	worker.View.Requests = []api.Request{{ID: api.NewID(), Kind: api.KindApproval}}
+	if row() {
+		t.Fatalf("a worker's unvetted ask and failure show on the Manager's row: %q", h.tt.Texts())
+	}
+	if needs, _ := h.a.managerAttention(mgr); needs != 1 {
+		t.Fatalf("the overview counts %d needing the user, want the worker", needs)
+	}
+	worker.View.TakenOver = true
+	if !row() {
+		t.Fatalf("a worker the user took over asks, yet the row says %q", h.tt.Texts())
+	}
+	worker.View.TakenOver = false
+	mgr.View.Requests = []api.Request{{ID: api.NewID(), Kind: api.KindQuestion}}
+	if !row() {
+		t.Fatalf("the Manager asks, yet the row says %q", h.tt.Texts())
 	}
 }

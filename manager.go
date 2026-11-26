@@ -187,6 +187,19 @@ func (a *app) managerAttention(t thread) (needs, active int) {
 	return needs, working(tree)
 }
 
+// managerNeedsUser is whether the Manager t, or a worker in tree the user
+// took over, waits on the user or failed. What its other workers ask or
+// fail is the Manager's to vet first, which raises what the user must see.
+func managerNeedsUser(t thread, tree []node) bool {
+	if _, _, ok := threadNeedsYou(t); ok {
+		return true
+	}
+	return slices.ContainsFunc(tree, func(n node) bool {
+		_, _, ok := threadNeedsYou(n.t)
+		return ok && n.t.View.TakenOver
+	})
+}
+
 // --- Sidebar
 
 // managersSection is the sidebar's Managers: a header that adds one and,
@@ -260,12 +273,12 @@ func (a *app) managersSection(c *ui.Context) {
 const managerRowsHeight = 220
 
 // managersCount is the Managers' count: amber while one, or a worker under
-// one, waits on the user or failed, the accent while one is unread.
+// one the user took over, waits on the user or failed, the accent while
+// one is unread.
 func (a *app) managersCount(c *ui.Context, items []inboxItem) {
 	needs, unread := false, false
 	for _, it := range items {
-		n, _ := a.managerAttention(it.t)
-		needs = needs || n > 0
+		needs = needs || managerNeedsUser(it.t, a.shown(it.t))
 		unread = unread || a.backend.Unread(it.t.Thread)
 	}
 	n := ui.Textf(c, "%d", len(items)).FontSize(11).FontWeight(600).Padding(1, 7).Radius(999)
@@ -320,22 +333,17 @@ func (a *app) managerRow(c *ui.Context, it inboxItem) {
 }
 
 // managerMark is what a Manager's row shows at its end while it isn't
-// pointed at: a failure, what waits on the user, how many workers work,
-// that it is unread, or how long ago it changed.
+// pointed at: a failure, what waits on the user (see managerNeedsUser),
+// how many workers work, that it is unread, or how long ago it changed.
 func (a *app) managerMark(c *ui.Context, t thread, tree []node, selected bool) {
 	dim := palette.faint
 	if selected {
 		dim = palette.muted
 	}
-	_, _, selfNeeds := threadNeedsYou(t)
-	anyNeeds := selfNeeds || slices.ContainsFunc(tree, func(n node) bool {
-		_, _, ok := threadNeedsYou(n.t)
-		return ok
-	})
 	switch {
 	case failed(t):
 		a.tip(c, ui.Box(c).Size(7, 7).Radius(4).Background(palette.red).Label("A command failed"), "A command failed")
-	case anyNeeds:
+	case managerNeedsUser(t, tree):
 		ui.Text(c, "Needs you").FontSize(10.5).FontWeight(600).TextColor(palette.amber).
 			Background(palette.amber.Alpha(0.16)).Padding(1, 5).Radius(999).Shrink(0)
 	case working(tree) > 0:

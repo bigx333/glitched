@@ -161,13 +161,14 @@ func (m *Manager) server(label string) int {
 }
 
 // news is when the thread last had something to read: its last turn's end,
-// or a child's report after it.
+// or a child's report after it. A Manager's workers report to its quiet
+// wakes, so only a turn it ended for the user is news.
 func news(v api.Thread) time.Time {
 	var at time.Time
 	if v.LastTurn != nil {
 		at = v.LastTurn.Ended
 	}
-	if v.Reported.After(at) {
+	if v.Role != api.RoleManager && v.Reported.After(at) {
 		at = v.Reported
 	}
 	return at
@@ -202,7 +203,7 @@ func (m *Manager) MarkShown(th *Thread) {
 	if tr := th.Transcript; tr != nil && m.Unread(th) {
 		at := news(th.View)
 		shown := tr.Ended
-		if tr.Reported.After(shown) {
+		if th.View.Role != api.RoleManager && tr.Reported.After(shown) {
 			shown = tr.Reported
 		}
 		if shown.Before(at) {

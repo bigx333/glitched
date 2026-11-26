@@ -62,6 +62,109 @@ func TestPutReplacesAndForgetDeletes(t *testing.T) {
 	if len(v.Values(th)) != 0 {
 		t.Error("a forgotten thread still has values")
 	}
+	// RedactValues retains previously held (rotated and forgotten) values
+	// until Delete so active consumers never leak stale secrets.
+	rv := v.RedactValues(th)
+	var held []string
+	for _, val := range rv {
+		held = append(held, val)
+	}
+	for _, want := range []string{"first-value", "second-value", "kept-value"} {
+		if !slices.Contains(held, want) {
+			t.Errorf("RedactValues after rotate+forget = %v, want %q retained", rv, want)
+		}
+	}
+	if err := v.Put(th, map[string]string{"ENV": "collides-with-env-script"}); err == nil {
+		t.Error("Vault.Put accepted ENV, which collides with EnvScript on case-insensitive volumes")
+	}
+	if err := v.Delete(th); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.RedactValues(th)) != 0 {
+		t.Errorf("RedactValues after Delete = %v, want empty", v.RedactValues(th))
+	}
+}
+
+// Reopening a vault after restart and calling Forget before reading the
+// thread still preserves its on-disk values for RedactValues.
+func TestForgetAfterRestartRetainsRedactValues(t *testing.T) {
+	dir := t.TempDir()
+	th := api.NewID()
+	if err := New(dir).Put(th, map[string]string{"KEY": "persisted-secret-value"}); err != nil {
+		t.Fatal(err)
+	}
+	reopened := New(dir)
+	if err := reopened.Forget(th); err != nil {
+		t.Fatal(err)
+	}
+	rv := reopened.RedactValues(th)
+	if rv["KEY"] != "persisted-secret-value" {
+		t.Fatalf("RedactValues after restart+Forget = %v, want persisted-secret-value retained", rv)
+	}
+}
+
+// On a case-sensitive volume, a legacy vault containing an ENV file distinct
+// from EnvScript still loads ENV for redaction while Put rejects new ENV
+// writes.
+func TestLegacyENVFileRetainedOnCaseSensitiveVolume(t *testing.T) {
+	dir := t.TempDir()
+	th := api.NewID()
+	v := New(dir)
+	if _, err := v.Prepare(th); err != nil {
+		t.Fatal(err)
+	}
+	envPath := filepath.Join(v.Dir(th), EnvScript)
+	legacyPath := filepath.Join(v.Dir(th), "ENV")
+	if err := os.WriteFile(legacyPath, []byte("legacy-env-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envInfo, err := os.Lstat(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyInfo, err := os.Lstat(legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(envInfo, legacyInfo) {
+		t.Skip("case-insensitive filesystem; ENV and env are the same file")
+	}
+	reopened := New(dir)
+	if got := reopened.RedactValues(th)["ENV"]; got != "legacy-env-secret" {
+		t.Fatalf("RedactValues on legacy ENV file = %v, want legacy-env-secret", reopened.RedactValues(th))
+	}
+	if err := reopened.Put(th, map[string]string{"ENV": "new-value"}); err == nil {
+		t.Fatal("Put accepted new ENV credential")
+	}
+}
+
+// Forget refuses to delete a thread's vault directory when an on-disk
+// credential cannot be read into redaction history first.
+func TestForgetFailsWithoutDeletingUnreadableSecret(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses chmod 0000")
+	}
+	dir := t.TempDir()
+	th := api.NewID()
+	if err := New(dir).Put(th, map[string]string{"KEY": "secret-must-not-vanish"}); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(dir, th.String(), "KEY")
+	if err := os.Chmod(keyPath, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(keyPath, 0o600) })
+
+	reopened := New(dir)
+	if err := reopened.Forget(th); err == nil {
+		t.Fatal("Forget succeeded despite unreadable secret file")
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		t.Fatalf("unreadable secret file was deleted: %v", err)
+	}
+	if h := scanned(t, reopened); h.Complete {
+		t.Fatalf("vault reported Complete=true after unreadable Forget: %+v", h)
+	}
 }
 
 // scanned is v's Held once the vault has read every thread's folder.

@@ -348,6 +348,7 @@ func (QueueMove) intentType() string       { return "queue.move" }
 func (QueueSteer) intentType() string      { return "queue.steer" }
 func (ResumeCancel) intentType() string    { return "resume.cancel" }
 func (WakeDismiss) intentType() string     { return "wake.dismiss" }
+func (WakeRaise) intentType() string       { return "wake.raise" }
 func (SweepRun) intentType() string        { return "sweep.run" }
 
 // StartsTurn is whether i may start a turn of its thread's agent: a
@@ -379,6 +380,7 @@ var intents = map[string]func() Intent{
 	"queue.steer":      func() Intent { return new(QueueSteer) },
 	"resume.cancel":    func() Intent { return new(ResumeCancel) },
 	"wake.dismiss":     func() Intent { return new(WakeDismiss) },
+	"wake.raise":       func() Intent { return new(WakeRaise) },
 	"sweep.run":        func() Intent { return new(SweepRun) },
 }
 
@@ -449,6 +451,8 @@ func (c *Command) UnmarshalJSON(b []byte) error {
 	case *ResumeCancel:
 		c.Body = *v
 	case *WakeDismiss:
+		c.Body = *v
+	case *WakeRaise:
 		c.Body = *v
 	case *SweepRun:
 		c.Body = *v
@@ -570,6 +574,10 @@ type Thread struct {
 	// Parent is the thread that started this one, zero for a thread of the
 	// user's. A parent deleted leaves its children standing on their own.
 	Parent ID `json:"parent,omitzero"`
+	// TakenOver is that the user took this child over: its last message or
+	// stop was theirs, here or on the machine it runs on. A child taken
+	// over answers to the user, as a thread of theirs does.
+	TakenOver bool `json:"takenOver,omitempty"`
 	// Tokens is what the thread's own turns used, as their agents told;
 	// a parent's total with its children's is summed when read.
 	Tokens int64 `json:"tokens,omitempty"`
@@ -656,11 +664,17 @@ func (t Thread) Working() bool { return t.Run != RunIdle && t.Run != RunUncertai
 func (t Thread) Silent() bool { return t.Turn != nil && t.Turn.Silent }
 
 // Stoppable is whether the user can stop the thread: it has a live run
-// that isn't silent, or it is a link's thread whose messages wait with
-// no run, on its worktree or its ceiling, where a stop holds them.
+// that isn't silent (or is a quiet Manager wake, which the user can still
+// interrupt), or it is a link's thread whose messages wait with no run, on
+// its worktree or its ceiling, where a stop holds them.
 func (t Thread) Stoppable() bool {
-	return t.Live() && !t.Silent() || t.Origin != nil && !t.Live() && t.Queued > 0 && !t.Resumable
+	return t.Live() && (!t.Silent() || t.Turn != nil && t.Turn.Dismissed) || t.Origin != nil && !t.Live() && t.Queued > 0 && !t.Resumable
 }
+
+// UserOwned is whether the thread answers to the user: one of theirs, or a
+// child (local or linked from another machine) they took over. Any other
+// child answers to its parent, which alone hears what it finishes or asks.
+func (t Thread) UserOwned() bool { return t.Parent.IsZero() && t.Origin == nil || t.TakenOver }
 
 // Live is whether the thread has a run, an uncertain one too. Only an
 // interrupt, a settle or a delete ends an uncertain run.
@@ -720,8 +734,11 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // which a version 21 follower drops, so it never says what a stop there
 // holds; version 23 removes thread.revert and records fork handoffs
 // separately from old conversation rewinds; version 24 adds Manager
-// thread roles, periodic sweep schedules, and silent wake dismissal.
-const Protocol = 24
+// thread roles, periodic sweep schedules, and silent wake dismissal;
+// version 25 says in a view that the user took a child over, admits a
+// Manager's wakes quiet, and raises one with wake.raise, which a version 24
+// engine refuses as an unknown command.
+const Protocol = 25
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host

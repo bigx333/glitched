@@ -65,6 +65,8 @@ func TestCommandJSON(t *testing.T) {
 		ThreadConfigure{Effort: new("")},
 		ThreadConfigure{},
 		WakeDismiss{Run: NewID(), Reason: "all on track"},
+		WakeRaise{Run: NewID(), Reason: "a worker needs a key"},
+		WakeRaise{},
 		SweepRun{},
 		SweepRun{Prompt: "Check the release blockers"},
 	} {
@@ -184,5 +186,39 @@ func TestEventDecode(t *testing.T) {
 	}
 	if got, err := (Event{Type: "from.the.future", Payload: []byte(`{}`)}).Decode(); got != nil || err != nil {
 		t.Fatalf("unknown type: %v %v, want skipped", got, err)
+	}
+}
+
+func TestThreadUserOwnedAndStoppable(t *testing.T) {
+	parent, link := NewID(), NewID()
+	for name, tc := range map[string]struct {
+		th   Thread
+		want bool
+	}{
+		"top-level":          {Thread{}, true},
+		"local child":        {Thread{Parent: parent}, false},
+		"taken local child":  {Thread{Parent: parent, TakenOver: true}, true},
+		"linked child":       {Thread{Origin: &Origin{Thread: parent, Link: link}}, false},
+		"taken linked child": {Thread{Origin: &Origin{Thread: parent, Link: link}, TakenOver: true}, true},
+	} {
+		if got := tc.th.UserOwned(); got != tc.want {
+			t.Errorf("%s: UserOwned() = %v, want %v", name, got, tc.want)
+		}
+	}
+
+	quietWake := Thread{Run: RunRunning, Turn: &Turn{Run: NewID(), Silent: true, Dismissed: true}}
+	if !quietWake.Stoppable() || quietWake.Working() {
+		t.Errorf("quiet Manager wake: Stoppable=%v Working=%v, want true/false", quietWake.Stoppable(), quietWake.Working())
+	}
+	compacting := Thread{Run: RunRunning, Turn: &Turn{Run: NewID(), Silent: true}}
+	if compacting.Stoppable() || compacting.Working() {
+		t.Errorf("silent compaction: Stoppable=%v Working=%v, want false/false", compacting.Stoppable(), compacting.Working())
+	}
+
+	if ValidName("ENV") || ValidName("env") {
+		t.Errorf("ValidName allowed ENV/env, which collides with the vault's env script on case-insensitive volumes")
+	}
+	if err := (Credentials{Reason: "r", Fields: []Field{{Name: "ENV"}}}).Check(); err == nil {
+		t.Errorf("Credentials.Check accepted ENV")
 	}
 }
