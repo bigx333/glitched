@@ -40,6 +40,10 @@ type message struct {
 	// UserMessageUUIDs is, on a result, the user messages it finished.
 	UserMessageUUIDs []string `json:"user_message_uuids"`
 	Capabilities     []string `json:"capabilities"` // system init
+	// CommandUUID and State are, on a command_lifecycle, the user message
+	// and what became of it: queued, started, cancelled or completed.
+	CommandUUID string `json:"command_uuid"`
+	State       string `json:"state"`
 	// PluginErrors is, on a system init, why plugins didn't load, as
 	// Glitched's skills may not.
 	PluginErrors    json.RawMessage `json:"plugin_errors"`
@@ -291,6 +295,7 @@ type turn struct {
 	cacheExpires time.Time                // when that request's prompt cache expires; zero when unknown
 	cache        *cacheState              // the process's, which outlives the turn; nil in tests that need none
 	interrupted  bool                     // the user stopped the turn
+	untaken      []api.ID                 // the steers a stopped turn never took
 	prompt       string                   // the uuid of the run's first message
 	at           string                   // the uuid of the last assistant message of the run's own
 	spawns       map[string]*spawn        // native subagents, by the tool use that started each
@@ -570,7 +575,7 @@ func (t *turn) end(m message) provider.TurnEnded {
 		e.Head = string(h)
 	}
 	if t.interrupted {
-		e.Outcome = api.OutcomeInterrupted
+		e.Outcome, e.Untaken = api.OutcomeInterrupted, t.untaken
 		return e
 	}
 	if !m.IsError {

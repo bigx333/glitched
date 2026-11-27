@@ -78,6 +78,13 @@ func (d *decision) observe(o Observation) error {
 		if isLive(o.Run) && live.State != RunUncertain {
 			stopped := live.State == RunStopping
 			silent := live.Silent
+			// Only a stop leaves a steer untaken: a turn that ended on
+			// its own leaves the agent one still queued to run next.
+			if stopped {
+				if err := d.untaken(o); err != nil {
+					return err
+				}
+			}
 			// A run that ended while it stopped was stopped, whichever
 			// came first, its end or its interrupt's word: a stop stays a
 			// stop.
@@ -183,6 +190,10 @@ func (d *decision) observe(o Observation) error {
 	case Steered:
 		return d.emit(api.MessageDispatched{Message: o.Message})
 	case SteerFailed:
+		// The agent has a steer it was sent, whatever failed after.
+		if m, ok := d.t.Message(o.Message); ok && m.State == QueueDispatched {
+			return &TransitionError{"message", m.State, "cancelled by a steer that failed after it was sent"}
+		}
 		return d.emit(api.MessageCancelled{Message: o.Message, Reason: o.Error})
 	case SteerLost:
 		return d.emit(api.MessageUncertain{Message: o.Message})
@@ -237,6 +248,23 @@ func (d *decision) observe(o Observation) error {
 		return d.drop("Can't make a worktree: " + o.Error)
 	case RemoteAttempted, RemoteBound, RemoteSeen, RemoteLost:
 		return d.remote(o)
+	}
+	return nil
+}
+
+const untakenReason = "the stop came before the agent read it"
+
+// untaken cancels the steers the stopped run was sent and never took, as
+// its adapter names them. Any other message it names is left as it is,
+// the run's own prompt too.
+func (d *decision) untaken(o Ended) error {
+	for _, id := range o.Untaken {
+		if m, ok := d.t.Message(id); !ok || m.State != QueueDispatched || m.Run != o.Run || m.ID == o.Run || m.Mode != api.SteerActive {
+			continue
+		}
+		if err := d.emit(api.MessageCancelled{Message: id, Reason: untakenReason}); err != nil {
+			return err
+		}
 	}
 	return nil
 }

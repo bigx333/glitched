@@ -2,10 +2,12 @@
 {"recv":{"type":"control_response","response":{"subtype":"success","request_id":"glitched-init","response":{}}}}
 {"graceful":"500ms"}
 {"sent":{"type":"user","uuid":"uuid-of-the-first-message"}}
-{"recv":{"type":"system","subtype":"init","capabilities":["interrupt_receipt_v1","interrupt_cancel_queued_v1"]}}
+{"recv":{"type":"system","subtype":"init","capabilities":["interrupt_receipt_v1","interrupt_cancel_queued_v1","msg_lifecycle_v1"]}}
 {"recv":{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"bash","name":"Bash","input":{"command":"./busy.sh"}}]}}}
 {"sent":{"type":"user","uuid":"uuid-of-the-steer"}}
+{"recv":{"type":"command_lifecycle","command_uuid":"uuid-of-the-steer","state":"queued"}}
 {"sent":{"request":{"subtype":"interrupt"},"type":"control_request"}}
+{"if":"cancel_queued","recv":{"type":"command_lifecycle","command_uuid":"uuid-of-the-steer","state":"cancelled"}}
 {"if":"cancel_queued","recv":{"type":"control_response","response":{"subtype":"success","request_id":"glitched-interrupt","response":{"still_queued":[],"cancelled":["uuid-of-the-steer"]}}}}
 {"unless":"cancel_queued","recv":{"type":"control_response","response":{"subtype":"success","request_id":"glitched-interrupt","response":{"still_queued":["uuid-of-the-steer"]}}}}
 {"recv":{"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"bash","is_error":true,"content":"[Request interrupted by user for tool use]"}]}}}

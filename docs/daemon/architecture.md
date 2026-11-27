@@ -106,7 +106,7 @@ State tables live in `internal/engine` next to the types and are the only place 
 | Machine | Transitions |
 |---|---|
 | Run | idle → starting → running ⇄ waiting. starting, running or waiting → stopping or finished. stopping → finished. crash → reconciling → restored or uncertain. uncertain → finished by explicit user action. |
-| Queue | ready or scheduled → claimed(lease, generation) → dispatched. ready or scheduled → cancelled. claimed → retryAt or uncertain. |
+| Queue | ready or scheduled → claimed(lease, generation) → dispatched. ready or scheduled → cancelled. claimed → retryAt or uncertain. A dispatched steer → cancelled when its run is stopped and the adapter names it untaken: the stop came before the agent read it. |
 | Request | pending → answered → delivered. pending → invalidated or expired. An answer commits together with the effect that delivers it, so only that delivery settles an answered request. |
 | Effect | pending → leased → done. An expired lease reconciles, or retries only if the effect kind is replay-safe. |
 

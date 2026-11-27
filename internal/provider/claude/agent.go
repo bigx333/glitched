@@ -52,6 +52,10 @@ const (
 // in its answer to initialize.
 const cancelQueued = "interrupt_cancel_queued_v1"
 
+// msgLifecycle is the capability of a Claude Code that says, by a
+// command_lifecycle "started", when it takes a message it queued.
+const msgLifecycle = "msg_lifecycle_v1"
+
 // interruptGrace is how long Claude Code has to end the turn once asked to
 // interrupt it, before it is stopped.
 var interruptGrace = 10 * time.Second
@@ -77,6 +81,10 @@ type proc struct {
 	stdin   *os.File
 	cut     error // set once a line went out cut short, which fails every later write
 	cancels bool  // an interrupt can cancel the queued messages
+
+	// tells is whether claude says when it takes a message it queued. The
+	// read of claude's output sets it, and must not wait on a write.
+	tells atomic.Bool
 
 	wake chan struct{} // closed by Wake, to end the parked watch
 	woke chan bool     // what the parked watch found: true when claude kept quiet
@@ -119,6 +127,13 @@ type Agent struct {
 	ended       bool            // the turn's end was read
 	deadline    *time.Timer     // stops claude if an interrupt does not end the turn
 
+	// smu is taken after mu, never before, and is never held while taking
+	// p.mu or sending: the read of claude's output takes it for every
+	// line, and a write to claude's stdin can wait on that read.
+	smu    sync.Mutex
+	steers map[string]api.ID // steers going or gone out, by uuid, as the messages they carry
+	taken  map[string]bool   // steers claude said it took, by uuid
+
 	// pmu is taken after mu, never before: a path that holds pmu sends
 	// nothing, as a send takes mu.
 	pmu     sync.Mutex
@@ -140,6 +155,7 @@ func (g *Agent) Session() string { return g.session }
 
 func newAgent(spec provider.SessionSpec, p *proc, keep func(*proc)) *Agent {
 	g := &Agent{p: p, keep: keep, turn: newTurn(spec.Workspace), prompts: map[string]*prompt{}, outstanding: map[string]bool{},
+		steers: map[string]api.ID{}, taken: map[string]bool{},
 		access: spec.Access, asked: spec.Model.Model}
 	g.turn.cache = &p.cache
 	g.pending = g.confirmed()
@@ -391,6 +407,9 @@ func (p *proc) learn(capabilities []string) {
 		p.cancels = true
 		p.mu.Unlock()
 	}
+	if slices.Contains(capabilities, msgLifecycle) {
+		p.tells.Store(true)
+	}
 }
 
 // halt asks claude to stop, and keeps it from taking another run.
@@ -528,7 +547,7 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 			return errors.New("claude: the run already started")
 		}
 		g.started = true
-		return g.userLocked(ctx, a.Text, false)
+		return g.userLocked(ctx, a.Text, api.ID{}, false)
 	case provider.Steer:
 		switch {
 		case !g.started:
@@ -536,7 +555,7 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 		case g.ended || g.interrupted:
 			return errors.New("claude: the turn is over")
 		}
-		return g.userLocked(ctx, a.Text, true)
+		return g.userLocked(ctx, a.Text, a.Message, true)
 	case provider.Interrupt:
 		if g.interrupted || g.ended {
 			return nil
@@ -570,20 +589,85 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 	return provider.ErrUnsupported
 }
 
-// userLocked sends a user message. Claude Code takes one sent mid-turn at
-// its next model call, and lists each message a result finishes by uuid.
-func (g *Agent) userLocked(ctx context.Context, text string, steer bool) error {
-	id := uuidOf(api.NewID())
+// userLocked sends a user message, as msg's uuid where it carries one.
+// Claude Code takes one sent mid-turn at its next model call, and lists
+// each message a result finishes by uuid.
+func (g *Agent) userLocked(ctx context.Context, text string, msg api.ID, steer bool) error {
+	if msg.IsZero() {
+		msg = api.NewID()
+	}
+	id := uuidOf(msg)
 	g.outstanding[id] = steer
+	// Claude may take a steer before its write returns, so it is known
+	// before the write starts.
+	if steer {
+		g.smu.Lock()
+		g.steers[id] = msg
+		g.smu.Unlock()
+	}
 	err := g.p.send(ctx, map[string]any{"type": "user", "uuid": id, "session_id": "", "parent_tool_use_id": nil,
 		"message": map[string]string{"role": "user", "content": text}})
 	switch {
 	case err != nil:
 		delete(g.outstanding, id)
+		if steer {
+			g.smu.Lock()
+			delete(g.steers, id)
+			delete(g.taken, id)
+			g.smu.Unlock()
+		}
 	case !steer:
 		g.prompt = id
 	}
 	return err
+}
+
+// took marks the steers m says claude took: a command_lifecycle that
+// started one, or any message that lists it, as a status does once the
+// model call that takes it begins. Claude Code reports a steer it took
+// cancelled when a stop ends the turn, so a cancellation says nothing.
+// A command_lifecycle of any state says claude tells what it took, which
+// Claude Code 2.1.331 names as a capability only in its system init,
+// seconds after its first lifecycle. It takes neither mu nor p.mu, as a
+// steer's write holds them and can wait on this read.
+func (g *Agent) took(m message) {
+	ids := m.UserMessageUUIDs
+	if m.Type == "command_lifecycle" {
+		g.p.tells.Store(true)
+		if m.State != "started" {
+			return
+		}
+		ids = []string{m.CommandUUID}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	g.smu.Lock()
+	defer g.smu.Unlock()
+	for _, id := range ids {
+		if _, ok := g.steers[id]; ok {
+			g.taken[id] = true
+		}
+	}
+}
+
+// untakenLocked is the steers of a stopped turn claude never said it
+// took, from a claude that says so. One it can't tell of is left out, as
+// it may have taken it.
+func (g *Agent) untakenLocked() []api.ID {
+	if !g.p.tells.Load() {
+		return nil
+	}
+	g.smu.Lock()
+	defer g.smu.Unlock()
+	var untaken []api.ID
+	for id, msg := range g.steers {
+		if !g.taken[id] {
+			untaken = append(untaken, msg)
+		}
+	}
+	slices.SortFunc(untaken, func(a, b api.ID) int { return bytes.Compare(a[:], b[:]) })
+	return untaken
 }
 
 // over reads a result into the turn's messages, and reports whether it
@@ -591,7 +675,8 @@ func (g *Agent) userLocked(ctx context.Context, text string, steer bool) error {
 // A result that lists no messages finishes them all. The interrupt cut
 // the turn short unless Claude Code says it completed the turn first.
 // The turn learns the uuid of its first message, for its head.
-func (g *Agent) over(m message) (over, interrupted bool) {
+// A stopped turn names the steers claude never took.
+func (g *Agent) over(m message) (over, interrupted bool, untaken []api.ID) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.turn.prompt = g.prompt
@@ -605,7 +690,10 @@ func (g *Agent) over(m message) (over, interrupted bool) {
 	if g.ended && g.deadline != nil {
 		g.deadline.Stop()
 	}
-	return g.ended, g.interrupted && m.IsError
+	if g.ended && g.interrupted {
+		untaken = g.untakenLocked()
+	}
+	return g.ended, g.interrupted && m.IsError, untaken
 }
 
 // foreign is whether a result finishes only messages this run never sent,
@@ -620,13 +708,16 @@ func (g *Agent) foreign(m message) bool {
 }
 
 // cutOff is whether an interrupt went out on a turn that has not ended,
-// which it now has.
-func (g *Agent) cutOff() bool {
+// which it now has, and the steers claude never took if so.
+func (g *Agent) cutOff() (cut bool, untaken []api.ID) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	cut := g.interrupted && !g.ended
+	cut = g.interrupted && !g.ended
 	g.ended = true
-	return cut
+	if cut {
+		untaken = g.untakenLocked()
+	}
+	return cut, untaken
 }
 
 // respondLocked sends the one reply a prompt gets. A prompt already
@@ -672,8 +763,8 @@ func (g *Agent) Next(ctx context.Context) (provider.Event, error) {
 				if g.pending = g.turn.unfinished(); len(g.pending) > 0 {
 					continue
 				}
-				if g.cutOff() {
-					g.pending = []provider.Event{provider.TurnEnded{Outcome: api.OutcomeInterrupted}}
+				if cut, untaken := g.cutOff(); cut {
+					g.pending = []provider.Event{provider.TurnEnded{Outcome: api.OutcomeInterrupted, Untaken: untaken}}
 					continue
 				}
 				return nil, g.p.exited()
@@ -694,6 +785,7 @@ func (g *Agent) Next(ctx context.Context) (provider.Event, error) {
 // read is what a message means for the run: the control messages that
 // open and close prompts, and the turn's own.
 func (g *Agent) read(ctx context.Context, m message) []provider.Event {
+	g.took(m)
 	switch m.Type {
 	case "control_request":
 		if m.Request == nil {
@@ -728,11 +820,11 @@ func (g *Agent) read(ctx context.Context, m message) []provider.Event {
 			}
 		}
 		g.pmu.Unlock()
-		over, interrupted := g.over(m)
+		over, interrupted, untaken := g.over(m)
 		if !over {
 			return g.turn.tally(m)
 		}
-		g.turn.interrupted = interrupted
+		g.turn.interrupted, g.turn.untaken = interrupted, untaken
 	case "system":
 		if m.Subtype == "init" {
 			g.p.learn(m.Capabilities)

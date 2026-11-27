@@ -7,6 +7,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,15 +22,20 @@ import (
 // steerer's agents hold their turn until steered. A steer sends before,
 // provider.Steered where marks says so, after (when set) or the steer's
 // text reply, and the turn's end (or EOF when eof is set), all before its
-// call returns, which takes hold.
+// call returns, which takes hold. With stops, the turn ends only at a
+// stop, interrupted, naming the steers untaken when untaken is set, which
+// get no reply; messages, where set, gets each steer's Message.
 type steerer struct {
-	marks   bool
-	eof     bool
-	before  []provider.Event
-	after   []provider.Event
-	hold    time.Duration
-	err     error
-	steered chan struct{}
+	marks    bool
+	eof      bool
+	stops    bool
+	untaken  bool
+	messages chan api.ID
+	before   []provider.Event
+	after    []provider.Event
+	hold     time.Duration
+	err      error
+	steered  chan struct{}
 }
 
 func (s *steerer) Describe(context.Context) (provider.Info, error) {
@@ -51,9 +57,21 @@ func (s *steerer) Reconcile(context.Context, provider.RuntimeIdentity) (provider
 type steerAgent struct {
 	s      *steerer
 	events chan provider.Event
+	mu     sync.Mutex
+	sent   []api.ID
 }
 
 func (g *steerAgent) Do(ctx context.Context, act provider.Action) error {
+	if _, ok := act.(provider.Interrupt); ok && g.s.stops {
+		g.mu.Lock()
+		var untaken []api.ID
+		if g.s.untaken {
+			untaken = g.sent
+		}
+		g.mu.Unlock()
+		g.events <- provider.TurnEnded{Outcome: api.OutcomeInterrupted, Untaken: untaken}
+		return nil
+	}
 	a, ok := act.(provider.Steer)
 	if !ok {
 		return nil
@@ -61,22 +79,31 @@ func (g *steerAgent) Do(ctx context.Context, act provider.Action) error {
 	if g.s.err != nil {
 		return g.s.err
 	}
+	if g.s.messages != nil {
+		g.s.messages <- a.Message
+	}
 	for _, e := range g.s.before {
 		g.events <- e
 	}
 	if g.s.marks {
 		g.events <- provider.Steered{}
 	}
-	if len(g.s.after) > 0 {
+	switch {
+	case len(g.s.after) > 0:
 		for _, e := range g.s.after {
 			g.events <- e
 		}
-	} else {
+	case !g.s.untaken:
 		g.events <- provider.TextDelta{Text: "Steered: " + a.Text}
 	}
-	if g.s.eof {
+	switch {
+	case g.s.eof:
 		close(g.events)
-	} else {
+	case g.s.stops:
+		g.mu.Lock()
+		g.sent = append(g.sent, a.Message)
+		g.mu.Unlock()
+	default:
 		g.events <- provider.TurnEnded{Outcome: api.OutcomeCompleted}
 	}
 	if g.s.steered != nil {
@@ -166,6 +193,65 @@ func TestATurnThatEndsAsItIsSteeredKeepsTheMessage(t *testing.T) {
 			}
 			if got := outcomes(t, n.h, thread); len(got) != 1 || got[0] != wantOutcome {
 				t.Fatalf("run ended %v, want %v", got, wantOutcome)
+			}
+			assertReplay(t, n.st)
+		})
+	}
+}
+
+// A steer the agent's adapter says it never took, as the stop came
+// first, ends cancelled with the stopped turn, and the agent is told which
+// message each steer carries. A fork of the turn hands over the prompt,
+// not the steer the agent never read.
+func TestASteerTheAgentNeverTookIsCancelled(t *testing.T) {
+	for _, untaken := range []bool{true, false} {
+		t.Run(map[bool]string{true: "untaken", false: "taken"}[untaken], func(t *testing.T) {
+			ad := &steerer{stops: true, untaken: untaken, messages: make(chan api.ID, 1)}
+			other := newForkAdapter(provider.ConversationFork{}, nil, false)
+			n := serve(t, dbPath(t), provider.Mux{"fake": ad, "other": other})
+			thread := newThread(t, n.h)
+			submit(t, n.h, thread, dispatch("go", api.StartNow))
+			until(t, n.h, thread, "the turn at work", func(th api.Thread) bool { return th.Run == api.RunRunning })
+			steer := submit(t, n.h, thread, dispatch("hurry", api.SteerActive)).Command
+			if got := <-ad.messages; got != steer {
+				t.Fatalf("the agent was steered with message %v, want %v", got, steer)
+			}
+			for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(2 * time.Millisecond) {
+				stored, err := n.st.Thread(ctx, thread)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if m, _ := stored.Message(steer); m.State == engine.QueueDispatched {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("timed out waiting for the steer's dispatch")
+				}
+			}
+			submit(t, n.h, thread, api.TurnInterrupt{})
+			until(t, n.h, thread, "the stopped turn's end", idle)
+			if got := outcomes(t, n.h, thread); len(got) != 1 || got[0] != api.OutcomeInterrupted {
+				t.Fatalf("run ended %v, want interrupted", got)
+			}
+			stored, err := n.st.Thread(ctx, thread)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := engine.QueueDispatched
+			if untaken {
+				want = engine.QueueCancelled
+			}
+			if m, _ := stored.Message(steer); m.State != want {
+				t.Fatalf("the steer is %v; want %v", m.State, want)
+			}
+
+			fork := api.NewID()
+			submit(t, n.h, fork, api.ThreadCreate{Workspace: "/src/app", Title: "fork", Model: api.ModelRef{Provider: "other", Model: "other"}, Text: "go on",
+				Fork: &api.Fork{Thread: thread, Run: runsOf(t, n.h, thread)[0].Run}})
+			until(t, n.h, fork, "the fork's first turn", func(th api.Thread) bool { return idle(th) && len(runsOf(t, n.h, fork)) == 1 })
+			_, _, sent := other.seen()
+			if len(sent) != 1 || strings.Contains(sent[0], "<user>\ngo\n</user>") != untaken || strings.Contains(sent[0], "<user>\ngo\n\nhurry\n</user>") == untaken {
+				t.Fatalf("the fork was handed %q; want the prompt, and the steer only if the agent took it", sent)
 			}
 			assertReplay(t, n.st)
 		})

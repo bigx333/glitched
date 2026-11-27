@@ -258,6 +258,7 @@ type Ended struct {
 	Tokens  int64
 	Limit   *api.UsageLimit // the usage limit that failed the turn
 	Head    string
+	Untaken []api.ID // the steers the agent was sent and never took
 }
 
 type Delta struct {

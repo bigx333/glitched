@@ -376,7 +376,12 @@ type Action interface{ action() }
 // handed it what the message holds; an error means it was never sent.
 type Start struct{ Text string }
 
-type Steer struct{ Text string }
+// Steer sends Text into the turn at work. Message is the queued message
+// it carries, which TurnEnded's Untaken names; an adapter may ignore it.
+type Steer struct {
+	Text    string
+	Message api.ID
+}
 
 type Interrupt struct{}
 
@@ -468,6 +473,9 @@ type TurnEnded struct {
 	// Head is where the turn left the conversation, in the adapter's own
 	// terms, which ForkSpec gives it back: "" where it can't say.
 	Head string
+	// Untaken is, on a stopped turn's end, the steers given to it that the
+	// agent never took, by their Steer.Message, from an adapter that can tell.
+	Untaken []api.ID
 }
 
 // Granted is the access the run's agent runs at, as its provider
