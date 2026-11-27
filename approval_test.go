@@ -10,6 +10,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -758,6 +759,9 @@ func TestCmdEnterAllowsOnlyWhatTheWindowDraws(t *testing.T) {
 			h.tt.Frame()
 			h.tt.Key(ui.Cmd, ui.KeyEnter)
 			h.until("the steer", func() bool { return h.a.draft == "" && h.tt.HasText("log line") })
+			// The ⌘⏎ that sent the draft answers no card until ⌘ goes up.
+			h.tt.HoldModifiers(0)
+			h.tt.Frame()
 			h.tt.Advance(time.Second)
 		}},
 	} {
@@ -1578,6 +1582,580 @@ func TestAHeldChordAnswersOneCard(t *testing.T) {
 			}
 		})
 	}
+}
+
+// heldCard is a card that waits, ready to answer on ⌘⏎: an approval,
+// questions filled in, or credentials with each field typed.
+type heldCard struct {
+	name string
+	ask  func(t *testing.T) (*harness, *client.RequestEntry)
+	// answered is whether an answer to the card is on its way or landed.
+	answered func(h *harness, r *client.RequestEntry) bool
+}
+
+var heldCards = []heldCard{
+	{"approval", func(t *testing.T) (*harness, *client.RequestEntry) {
+		h := askedIn(t, 1320, 900, commandAsk("ask", "rm -rf build"))
+		return h, lastRequest(h.a.current())
+	}, answering},
+	{"questions", func(t *testing.T) (*harness, *client.RequestEntry) {
+		h, th := questioning(t, fake.Asking())
+		fillIn(h)
+		return h, lastRequest(th)
+	}, answering},
+	{"credentials", func(t *testing.T) (*harness, *client.RequestEntry) {
+		h, th, _ := credentialing(t, stripeKey)
+		typeInto(t, h, "Stripe test key", probeValue)
+		return h, lastRequest(th)
+	}, func(h *harness, r *client.RequestEntry) bool {
+		// A provide goes to the vault, not as a command: its form says so.
+		f := h.a.credentials[r.Request]
+		return answering(h, r) || f == nil || f.saving
+	}},
+}
+
+// steerHeld sends draft by ⌘⏎ pressed with ⌘ held, and waits for it to
+// reach the agent, ⌘ still down.
+func steerHeld(t *testing.T, h *harness, draft string) {
+	t.Helper()
+	h.a.draft = draft
+	h.tt.Frame()
+	h.tt.HoldModifiers(ui.Cmd)
+	h.tt.Frame()
+	h.tt.Advance(100 * time.Millisecond)
+	h.tt.Key(ui.Cmd, ui.KeyEnter)
+	h.tt.Frame()
+	if h.a.draft != "" {
+		t.Fatalf("⌘⏎ with a draft did not send it; the draft is %q", h.a.draft)
+	}
+	h.until("the steer", func() bool { return slices.Contains(sentTexts(h), draft) })
+}
+
+// cmdAnew lets ⌘ go, and holds it down again.
+func cmdAnew(h *harness) {
+	h.tt.HoldModifiers(0)
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	h.tt.HoldModifiers(ui.Cmd)
+	h.tt.Frame()
+	h.tt.Advance(100 * time.Millisecond)
+}
+
+// One ⌘⏎ held that sent the draft answers no card while ⌘ stays down: its
+// ⏎ repeating, pressed again or as the key's auto-repeat, finds the
+// composer empty and still answers none of an approval, questions filled
+// in, or credentials typed. ⌘ let go and pressed again answers the card.
+func TestAHeldChordThatSentTheDraftAnswersNoCard(t *testing.T) {
+	const draft = "use the other runner"
+	press := func(h *harness) { h.tt.Key(ui.Cmd, ui.KeyEnter) }
+	for _, tc := range []struct {
+		card   heldCard
+		how    string
+		repeat func(h *harness)
+	}{
+		{heldCards[0], "pressed", press},
+		{heldCards[0], "auto-repeat", func(h *harness) { h.tt.KeyRepeat(ui.Cmd, ui.KeyEnter) }},
+		{heldCards[1], "pressed", press},
+		{heldCards[2], "pressed", press},
+	} {
+		t.Run(tc.card.name+", "+tc.how, func(t *testing.T) {
+			h, r := tc.card.ask(t)
+			steerHeld(t, h, draft)
+			if tc.card.answered(h, r) {
+				t.Fatalf("the ⌘⏎ that sent the draft answered the card")
+			}
+			for i := range 60 {
+				h.tt.Advance(33 * time.Millisecond)
+				tc.repeat(h)
+				h.p.run()
+				h.tt.Frame()
+				if tc.card.answered(h, r) {
+					t.Fatalf("⏎ %d ms into the hold of the ⌘⏎ that sent the draft answered the card", (i+1)*33)
+				}
+			}
+			settle(h)
+			if n := len(slices.DeleteFunc(sentTexts(h), func(s string) bool { return s != draft })); n != 1 {
+				t.Errorf("the held ⌘⏎ sent the draft %d times, want once", n)
+			}
+			if tc.card.answered(h, r) {
+				t.Fatalf("the hold of the ⌘⏎ that sent the draft answered the card")
+			}
+			cmdAnew(h)
+			h.tt.Key(ui.Cmd, ui.KeyEnter)
+			h.tt.Frame()
+			if !tc.card.answered(h, r) {
+				t.Errorf("⌘⏎ pressed anew did not answer the card")
+			}
+		})
+	}
+}
+
+// A held ⌘⏎ that sent the draft takes no other key of a card either: ⇧⌘D
+// denies no approval, and ⌘1 picks nothing in questions, until ⌘ goes up
+// and comes down again.
+func TestAHeldChordThatSentTheDraftDeniesAndPicksNothing(t *testing.T) {
+	t.Run("⇧⌘D", func(t *testing.T) {
+		h, r := heldCards[0].ask(t)
+		steerHeld(t, h, "use the other runner")
+		h.tt.Advance(time.Second)
+		h.tt.Key(ui.Cmd|ui.Shift, ui.KeyD)
+		h.tt.Frame()
+		if answering(h, r) {
+			t.Fatalf("⇧⌘D in the hold of the ⌘⏎ that sent the draft answered the card")
+		}
+		cmdAnew(h)
+		h.tt.Key(ui.Cmd|ui.Shift, ui.KeyD)
+		h.until("the denial", func() bool { return r.Answer != nil })
+		if a := answerOf(r.Answer); a != client.Deny {
+			t.Errorf("⇧⌘D pressed anew answered %v, want deny", a)
+		}
+	})
+	t.Run("⌘1", func(t *testing.T) {
+		h, _ := questioning(t, fake.Asking())
+		steerHeld(t, h, "use the other runner")
+		h.tt.Advance(time.Second)
+		h.tt.Key(ui.Cmd, ui.Key1)
+		h.tt.Frame()
+		if readOf(t, h, ui.RoleRadio, "SQLite").Checked {
+			t.Fatalf("⌘1 in the hold of the ⌘⏎ that sent the draft picked SQLite")
+		}
+		cmdAnew(h)
+		h.tt.Key(ui.Cmd, ui.Key1)
+		h.tt.Frame()
+		if !readOf(t, h, ui.RoleRadio, "SQLite").Checked {
+			t.Errorf("⌘1 pressed anew did not pick SQLite")
+		}
+	})
+}
+
+// Only ⌘⏎ that sent the draft spends its chord: with ⌘ held, a draft sent
+// by a click on Send, or cleared by hand, leaves ⌘⏎ to answer the card.
+func TestOnlyACmdEnterThatSentTheDraftSpendsTheChord(t *testing.T) {
+	const draft = "use the other runner"
+	for name, leave := range map[string]func(t *testing.T, h *harness){
+		"Send clicked": func(t *testing.T, h *harness) {
+			if err := h.tt.ClickWith(ui.Cmd, "Send"); err != nil {
+				t.Fatal(err)
+			}
+			h.until("the steer", func() bool { return slices.Contains(sentTexts(h), draft) })
+		},
+		"cleared": func(t *testing.T, h *harness) {
+			h.tt.Key(ui.Cmd, ui.KeyA)
+			h.tt.Key(ui.Cmd, ui.KeyBackspace)
+			h.tt.Frame()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, r := heldCards[0].ask(t)
+			h.a.focusPane(0, 0)
+			h.tt.Frame()
+			h.tt.Type(draft)
+			h.tt.Frame()
+			if h.a.draft != draft {
+				t.Fatalf("typing reached no draft; the draft is %q", h.a.draft)
+			}
+			h.tt.HoldModifiers(ui.Cmd)
+			h.tt.Frame()
+			h.tt.Advance(100 * time.Millisecond)
+			leave(t, h)
+			if h.a.draft != "" || answering(h, r) {
+				t.Fatalf("the draft is %q, answering %v; want it gone and the card waiting", h.a.draft, answering(h, r))
+			}
+			answerAsSeen(t, h, r, cmdEnter(h))
+		})
+	}
+}
+
+// ⌘ let go away from the chat spends the chord no more: a held ⌘⏎ sent
+// the draft, ⌘, opened Settings, and ⌘ went up and down again there; back
+// in the chat, ⌘⏎ answers the card.
+func TestAHeldChordIsSpentNoMoreOnceCmdGoesUpOnAnotherPage(t *testing.T) {
+	h, r := heldCards[0].ask(t)
+	th := h.a.current()
+	steerHeld(t, h, "use the other runner")
+	h.tt.Key(ui.Cmd, ui.KeyComma)
+	h.tt.Frame()
+	if h.a.router.Path() == "/" {
+		t.Fatalf("⌘, showed no settings")
+	}
+	cmdAnew(h)
+	h.a.select_(th)
+	h.tt.Frame()
+	if h.a.router.Path() != "/" {
+		t.Fatalf("the thread selected, the window shows %s", h.a.router.Path())
+	}
+	answerAsSeen(t, h, r, cmdEnter(h))
+}
+
+// interrupting counts the Interrupts its adapter's agents are given.
+type interrupting struct {
+	provider.Adapter
+	n *atomic.Int32
+}
+
+func (s interrupting) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	g, err := s.Adapter.Open(ctx, spec)
+	return interruptingAgent{g, s.n}, err
+}
+
+type interruptingAgent struct {
+	provider.Agent
+	n *atomic.Int32
+}
+
+func (g interruptingAgent) Do(ctx context.Context, act provider.Action) error {
+	if _, ok := act.(provider.Interrupt); ok {
+		g.n.Add(1)
+	}
+	return g.Agent.Do(ctx, act)
+}
+
+// repeatEnter is ⏎ pressed again in a hold of ⌘, or the key's auto-repeat.
+var repeatEnter = map[string]func(h *harness){
+	"pressed":     func(h *harness) { h.tt.Key(ui.Cmd, ui.KeyEnter) },
+	"auto-repeat": func(h *harness) { h.tt.KeyRepeat(ui.Cmd, ui.KeyEnter) },
+}
+
+// A held ⌘⏎ that queued the draft behind the agent at work stops no turn:
+// its ⏎ repeating finds the composer empty and the agent stoppable, and
+// leaves it at work, the draft queued once. ⌘ let go and pressed again,
+// ⌘⏎ stops the agent.
+func TestAHeldChordThatQueuedTheDraftStopsNoTurn(t *testing.T) {
+	for how, repeat := range repeatEnter {
+		t.Run(how, func(t *testing.T) {
+			var stops atomic.Int32
+			dir := tempDir(t)
+			engine(t, daemon.Config{Dir: dir}, interrupting{burst{[]provider.Event{provider.TextDelta{Text: "Working on it."}}}, &stops})
+			h := start(t, dir)
+			h.a.draft = "Go."
+			h.tt.Frame()
+			h.click("Send")
+			h.until("the agent at work", func() bool {
+				v := h.a.current().View
+				return v.Working() && v.Stoppable() && v.Run != api.RunWaiting
+			})
+			h.tt.Advance(time.Second)
+			h.tt.Frame()
+			if !h.a.queues(h.a.current()) {
+				t.Fatalf("⌘⏎ would not queue the draft: the run is %v", h.a.current().View.Run)
+			}
+			h.a.draft = "and then this"
+			h.tt.Frame()
+			h.tt.HoldModifiers(ui.Cmd)
+			h.tt.Frame()
+			h.tt.Advance(100 * time.Millisecond)
+			h.tt.Key(ui.Cmd, ui.KeyEnter)
+			h.tt.Frame()
+			if h.a.draft != "" {
+				t.Fatalf("⌘⏎ with a draft did not queue it; the draft is %q", h.a.draft)
+			}
+			for i := range 30 {
+				h.tt.Advance(33 * time.Millisecond)
+				repeat(h)
+				h.p.run()
+				h.tt.Frame()
+				// An Interrupt reaches the agent apart from the frame.
+				time.Sleep(20 * time.Millisecond)
+				if stops.Load() != 0 {
+					t.Fatalf("⏎ %d ms into the hold of the ⌘⏎ that queued the draft stopped the agent", (i+1)*33)
+				}
+			}
+			h.settle(func() bool { return h.a.current().View.Queued == 1 })
+			if v := h.a.current().View; stops.Load() != 0 || !v.Working() || v.Queued != 1 {
+				t.Fatalf("after the hold: %d stops, working %v, %d queued; want the agent at work, the draft queued once", stops.Load(), v.Working(), v.Queued)
+			}
+			cmdAnew(h)
+			h.tt.Key(ui.Cmd, ui.KeyEnter)
+			h.tt.Frame()
+			h.until("the stop", func() bool { return stops.Load() == 1 })
+		})
+	}
+}
+
+// letGoWithRepeats gives the last n ⏎ of a held ⌘⏎, as its auto-repeat,
+// and lets ⌘ go, all between two frames: the frame after finds ⌘ up and
+// the ⌘⏎ still to take, one a frame, and the frames after take the rest,
+// ⌘ still up.
+func letGoWithRepeats(t *testing.T, h *harness, n int) {
+	t.Cleanup(func() { afterView = nil })
+	afterView = func() {
+		for range n {
+			h.tt.KeyRepeat(ui.Cmd, ui.KeyEnter)
+		}
+		h.tt.HoldModifiers(0)
+	}
+	h.tt.Advance(33 * time.Millisecond)
+	h.tt.Frame()
+	if afterView != nil {
+		t.Fatalf("no frame let ⌘ go")
+	}
+	for range n + 2 {
+		h.p.run()
+		h.tt.Frame()
+		h.tt.Advance(33 * time.Millisecond)
+	}
+}
+
+// A held ⌘⏎ that queued the draft stops no turn as ⌘ goes up: the last
+// ⏎ of its auto-repeat, however many come before ⌘ is let go and are
+// taken in the frames that find ⌘ up, find the composer empty and the
+// agent stoppable, and leave it at work. ⌘ pressed again, ⌘⏎ stops the
+// agent.
+func TestAHeldChordLetGoWithARepeatStillQueuedStopsNoTurn(t *testing.T) {
+	for _, n := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("%d repeats", n), func(t *testing.T) {
+			var stops atomic.Int32
+			dir := tempDir(t)
+			engine(t, daemon.Config{Dir: dir}, interrupting{burst{[]provider.Event{provider.TextDelta{Text: "Working on it."}}}, &stops})
+			h := start(t, dir)
+			h.a.draft = "Go."
+			h.tt.Frame()
+			h.click("Send")
+			h.until("the agent at work", func() bool {
+				v := h.a.current().View
+				return v.Working() && v.Stoppable() && v.Run != api.RunWaiting
+			})
+			h.tt.Advance(time.Second)
+			h.tt.Frame()
+			h.a.draft = "and then this"
+			h.tt.Frame()
+			h.tt.HoldModifiers(ui.Cmd)
+			h.tt.Frame()
+			h.tt.Advance(100 * time.Millisecond)
+			h.tt.Key(ui.Cmd, ui.KeyEnter)
+			h.tt.Frame()
+			if h.a.draft != "" {
+				t.Fatalf("⌘⏎ with a draft did not queue it; the draft is %q", h.a.draft)
+			}
+			for range 5 {
+				h.tt.Advance(33 * time.Millisecond)
+				h.tt.KeyRepeat(ui.Cmd, ui.KeyEnter)
+				h.p.run()
+				h.tt.Frame()
+			}
+			letGoWithRepeats(t, h, n)
+			// An Interrupt reaches the agent apart from the frame.
+			time.Sleep(20 * time.Millisecond)
+			h.settle(func() bool { return h.a.current().View.Queued == 1 })
+			if v := h.a.current().View; stops.Load() != 0 || !v.Working() || v.Queued != 1 {
+				t.Fatalf("⌘ let go with %d ⏎ of the hold still to take: %d stops, working %v, %d queued; want the agent at work, the draft queued once", n, stops.Load(), v.Working(), v.Queued)
+			}
+			h.tt.Advance(time.Second)
+			h.tt.HoldModifiers(ui.Cmd)
+			h.tt.Frame()
+			h.tt.Advance(100 * time.Millisecond)
+			h.tt.Key(ui.Cmd, ui.KeyEnter)
+			h.tt.Frame()
+			h.until("the stop", func() bool { return stops.Load() == 1 })
+		})
+	}
+}
+
+// A held ⌘⏎ that sent the draft answers no card as ⌘ goes up: the last ⏎
+// of its auto-repeat, however many are taken in the frames that find ⌘
+// up, leave the card waiting, the agent on it. A click on Send, ⌘ still
+// up, sends a new draft; ⌘ pressed again, ⌘⏎ answers the card.
+func TestAHeldChordLetGoWithARepeatStillQueuedAnswersNoCard(t *testing.T) {
+	for _, n := range []int{1, 2} {
+		t.Run(fmt.Sprintf("%d repeats", n), func(t *testing.T) {
+			h, r := heldCards[0].ask(t)
+			steerHeld(t, h, "use the other runner")
+			for range 5 {
+				h.tt.Advance(33 * time.Millisecond)
+				h.tt.KeyRepeat(ui.Cmd, ui.KeyEnter)
+				h.p.run()
+				h.tt.Frame()
+			}
+			letGoWithRepeats(t, h, n)
+			time.Sleep(20 * time.Millisecond)
+			h.settle(func() bool { return false })
+			if answering(h, r) || h.a.current().View.Run != api.RunWaiting {
+				t.Fatalf("⌘ let go with %d ⏎ of the hold still to take: the run is %v, the card %v; want both waiting", n, h.a.current().View.Run, r.State)
+			}
+			const next = "and the slow tests too"
+			h.a.draft = next
+			h.tt.Frame()
+			h.click("Send")
+			h.until("the second steer", func() bool { return slices.Contains(sentTexts(h), next) })
+			if answering(h, r) {
+				t.Fatalf("a click on Send answered the card")
+			}
+			h.tt.Advance(time.Second)
+			h.tt.HoldModifiers(ui.Cmd)
+			h.tt.Frame()
+			h.tt.Advance(100 * time.Millisecond)
+			h.tt.Key(ui.Cmd, ui.KeyEnter)
+			h.tt.Frame()
+			if !answering(h, r) {
+				t.Errorf("⌘⏎ pressed anew did not answer the card")
+			}
+		})
+	}
+}
+
+// A held ⌘⏎ that sent the draft beside a pasted image, which stays in the
+// composer, stops no turn: its ⏎ repeating finds the composer holding the
+// image and no words, and leaves the card waiting, the agent on it.
+func TestAHeldChordThatSentTheDraftBesideAnImageStopsNoTurn(t *testing.T) {
+	h, r := heldCards[0].ask(t)
+	h.a.attachments = []attachment{{name: "Pasted image 1", thumb: ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 1, 1)))}}
+	steerHeld(t, h, "use the other runner")
+	if len(h.a.attachments) != 1 {
+		t.Fatalf("the steer took the image; the composer holds %d attachments", len(h.a.attachments))
+	}
+	for i := range 30 {
+		h.tt.Advance(33 * time.Millisecond)
+		h.tt.KeyRepeat(ui.Cmd, ui.KeyEnter)
+		h.p.run()
+		h.tt.Frame()
+		time.Sleep(20 * time.Millisecond)
+		if answering(h, r) || h.a.current().View.Run != api.RunWaiting {
+			t.Fatalf("⏎ %d ms into the hold of the ⌘⏎ that sent the draft: the run is %v, the card %v", (i+1)*33, h.a.current().View.Run, r.State)
+		}
+	}
+	h.settle(func() bool { return false })
+	if answering(h, r) || h.a.current().View.Run != api.RunWaiting {
+		t.Errorf("after the hold of the ⌘⏎ that sent the draft: the run is %v, the card %v; want both waiting", h.a.current().View.Run, r.State)
+	}
+}
+
+// A held ⌘⏎ that queued the draft stops no turn from the composer gone
+// compact: the send scrolls the chat to its end, scrolled up again in the
+// hold the composer goes compact, there's no Send, and ⏎ repeating leaves
+// the agent at work. ⌘ let go and pressed again, ⌘⏎ stops the agent.
+func TestAHeldChordThatQueuedTheDraftStopsNoTurnFromTheCompactComposer(t *testing.T) {
+	var script []provider.Event
+	for i := range 30 {
+		script = append(script, provider.Work{Item: fmt.Sprint("r", i), Kind: "read", Title: fmt.Sprintf("Read file%d.go", i), Status: api.WorkCompleted})
+	}
+	script = append(script, provider.TextDelta{Text: strings.Repeat("A line of what the reads found.\n\n", 40)})
+	var stops atomic.Int32
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, interrupting{stalled{fake.New(script), len(script)}, &stops})
+	id := seed(t, d, "/work/t3code", "Read everything")
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.MessageDispatch{Text: "Read them all."}}); err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, dir)
+	th := h.thread("Read everything")
+	h.a.select_(th)
+	h.until("the reads", func() bool {
+		return h.tt.HasText("Used 30 tools") && h.tt.HasText("A line of what the reads found.") && th.View.Working()
+	})
+	h.tt.Advance(time.Second)
+	h.a.listFor(th.id()).ScrollTo(0, ui.Start)
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if h.a.composerK != 0 {
+		t.Fatalf("scrolled up: composer at %v, want compact", h.a.composerK)
+	}
+	h.a.draft = "and then this"
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if h.a.composerK != 1 {
+		t.Fatalf("with a draft: composer at %v, want full", h.a.composerK)
+	}
+	h.tt.HoldModifiers(ui.Cmd)
+	h.tt.Frame()
+	h.tt.Advance(100 * time.Millisecond)
+	h.tt.Key(ui.Cmd, ui.KeyEnter)
+	h.tt.Frame()
+	if h.a.draft != "" {
+		t.Fatalf("⌘⏎ with a draft did not queue it; the draft is %q", h.a.draft)
+	}
+	h.a.listFor(th.id()).ScrollTo(0, ui.Start)
+	h.tt.Frame()
+	compact := false
+	for i := range 60 {
+		h.tt.Advance(33 * time.Millisecond)
+		compact = compact || h.a.composerK == 0
+		h.tt.KeyRepeat(ui.Cmd, ui.KeyEnter)
+		h.p.run()
+		h.tt.Frame()
+		time.Sleep(20 * time.Millisecond)
+		if stops.Load() != 0 {
+			t.Fatalf("⏎ %d ms into the hold of the ⌘⏎ that queued the draft stopped the agent, the composer at %v", (i+1)*33, h.a.composerK)
+		}
+	}
+	if !compact {
+		t.Fatalf("the draft queued, the composer never went compact: at %v", h.a.composerK)
+	}
+	h.settle(func() bool { return false })
+	if stops.Load() != 0 || !th.View.Working() {
+		t.Fatalf("after the hold: %d stops, working %v; want the agent at work", stops.Load(), th.View.Working())
+	}
+	cmdAnew(h)
+	if h.a.composerK != 0 {
+		t.Fatalf("⌘ pressed anew: composer at %v, want compact", h.a.composerK)
+	}
+	h.tt.Key(ui.Cmd, ui.KeyEnter)
+	h.tt.Frame()
+	h.until("the stop", func() bool { return stops.Load() == 1 })
+}
+
+// A held ⌘⏎ that saved the edit of a queued message does nothing more
+// while ⌘ stays down: the edit ended, its ⏎ repeating finds the composer
+// empty, and answers no waiting card, nor stops the agent at work. ⌘ let
+// go and pressed again, ⌘⏎ does.
+func TestAHeldChordThatSavedAQueuedEditDoesNothingMore(t *testing.T) {
+	edit := func(t *testing.T, h *harness) {
+		t.Helper()
+		th := h.a.current()
+		h.a.backend.Send(th.env, th.id(), "Queued.", api.AfterActive)
+		h.until("the queued row", func() bool { return slices.Equal(queueTexts(h), []string{"Queued."}) && h.tt.HasText("Queued.") })
+		h.click("Edit")
+		h.until("the edit", func() bool { return h.tt.HasText("Save") })
+		h.a.queueEditing.text = "Queued, edited."
+		h.tt.Frame()
+		h.tt.HoldModifiers(ui.Cmd)
+		h.tt.Frame()
+		h.tt.Advance(100 * time.Millisecond)
+		h.tt.Key(ui.Cmd, ui.KeyEnter)
+		h.until("the edit saved", func() bool {
+			return slices.Equal(queueTexts(h), []string{"Queued, edited."}) && !h.tt.HasText("Save")
+		})
+	}
+	t.Run("card waiting", func(t *testing.T) {
+		h, th := asking(t, runTests)
+		r := lastRequest(th)
+		edit(t, h)
+		for i := range 60 {
+			h.tt.Advance(33 * time.Millisecond)
+			h.tt.KeyRepeat(ui.Cmd, ui.KeyEnter)
+			h.p.run()
+			h.tt.Frame()
+			if answering(h, r) {
+				t.Fatalf("⏎ %d ms into the hold of the ⌘⏎ that saved the edit answered the card", (i+1)*33)
+			}
+		}
+		cmdAnew(h)
+		answerAsSeen(t, h, r, cmdEnter(h))
+	})
+	t.Run("at work", func(t *testing.T) {
+		var stops atomic.Int32
+		dir := tempDir(t)
+		engine(t, daemon.Config{Dir: dir}, interrupting{burst{[]provider.Event{provider.TextDelta{Text: "Working on it."}}}, &stops})
+		h := start(t, dir)
+		h.a.draft = "Go."
+		h.tt.Frame()
+		h.click("Send")
+		h.until("the agent at work", func() bool { return h.a.current().View.Run == api.RunRunning })
+		edit(t, h)
+		for i := range 60 {
+			h.tt.Advance(33 * time.Millisecond)
+			h.tt.KeyRepeat(ui.Cmd, ui.KeyEnter)
+			h.p.run()
+			h.tt.Frame()
+			time.Sleep(20 * time.Millisecond)
+			if stops.Load() != 0 {
+				t.Fatalf("⏎ %d ms into the hold of the ⌘⏎ that saved the edit stopped the agent", (i+1)*33)
+			}
+		}
+		cmdAnew(h)
+		h.tt.Key(ui.Cmd, ui.KeyEnter)
+		h.tt.Frame()
+		h.until("the stop", func() bool { return stops.Load() == 1 })
+	})
 }
 
 // fillIn picks an answer to each of fake.Asking's questions.

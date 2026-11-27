@@ -175,7 +175,7 @@ func threadNeedsYou(t thread) (why string, isFail bool, ok bool) {
 // managerAttention is how many of the Manager t and its workers wait on
 // the user or failed, and how many workers work.
 func (a *app) managerAttention(t thread) (needs, active int) {
-	tree := a.shown(t)
+	tree := a.below(t)
 	if _, _, ok := threadNeedsYou(t); ok {
 		needs++
 	}
@@ -278,7 +278,7 @@ const managerRowsHeight = 220
 func (a *app) managersCount(c *ui.Context, items []inboxItem) {
 	needs, unread := false, false
 	for _, it := range items {
-		needs = needs || managerNeedsUser(it.t, a.shown(it.t))
+		needs = needs || managerNeedsUser(it.t, a.below(it.t))
 		unread = unread || a.backend.Unread(it.t.Thread)
 	}
 	n := ui.Textf(c, "%d", len(items)).FontSize(11).FontWeight(600).Padding(1, 7).Radius(999)
@@ -317,8 +317,7 @@ func (a *app) managerRow(c *ui.Context, it inboxItem) {
 		if len(a.backend.Envs()) > 1 {
 			a.machineBadge(c, t.env)
 		}
-		tree := a.shown(t)
-		if len(tree) > 0 {
+		if len(a.shown(t)) > 0 {
 			defer a.childToggle(c, t)
 		}
 		if hovered {
@@ -326,7 +325,7 @@ func (a *app) managerRow(c *ui.Context, it inboxItem) {
 				Menu(func(m *ui.Menu) { a.managerMenu(c, m, t) })
 			return
 		}
-		a.managerMark(c, t, tree, selected)
+		a.managerMark(c, t, a.below(t), selected)
 	}).Clicked() {
 		a.choose(t)
 	}
@@ -386,7 +385,7 @@ func (a *app) managerMenu(c *ui.Context, m *ui.Menu, t thread) {
 			}
 		}
 	})
-	if tree := a.shown(t); working(tree) > 0 {
+	if tree := a.below(t); working(tree) > 0 {
 		if m.Item("Stop all workers").Chosen() {
 			n := a.stopAll(tree)
 			c.AddToast(ui.Toast{Title: "Stopped", Description: plural(n, "worker"), Type: "info"})
@@ -815,7 +814,7 @@ func (a *app) yieldOverview() {
 // managerPanel is the overview of the Manager t: what needs the user, its
 // workers, the shared context docs of its workspace, and its sweeps.
 func (a *app) managerPanel(c *ui.Context, t thread) {
-	tree := a.shown(t)
+	tree := a.below(t)
 	root := t.project()
 	ui.Column(c).Width(a.diffWidth()).FillHeight().Children(func() {
 		bar := c.TitleBar()

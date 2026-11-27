@@ -19,7 +19,7 @@ const (
 	ClaudeCacheTTL = time.Hour
 	// AntigravityCacheTTL is how long Antigravity keeps a session's
 	// cache after its last turn ends.
-	AntigravityCacheTTL = 15 * time.Minute
+	AntigravityCacheTTL = time.Hour
 	// CompactLapse is how late a compaction may start after it fell due.
 	// A later one, as after the Mac slept, could find the cache gone and
 	// pay to read the whole context cold, so it is skipped.

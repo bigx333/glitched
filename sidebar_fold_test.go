@@ -899,7 +899,7 @@ func TestSidebarFoldDrawsTheSidebarAtRestAsBefore(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := foldScene(t, true, 0)
-	// As TestShot draws it.
+	// As TestShot drew it before the panels were tinted by default: PANELS=0.
 	h.a.settings.theme, h.a.settings.tintPanels = darkTheme.name, false
 	h.tt.Frame()
 	h.tt.Advance(time.Second)

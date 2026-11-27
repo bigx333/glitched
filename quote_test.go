@@ -920,6 +920,56 @@ func TestSelectionBarCmdEnter(t *testing.T) {
 	}
 }
 
+// A held ⌘⏎ that asked from the bar answers no card while ⌘ stays down:
+// the bar closed, its ⏎ repeating finds the composer empty and leaves the
+// waiting card waiting. ⌘ let go and pressed again answers the card.
+func TestAHeldChordThatAskedFromTheQuoteBarAnswersNoCard(t *testing.T) {
+	for how, repeat := range repeatEnter {
+		t.Run(how, func(t *testing.T) { heldAskFromTheBar(t, repeat) })
+	}
+}
+
+// heldAskFromTheBar asks from the bar by ⌘⏎ with ⌘ held over a waiting
+// card, then repeats ⏎ in the hold, as repeat does.
+func heldAskFromTheBar(t *testing.T, repeat func(h *harness)) {
+	h, th := asking(t, askAfterReply)
+	r := lastRequest(th)
+	h.tt.Advance(time.Second)
+	doubleClick(h, "May I run the tests now?")
+	h.tt.Advance(quoteWait + 50*time.Millisecond)
+	if err := h.tt.Click("Ask about the selection"); err != nil {
+		t.Fatal(err)
+	}
+	h.tt.Type("why?")
+	h.tt.HoldModifiers(ui.Cmd)
+	h.tt.Frame()
+	h.tt.Advance(100 * time.Millisecond)
+	h.tt.Key(ui.Cmd, ui.KeyEnter)
+	h.tt.Frame()
+	asked := func() bool {
+		return slices.ContainsFunc(sentTexts(h), func(s string) bool { return strings.HasSuffix(s, "\n\nwhy?") })
+	}
+	h.until("the question sent", asked)
+	if barShown(h) || answering(h, r) {
+		t.Fatalf("the ⌘⏎ that asked: the bar shown %v, the card answered %v; want the bar closed, the card waiting", barShown(h), answering(h, r))
+	}
+	for i := range 60 {
+		h.tt.Advance(33 * time.Millisecond)
+		repeat(h)
+		h.p.run()
+		h.tt.Frame()
+		if answering(h, r) {
+			t.Fatalf("⏎ %d ms into the hold of the ⌘⏎ that asked from the bar answered the card", (i+1)*33)
+		}
+	}
+	settle(h)
+	if answering(h, r) {
+		t.Fatalf("the hold of the ⌘⏎ that asked from the bar answered the card")
+	}
+	cmdAnew(h)
+	answerAsSeen(t, h, r, cmdEnter(h))
+}
+
 // After Explain, what's typed goes after the ask.
 func TestExplainLeavesCaretAtEnd(t *testing.T) {
 	h, _ := quoteReady(t)

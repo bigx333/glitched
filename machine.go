@@ -290,7 +290,7 @@ func (a *app) agentsCard(c *ui.Context, m client.Machine) {
 			})
 		}
 		compactOn := m.Config.CompactBeforeExpireEnabled()
-		settingRow(c, "Compact before cache expires", "Compact idle threads over 200k tokens automatically: Claude before its prompt cache expires, and Gemini on Antigravity after 15 minutes idle.", func() {
+		settingRow(c, "Compact before cache expires", "Compact idle threads over 200k tokens automatically: Claude before its prompt cache expires, and Gemini on Antigravity before its 1-hour cache expires.", func() {
 			if ui.Switch(c.Key("compact-before-expire"), &compactOn).Label("Enable compact before cache expires").Changed() {
 				v := compactOn
 				a.configure(func(cfg *daemon.Config) { cfg.CompactBeforeExpire = &v })

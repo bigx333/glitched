@@ -290,13 +290,15 @@ func TestALongTimeline(t *testing.T) {
 		if !open(opened) {
 			t.Fatal("a click on its head didn't unfold the work log")
 		}
-		if opened.Y != head.Y {
-			t.Errorf("the head moved from %v to %v as it unfolded", head.Y, opened.Y)
+		// At the end, the list follows it: the head goes up by as much as
+		// the log grew, and the end, with the full composer, stays in view.
+		if !l().AtEnd() || opened.Y > head.Y || opened.Y < 0 {
+			t.Errorf("unfolding at the end: head from %v to %v, at end %v", head.Y, opened.Y, l().AtEnd())
 		}
 		h.tt.ClickAt(opened.X+opened.W/2, opened.Y+opened.H/2)
 		h.tt.Advance(time.Second)
-		if folded := last(); open(folded) || folded.Y != head.Y {
-			t.Errorf("a second click didn't fold the work log in place: head at %v, was %v", folded.Y, head.Y)
+		if folded := last(); open(folded) || folded.Y != head.Y || !l().AtEnd() {
+			t.Errorf("a second click didn't fold the work log back at the end: head at %v, was %v, at end %v", folded.Y, head.Y, l().AtEnd())
 		}
 	})
 

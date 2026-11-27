@@ -218,15 +218,18 @@ func TestASettledWorkLogFoldsToWhatItDid(t *testing.T) {
 	if !h.tt.HasText("Edit main.go") || !h.tt.HasText("go build ./...") {
 		t.Fatalf("a click didn't open the log: %q", h.tt.Texts())
 	}
-	if r := head(t, h.tt, summary); r.Y != top.Y {
-		t.Errorf("opening it moved its head from %v to %v", top.Y, r.Y)
+	// At the end, opening it follows the end: its head goes up by as much
+	// as the thread now overflows, and stays in view.
+	l := h.a.listFor(h.a.current().id())
+	if r := head(t, h.tt, summary); r.Y > top.Y || r.Y < 0 || !l.AtEnd() {
+		t.Errorf("opening it moved its head from %v to %v, at end %v", top.Y, r.Y, l.AtEnd())
 	}
 	clickRect(h, head(t, h.tt, summary))
 	if h.tt.HasText("Edit main.go") || !h.tt.HasText("--- FAIL: TestIt") {
 		t.Fatalf("a second click didn't close the log, or hid its failure: %q", h.tt.Texts())
 	}
-	if r := head(t, h.tt, summary); r.Y != top.Y {
-		t.Errorf("closing it moved its head from %v to %v", top.Y, r.Y)
+	if r := head(t, h.tt, summary); r.Y != top.Y || !l.AtEnd() {
+		t.Errorf("closing it moved its head from %v to %v, at end %v", top.Y, r.Y, l.AtEnd())
 	}
 
 	// Open, the long log's steps scroll past workScrollHeight.
@@ -780,8 +783,9 @@ func TestWorkLogFiltersByKind(t *testing.T) {
 	shows("go build ./...", "Read a.go", "Edit main.go", "Read b.go", "go test ./...")
 }
 
-// Switching filters at the end of a long thread keeps the work log's
-// header in place under the pointer.
+// Switching filters at the end of a long thread keeps the end, and the
+// full composer, in view; scrolled up, it keeps the work log's header in
+// place under the pointer.
 func TestSwitchingWorkFiltersKeepsHeaderInPlace(t *testing.T) {
 	at := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
 	exit0 := 0
@@ -800,15 +804,27 @@ func TestSwitchingWorkFiltersKeepsHeaderInPlace(t *testing.T) {
 	)
 	const summary = "Ran 21 commands · made 1 edit"
 	h, _ := zenThread(t, es, false, "Built.")
+	l := h.a.listFor(h.a.current().id())
 	clickRect(h, head(t, h.tt, summary))
 	h.click("Edit 1")
+	atEndAndFull(t, h, l, "filtering at the end")
+	h.click("All 22")
+	atEndAndFull(t, h, l, "unfiltering at the end")
+	h.click("Edit 1")
+	atEndAndFull(t, h, l, "filtering at the end again")
+
+	// Scrolled up, the steps showing all of them grow under the header.
+	wheel(h, -120)
 	h.tt.Advance(time.Second)
+	if l.AtEnd() {
+		t.Fatal("scrolling up left the list at its end")
+	}
 	before := head(t, h.tt, summary)
 	h.click("All 22")
 	h.tt.Advance(time.Second)
 	after := head(t, h.tt, summary)
-	if math.Abs(float64(after.Y-before.Y)) > 1 {
-		t.Errorf("switching filter moved header from Y=%v to Y=%v", before.Y, after.Y)
+	if math.Abs(float64(after.Y-before.Y)) > 1 || l.AtEnd() {
+		t.Errorf("scrolled up, switching filter moved header from Y=%v to Y=%v (at end %v)", before.Y, after.Y, l.AtEnd())
 	}
 }
 
@@ -857,5 +873,138 @@ func TestSplitCommandPreservesQuotedSpaces(t *testing.T) {
 		if bin != tc.bin || args != tc.args {
 			t.Errorf("splitCommand(%q) = (%q, %q), want (%q, %q)", tc.in, bin, args, tc.bin, tc.args)
 		}
+	}
+}
+
+// longWorkLogThread is a thread long enough to scroll whose last turn ran
+// a settled log of commands, folded, under many turns before it.
+func longWorkLogThread(t *testing.T) *harness {
+	t.Helper()
+	at := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	exit0 := 0
+	run := api.NewID()
+	es := synthetic(40)
+	es = append(es,
+		&client.UserEntry{Message: api.NewID(), Text: "Build and test it.", State: client.Sent},
+		&client.WorkEntry{Run: run, Started: at, Ended: at.Add(40 * time.Second), Items: []client.WorkStep{
+			{Item: "a", Kind: "command", Title: "go build ./...", Status: api.WorkCompleted, Exit: &exit0, Output: "built fine", Started: at, Ended: at},
+			{Item: "b", Kind: "command", Title: "go vet ./...", Status: api.WorkCompleted, Exit: &exit0, Started: at, Ended: at},
+			{Item: "c", Kind: "command", Title: "go test ./...", Status: api.WorkCompleted, Exit: &exit0, Started: at, Ended: at},
+		}},
+		&client.AssistantEntry{Run: run, Text: "Built and tested."},
+	)
+	h, _ := zenThread(t, es, false, "Built and tested.")
+	return h
+}
+
+// atEndAndFull fails unless the list shows its end, the composer is full
+// and Jump to latest is gone, frame by frame for a second.
+func atEndAndFull(t *testing.T, h *harness, l *ui.ListState, what string) {
+	t.Helper()
+	for range 60 {
+		h.tt.Advance(16 * time.Millisecond)
+		if !l.AtEnd() || h.a.composerK != 1 || h.a.jumpK != 0 {
+			t.Fatalf("%s: at end %v, composer k %v, jump %v; want true, 1, 0", what, l.AtEnd(), h.a.composerK, h.a.jumpK)
+		}
+	}
+}
+
+// At the end of a thread that scrolls, opening or closing a work log,
+// a step's drawer in it, or its filter keeps the end in view, so the
+// composer stays full.
+func TestAWorkLogAtTheEndKeepsTheEndInView(t *testing.T) {
+	h := longWorkLogThread(t)
+	const summary = "Ran 3 commands"
+	l := h.a.listFor(h.a.current().id())
+	press := func(r ui.Rect) { h.tt.ClickAt(r.X+r.W/2, r.Y+r.H/2) }
+	if !l.AtEnd() || h.a.composerK != 1 {
+		t.Fatalf("the thread doesn't start at its end with the composer full: %v, %v", l.AtEnd(), h.a.composerK)
+	}
+	press(head(t, h.tt, summary))
+	atEndAndFull(t, h, l, "opening the log")
+	if !h.tt.HasText("go vet ./...") {
+		t.Fatalf("a click didn't open the log: %q", h.tt.Texts())
+	}
+
+	press(head(t, h.tt, "go build ./..."))
+	atEndAndFull(t, h, l, "opening a step's drawer")
+	if !h.tt.HasText("built fine") {
+		t.Fatalf("a click didn't open the step's drawer: %q", h.tt.Texts())
+	}
+
+	press(head(t, h.tt, summary))
+	atEndAndFull(t, h, l, "closing the log")
+	if h.tt.HasText("go vet ./...") {
+		t.Fatalf("a second click didn't close the log: %q", h.tt.Texts())
+	}
+}
+
+// Scrolled up, opening or closing a work log keeps its head where it is
+// rather than going to the end.
+func TestAWorkLogScrolledUpHoldsItsPlace(t *testing.T) {
+	h := longWorkLogThread(t)
+	const summary = "Ran 3 commands"
+	l := h.a.listFor(h.a.current().id())
+	wheel(h, -120)
+	h.tt.Advance(time.Second)
+	if l.AtEnd() {
+		t.Fatal("scrolling up left the list at its end")
+	}
+	top := head(t, h.tt, summary)
+	clickRect(h, top)
+	if !h.tt.HasText("go vet ./...") {
+		t.Fatalf("a click didn't open the log: %q", h.tt.Texts())
+	}
+	if r := head(t, h.tt, summary); r.Y != top.Y || l.AtEnd() {
+		t.Errorf("opening it moved its head from %v to %v (at end %v)", top.Y, r.Y, l.AtEnd())
+	}
+	clickRect(h, head(t, h.tt, summary))
+	if h.tt.HasText("go vet ./...") {
+		t.Fatalf("a second click didn't close the log: %q", h.tt.Texts())
+	}
+	if r := head(t, h.tt, summary); r.Y != top.Y || l.AtEnd() {
+		t.Errorf("closing it moved its head from %v to %v (at end %v)", top.Y, r.Y, l.AtEnd())
+	}
+}
+
+// A short thread that fits until its work log opens follows its end as
+// the log grows past it, and is back at its end, the composer full, when
+// the log closes.
+func TestAWorkLogOverflowingAShortThreadKeepsTheEndInView(t *testing.T) {
+	at := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	exit0 := 0
+	run := api.NewID()
+	steps := make([]client.WorkStep, 12)
+	for i := range steps {
+		steps[i] = client.WorkStep{Item: fmt.Sprintf("c%d", i), Kind: "command", Title: fmt.Sprintf("make step-%d", i), Status: api.WorkCompleted, Exit: &exit0, Started: at, Ended: at}
+	}
+	es := []client.Entry{
+		&client.UserEntry{Message: api.NewID(), Text: strings.Repeat("A line of the prompt that goes on.\n", 12), State: client.Sent},
+		&client.WorkEntry{Run: run, Started: at, Ended: at.Add(40 * time.Second), Items: steps},
+		&client.AssistantEntry{Run: run, Text: "Built."},
+	}
+	const summary = "Ran 12 commands"
+	h, _ := zenThread(t, es, false, "Built.")
+	l := h.a.listFor(h.a.current().id())
+	top := head(t, h.tt, summary)
+	// It fits: the wheel doesn't move it.
+	wheel(h, -120)
+	h.tt.Advance(time.Second)
+	if r := head(t, h.tt, summary); !l.AtEnd() || r.Y != top.Y {
+		t.Fatalf("the thread scrolls before the log opens: at end %v, head %v, was %v", l.AtEnd(), r.Y, top.Y)
+	}
+	h.tt.ClickAt(top.X+top.W/2, top.Y+top.H/2)
+	atEndAndFull(t, h, l, "opening the log")
+	if !h.tt.HasText("make step-0") {
+		t.Fatalf("a click didn't open the log: %q", h.tt.Texts())
+	}
+	opened := head(t, h.tt, summary)
+	if opened.Y >= top.Y {
+		t.Fatalf("the open log doesn't overflow the thread: head %v, was %v", opened.Y, top.Y)
+	}
+	h.tt.ClickAt(opened.X+opened.W/2, opened.Y+opened.H/2)
+	atEndAndFull(t, h, l, "closing the log")
+	if r := head(t, h.tt, summary); h.tt.HasText("make step-0") || r.Y != top.Y {
+		t.Errorf("a second click didn't close the log in place: head %v, was %v", r.Y, top.Y)
 	}
 }

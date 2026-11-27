@@ -331,11 +331,19 @@ func TestALinkReachesOnlyTheThreadsItStarted(t *testing.T) {
 	_, err = l.ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.MessageDispatch{Text: "hi"}, Caller: &api.Caller{Thread: api.NewID(), Run: api.NewID()}})
 	notAllowed(t, "a command naming a caller", err)
 
-	runs := l.count(thread, "turn.admitted")
 	if err := l.send(thread, api.MessageDispatch{Text: "more", Mode: api.StartNow}); err != nil {
 		t.Fatalf("a message to the link's thread: %v", err)
 	}
-	l.waitFor(thread, "turn.ended", runs+1)
+	// The child's report wakes the thread too, before or after this
+	// message: wait until every turn admitted has ended and none is queued.
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if l.view(thread).Queued == 0 && l.count(thread, "turn.admitted") == l.count(thread, "turn.ended") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the link's thread never came to rest; its events: %v", l.events(thread))
+		}
+	}
 	if err := l.send(thread, api.TurnInterrupt{Tree: true}); err != nil {
 		t.Fatalf("a stop of the link's tree: %v", err)
 	}

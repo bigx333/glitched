@@ -227,7 +227,8 @@ func (a *app) queueRow(c *ui.Context, t thread, q []*client.UserEntry, i int, u 
 
 // queueText is a queued message's words, on a line, after whether a stop
 // holds it; or, being edited, the area its new words are written in,
-// which ⌘⏎ saves and Escape leaves as they were.
+// which ⌘⏎ saves and Escape leaves as they were. Held on, the ⌘⏎ that
+// saved is spent, as the composer's that sent the draft is.
 func (a *app) queueText(c *ui.Context, t thread, u *client.UserEntry, r queueRow, stateW float32) {
 	ui.Row(c).Key("text").Gap(queueTextGap).AlignItems(ui.Center).Grow(1).Shrink(1).MinWidth(0).Children(func() {
 		state := "Queued"
@@ -241,7 +242,7 @@ func (a *app) queueText(c *ui.Context, t thread, u *client.UserEntry, r queueRow
 		}
 		e := &a.queueEditing
 		ui.TextArea(c.Key("edit"), &e.text).Bind(&a.queueArea).Label("Edit queued message").FontSize(12).Padding(4, 6).Grow(1).Shrink(1).MinWidth(0).MaxHeight(120)
-		a.queueArea.OnShortcut(c, ui.Cmd, ui.KeyEnter, func() { a.saveQueueEdit(t, u) })
+		a.queueArea.OnShortcut(c, ui.Cmd, ui.KeyEnter, func() { a.saveQueueEdit(t, u); a.spent = true })
 		a.queueArea.OnShortcut(c, 0, ui.KeyEscape, func() { a.endQueueEdit(u) })
 	})
 }

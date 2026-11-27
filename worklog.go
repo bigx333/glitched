@@ -100,7 +100,7 @@ func (a *app) workLog(c *ui.Context, t thread, rs rows, i int, key string, e ent
 		if wasOpen {
 			m.dropWorkScroll(key)
 		}
-		a.listFor(t.id()).HoldPlace()
+		a.holdUnlessAtEnd(t)
 	}
 	if mode == workExpanded {
 		ws := m.workScrollOf(key)
@@ -137,7 +137,7 @@ func (a *app) workLog(c *ui.Context, t thread, rs rows, i int, key string, e ent
 						}).Clicked() {
 							ws.filter = tb.filter
 							ws.scroll.Y = 0
-							a.listFor(t.id()).HoldPlace()
+							a.holdUnlessAtEnd(t)
 						}
 					}
 				})
@@ -571,7 +571,7 @@ func (a *app) step(c *ui.Context, t thread, files []fileChange, run api.ID, w cl
 			a.openSubagent(t, run, w)
 		case inspectable:
 			ws.toggleInspect(w.Item)
-			a.listFor(t.id()).HoldPlace()
+			a.holdUnlessAtEnd(t)
 		}
 	}
 	output := w.Output != "" && (failed || inspected)
@@ -687,4 +687,15 @@ func durationFill(d, maxDur time.Duration) float32 {
 // and 65% of its longest step.
 func slowStep(d, maxDur time.Duration) bool {
 	return d >= 2*time.Second && d*100 >= maxDur*65
+}
+
+// holdUnlessAtEnd keeps the timeline's place as a work log, its filter or
+// a step's drawer opens or closes, so that the head clicked stays under
+// the pointer while the user reads further up. At the end, the list
+// follows its end instead, keeping the end, and with it the full
+// composer, in view.
+func (a *app) holdUnlessAtEnd(t thread) {
+	if l := a.listFor(t.id()); !l.AtEnd() {
+		l.HoldPlace()
+	}
 }
