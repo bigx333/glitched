@@ -45,8 +45,17 @@ Glitched builds with `CGO_ENABLED=0` and uses MyGo's static vet pass:
 ```sh
 CGO_ENABLED=0 go vet ./...
 go tool mygo vet .
-CGO_ENABLED=0 go test ./...
+CGO_ENABLED=0 go test -count=1 -run '<Pattern>' .      # root UI tests that cover the change
+CGO_ENABLED=0 go test -count=1 ./internal/<pkg>/...    # each package you touched
 ```
+
+Don't run `go test ./...` unsharded. The root package's UI tests exceed Go's 10-minute default timeout. CI splits them across 8 runners, and you can run one shard the same way:
+
+```sh
+RUNNER_TEMP=$(mktemp -d) ./.github/root-shard run <i> 8 2   # i is 1 to 8
+```
+
+See [AGENTS.md](AGENTS.md) for the full local workflow.
 
 Run race-detector checks (requires CGo):
 
