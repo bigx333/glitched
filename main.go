@@ -350,10 +350,16 @@ type app struct {
 	keyed           api.ID
 	keyedSince      time.Time
 	// reads are what the window showed of each waiting card; chord is
-	// when ⌘ went down, zero while it is up; and pressing is the press of
-	// a request's answers the pointer holds.
+	// when ⌘ went down, zero while it is up; spent is whether a ⌘⏎ since
+	// ⌘ went down sent or queued the draft, asked from the selection bar,
+	// or saved a queued message's edit: that chord answers no card, and
+	// its ⌘⏎ in the composer, held on or still to take once ⌘ is up,
+	// sends or stops nothing more, until ⌘ next goes down. Each frame
+	// keeps both, on any page. pressing is the press of a request's
+	// answers the pointer holds.
 	reads    map[api.ID]*reading
 	chord    time.Time
+	spent    bool
 	pressing pressAt
 	// quick is the quick-ask panel over every app.
 	quick quickAsk
@@ -843,6 +849,17 @@ func (a *app) view(c *ui.Context) {
 	// appearance: the sidebar shows it while the app's theme matches, and
 	// the Liquid Glass setting is on.
 	a.now = c.Now()
+	// Whatever page shows, before any takes a key: ⌘ let go, the chord
+	// is held no more; ⌘ down again, a new chord is, and it is not spent.
+	// A spent chord stays spent while ⌘ is up, so every ⌘⏎ of its hold
+	// that came before ⌘ went up, on however many frames they are taken,
+	// finds it still spent.
+	switch {
+	case c.Modifiers()&ui.Cmd == 0:
+		a.chord = time.Time{}
+	case a.chord.IsZero():
+		a.chord, a.spent = a.now, false
+	}
 	if !a.arrived.IsZero() && a.arrivedAt.IsZero() {
 		a.arrivedAt = a.now // sentFromHero
 	}

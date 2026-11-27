@@ -242,6 +242,13 @@ func settlePlugins(t *testing.T, a *app, tt *ui.Tester, p *posts) {
 	}
 }
 
+// afterView, when a test sets it, runs once in the next frame of a
+// harness's window, after the view built: the keys it presses and lets go
+// there wait, as those a platform brings between two frames do, for the
+// frames after, which find what it let go up at once and take a key of
+// one kind one a frame.
+var afterView func()
+
 // harness is the app on the engines its state directory reaches, with its
 // manager started.
 type harness struct {
@@ -266,7 +273,13 @@ func startWith(t *testing.T, dir string, engine func(*daemon.Config)) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { a.backend.Close() })
-	tt := ui.NewTester(a.view, 1320, 860)
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.view(c)
+		if f := afterView; f != nil {
+			afterView = nil
+			f()
+		}
+	}, 1320, 860)
 	settlers.Store(tt, func() { settlePlugins(t, a, tt, p) })
 	t.Cleanup(func() { settlers.Delete(tt) })
 	h := &harness{t, a, tt, p}
