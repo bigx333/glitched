@@ -118,7 +118,7 @@ func TestAChangeWhileAgyListsItsCommandsCancelsTheCompaction(t *testing.T) {
 			gate := filepath.Join(t.TempDir(), "list-commands-now")
 			end := time.Now().UTC()
 			var advance atomic.Int64
-			advance.Store(int64(13*time.Minute + 31*time.Second))
+			advance.Store(int64(engine.AntigravityCacheTTL*9/10 + time.Second))
 			now := func() time.Time { return end.Add(time.Duration(advance.Load())) }
 			// Blank selection lets the fake's resumed process open on its default.
 			h, st, thread, log, _ := compactionHost(t, now, end, "gemini-3-pro", gate)
@@ -136,7 +136,7 @@ func TestAChangeWhileAgyListsItsCommandsCancelsTheCompaction(t *testing.T) {
 			case "queued message":
 				changeIntent = api.MessageDispatch{Text: "next", Mode: api.StartNow}
 			case "cache expired":
-				advance.Store(int64(16 * time.Minute))
+				advance.Store(int64(engine.AntigravityCacheTTL + time.Minute))
 			}
 			if changeIntent != nil {
 				if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: changeIntent}); err != nil {
@@ -177,7 +177,7 @@ func TestAFailedAgyCompactionFails(t *testing.T) {
 
 func TestAgyResumedOnANonGeminiDefaultDoesNotCompact(t *testing.T) {
 	end := time.Now().UTC()
-	now := func() time.Time { return end.Add(13*time.Minute + 31*time.Second) }
+	now := func() time.Time { return end.Add(engine.AntigravityCacheTTL*9/10 + time.Second) }
 	_, st, thread, log, _ := compactionHost(t, now, end, "claude-sonnet-4-6", "")
 	ctx := context.Background()
 	waitFor(t, "the maintenance run to finish", func() bool {

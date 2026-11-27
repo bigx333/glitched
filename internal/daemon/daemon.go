@@ -126,7 +126,7 @@ type Config struct {
 	Versions cliupdate.Lookup `json:"-"`
 	// CompactBeforeExpire enables automatic idle compaction before prompt
 	// cache expiry (Claude via reported cache TTL, Antigravity Gemini after
-	// 15 minutes idle). Nil defaults to true.
+	// 1 hour idle). Nil defaults to true.
 	CompactBeforeExpire *bool `json:"compact_before_expire,omitempty"`
 	// KeepAwake keeps the machine from idle sleep while an agent on this
 	// engine works, the display free to sleep. Nil defaults to true; it

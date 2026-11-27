@@ -65,7 +65,7 @@ func TestTheCompactionWhoseWindowClosesFirstGoesFirst(t *testing.T) {
 		idleSeed(t, st, now.Add(6*time.Minute-time.Duration(i+5)*time.Second))
 	}
 	gemini, run := api.NewID(), api.NewID()
-	finished := now.Add(-13*time.Minute - 31*time.Second)
+	finished := now.Add(-engine.AntigravityCacheTTL*9/10 - time.Second)
 	model := api.ModelRef{Provider: "antigravity", Model: "gemini-3-pro"}
 	for _, command := range []api.Command{
 		{ID: api.NewID(), Target: gemini, Body: api.ThreadCreate{Workspace: t.TempDir(), Title: "Gemini", Model: model, Access: api.AccessAsk}},
@@ -101,9 +101,9 @@ func TestTheCompactionWhoseWindowClosesFirstGoesFirst(t *testing.T) {
 	n := serveOpts(t, path, provider.Mux{"claude": ad, "antigravity": ad}, runtime.WithClock(func() time.Time { return now }))
 	until(t, n.h, gemini, "two compactions to start", func(api.Thread) bool { return len(compactions(ad)) >= 2 })
 	starts := compactions(ad)
-	// Gemini's cache lapses first, in 89s, but its window stays open until
-	// 30s before that; both Claude windows close sooner, 5 minutes before
-	// their caches, at 54s and 55s. The one that would miss its window goes.
+	// Gemini's window opened 1s ago and stays open for 59s, while both
+	// Claude windows close sooner, at 54s and 55s. The ones whose windows
+	// close first go first.
 	if slices.ContainsFunc(starts[:2], func(s recordedStart) bool { return s.spec.Thread == gemini }) {
 		t.Fatalf("first two providers: %s, %s; want both Claude, whose windows close first", starts[0].spec.Model.Provider, starts[1].spec.Model.Provider)
 	}

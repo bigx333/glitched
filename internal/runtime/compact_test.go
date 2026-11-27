@@ -232,7 +232,7 @@ func TestAntigravityGeminiCompactsAndClaudeDoesNot(t *testing.T) {
 	until(t, n.h, gemini, "gemini first turn", func(v api.Thread) bool { return v.Run == api.RunIdle && v.LastTurn != nil })
 	until(t, n.h, claudeOnAgy, "claude-agy first turn", func(v api.Thread) bool { return v.Run == api.RunIdle && v.LastTurn != nil })
 
-	// Move the clock to 90% of the 15 minutes agy keeps its cache.
+	// Move the clock to 90% of the 1 hour agy keeps its cache.
 	clockMu.Lock()
 	now = now.Add(engine.AntigravityCacheTTL*9/10 + time.Second)
 	clockMu.Unlock()
