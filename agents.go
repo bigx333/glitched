@@ -74,19 +74,30 @@ func (a *app) agentsPanelH(t thread) float32 {
 // mid-way, turns it round from where it is. More grows the panel the same
 // way. With less motion asked for, it's there at once (AnimateTo).
 func (a *app) agentsMorph(host ui.Element, t thread) {
-	key := t.id().String()
-	if t.id() != a.agentsFor {
+	id := t.id()
+	key := id.String()
+	if id != a.agentsFor {
 		// Another thread, however it came to be shown: the panel closes as
 		// the user leaves, and is closed, not folding, when they come back.
 		clear(a.agentsOpen)
 		clear(a.agentsAll)
-		a.agentsFor = t.id()
+		a.agentsFor = id
+		a.agentsK = host.Jump("agents:"+key, 0)
+		a.agentsH = host.Jump("agents-h:"+key, a.agentsPanelH(t))
+		return
+	}
+	if len(a.shown(t)) == 0 {
+		// No visible children left (for instance, a Manager's last active
+		// worker finished): clear open state and jump closed so a later
+		// worker starts with the collapsed pill.
+		delete(a.agentsOpen, id)
+		delete(a.agentsAll, id)
 		a.agentsK = host.Jump("agents:"+key, 0)
 		a.agentsH = host.Jump("agents-h:"+key, a.agentsPanelH(t))
 		return
 	}
 	target, anim := float32(0), agentsFold
-	if a.agentsOpen[t.id()] {
+	if a.agentsOpen[id] {
 		target, anim = 1, agentsGrow
 	}
 	a.agentsK = host.AnimateTo("agents:"+key, target, anim)
@@ -110,6 +121,8 @@ func (a *app) agentsRoom(t thread) float32 {
 func (a *app) agents(c *ui.Context, t thread, frameW, fade float32) {
 	tree := a.shown(t)
 	if len(tree) == 0 {
+		delete(a.agentsOpen, t.id())
+		delete(a.agentsAll, t.id())
 		return
 	}
 	id := t.id()

@@ -104,9 +104,67 @@ func (a *app) below(t thread) []node {
 	return out
 }
 
-// shown is what the sidebar and the agents panel list under t, which is
-// every thread below it.
-func (a *app) shown(t thread) []node { return a.below(t) }
+// inManagerTree is whether t is a Manager or runs under one.
+func (a *app) inManagerTree(t thread) bool {
+	return isManager(t) || slices.ContainsFunc(a.ancestors(t), isManager)
+}
+
+// workerActive is whether a Manager worker still runs, waits on a request,
+// or has queued work ready to run (not held paused by a stop).
+func workerActive(k thread) bool {
+	return k.View.Live() || len(k.View.Requests) > 0 || k.View.Queued > 0 && !k.View.Resumable
+}
+
+// shown is what the sidebar and the agents strip list under t: every
+// thread below a plain thread, and under a Manager only active workers
+// together with any ancestor keeping an active descendant reachable.
+func (a *app) shown(t thread) []node {
+	if !a.inManagerTree(t) {
+		return a.below(t)
+	}
+	var out []node
+	seen := map[api.ID]bool{t.id(): true}
+	var walk func(id api.ID, d int) bool
+	walk = func(id api.ID, d int) bool {
+		if d > maxDepth {
+			return false
+		}
+		any := false
+		for _, k := range a.kids[id] {
+			if seen[k.id()] {
+				continue
+			}
+			seen[k.id()] = true
+			at := len(out)
+			out = append(out, node{k, d})
+			hasActiveDesc := walk(k.id(), d+1)
+			if workerActive(k) || hasActiveDesc {
+				any = true
+			} else {
+				out = out[:at]
+			}
+		}
+		return any
+	}
+	walk(t.id(), 1)
+	return out
+}
+
+// shownKids are t's direct children that appear in a.shown(t): every child
+// under a plain thread, and under a Manager only active workers or
+// ancestors of active descendants.
+func (a *app) shownKids(t thread) []thread {
+	if !a.inManagerTree(t) {
+		return a.kids[t.id()]
+	}
+	var out []thread
+	for _, n := range a.shown(t) {
+		if n.depth == 1 {
+			out = append(out, n.t)
+		}
+	}
+	return out
+}
 
 func needsYou(ns []node) bool {
 	return slices.ContainsFunc(ns, func(n node) bool { return len(n.t.View.Requests) > 0 })
@@ -221,13 +279,13 @@ func (a *app) childToggle(c *ui.Context, t thread) {
 	}
 }
 
-// childRows lists t's children under its row while they're open, each
-// indented by its depth, theirs under them.
+// childRows lists t's visible children under its row while they're open,
+// each indented by its depth, theirs under them.
 func (a *app) childRows(c *ui.Context, t thread, depth int) {
 	if !a.childrenOpen[t.id()] || depth > maxDepth {
 		return
 	}
-	for _, k := range a.kids[t.id()] {
+	for _, k := range a.shownKids(t) {
 		a.childRow(c, k, depth)
 		a.childRows(c, k, depth+1)
 	}
