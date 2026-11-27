@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"glitched/internal/gittest"
 	"glitched/internal/plugins/pack"
 )
 
@@ -176,10 +176,10 @@ func TestTheWordToolsSample(t *testing.T) {
 func repo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if out, err := exec.Command("git", "-C", dir, "init", "-q", "-b", "main").CombinedOutput(); err != nil {
+	if out, err := gittest.Command("-C", dir, "init", "-q", "-b", "main").CombinedOutput(); err != nil {
 		t.Skipf("no git: %v %s", err, out)
 	}
-	if out, err := exec.Command("git", "-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start").CombinedOutput(); err != nil {
+	if out, err := gittest.Command("-C", dir, "commit", "-q", "--allow-empty", "-m", "start").CombinedOutput(); err != nil {
 		t.Fatalf("%v %s", err, out)
 	}
 	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644)

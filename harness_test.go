@@ -19,6 +19,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
+	"glitched/internal/gittest"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
@@ -668,8 +669,8 @@ func gitWorkspace(t *testing.T) string {
 	if err := os.WriteFile(file, []byte(sidebarBefore), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "sidebar"}} {
-		if out, err := exec.Command("git", append([]string{"-C", ws}, args...)...).CombinedOutput(); err != nil {
+	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"commit", "-qm", "sidebar"}} {
+		if out, err := gittest.Command(append([]string{"-C", ws}, args...)...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v %s", args, err, out)
 		}
 	}

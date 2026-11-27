@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"glitched/internal/gittest"
 )
 
 // A cancel while git runs a hook returns at once, though the hook left a
@@ -21,8 +23,7 @@ func TestACanceledGitKillsWhatItsHookStarted(t *testing.T) {
 	dir := t.TempDir()
 	hooks := filepath.Join(dir, "hooks")
 	pidFile := filepath.Join(dir, "pid")
-	env := append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1",
-		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+	env := gittest.Env()
 	for _, args := range [][]string{
 		{"init", "-q", "-b", "main"},
 		{"commit", "-q", "--allow-empty", "-m", "start"},
