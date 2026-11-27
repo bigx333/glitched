@@ -81,6 +81,9 @@ func (a *app) sidebarFrame(c *ui.Context) {
 		switch {
 		case !a.vibrant:
 			side.Background(palette.sidebar)
+		case a.nativeGlass:
+			// Liquid Glass takes the tint itself (syncTint).
+			side.Background(ui.Transparent)
 		default:
 			// The app's background tints the material, all but what the
 			// vibrancy setting lets through: near black in the dark, the

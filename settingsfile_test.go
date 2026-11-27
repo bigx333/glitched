@@ -20,8 +20,8 @@ func TestSettingsOutliveARestart(t *testing.T) {
 	tt.Frame()
 	click(t, tt, "Tint the panels")
 	tt.Frame()
-	if !a.settings.tintPanels {
-		t.Fatal("the switch left Tint panels off")
+	if a.settings.tintPanels {
+		t.Fatal("the switch left Tint panels on")
 	}
 	s := &a.settings
 	s.confirmDelete, s.theme, s.accent, s.glass, s.vibrancy, s.wind, s.fontSize = false, "Light", 3, false, 0.25, false, 15

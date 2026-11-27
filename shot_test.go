@@ -41,7 +41,7 @@ import (
 // RENAME=<title>, ALERT=<title>, MENU=<title> (its items to
 // SHOT.menu.txt), HOVER=<text>, FAILED, PICKER=<effort>, FAST and
 // STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH,
-// TICK=<turn>, AUTO for limited, TINT=0..1, PANELS, SCROLLUP, SIDEBARDOWN, WIDTH=1100, AGENTS, HERO and DOCK,
+// TICK=<turn>, AUTO for limited, TINT=0..1, PANELS=0|1 (else as the settings have it), SCROLLUP, SIDEBARDOWN, WIDTH=1100, AGENTS, HERO and DOCK,
 // SNOOZE=<title> for a row's snooze popover, SIDEBAR=<width>,
 // GAG=snooze|settle|undo with AT=350ms, and HIDE=60ms for a frame that
 // long into hiding the sidebar.
@@ -66,7 +66,9 @@ func TestShot(t *testing.T) {
 	if v := os.Getenv("TINT"); v != "" {
 		fmt.Sscan(v, &a.settings.vibrancy)
 	}
-	a.settings.tintPanels = os.Getenv("PANELS") != ""
+	if v := os.Getenv("PANELS"); v != "" {
+		a.settings.tintPanels = v != "0"
+	}
 	if p := os.Getenv("PAGE"); p != "" {
 		a.router.Push(p)
 	}
