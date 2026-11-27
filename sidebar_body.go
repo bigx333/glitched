@@ -118,7 +118,7 @@ func (a *app) sidebarSections(cats ...category) []sidebarSection {
 				if !a.childrenOpen[t.id()] || depth > maxDepth {
 					return
 				}
-				ks := a.kids[t.id()]
+				ks := a.shownKids(t)
 				var kept []int
 				for i, k := range ks {
 					if a.sidebarKept[k.id()] {
