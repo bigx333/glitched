@@ -108,20 +108,28 @@ func TestAMessagesActionsStayOnTheWayDownToThem(t *testing.T) {
 }
 
 // A work log's ledger tags each step with its kind, a failed command
-// with its exit code over what it printed, and an edit's step opens its
-// file in the diff.
+// with its exit code whose output opens on click, and an edit's step
+// opens its file in the diff.
 func TestWorkLogSteps(t *testing.T) {
 	h, th := checked(t)
 	h.openWork("Ran 2 commands", "Edit "+sidebarPath)
-	for _, s := range []string{"CMD", "ERR 1", " FAIL  Sidebar > sorts threads by updatedAt\n Test Files  1 failed (1)", "3 steps", "EDIT"} {
+	const failOut = " FAIL  Sidebar > sorts threads by updatedAt\n Test Files  1 failed (1)"
+	for _, s := range []string{"CMD", "ERR 1", "3 steps", "EDIT"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("no %q in the work log; texts %q", s, h.tt.Texts())
 		}
+	}
+	if h.tt.HasText(failOut) {
+		t.Errorf("the failed command's output shows before a click")
 	}
 	for _, s := range []string{"✓ 0", "✗ 1"} {
 		if h.tt.HasText(s) {
 			t.Errorf("the ledger still marks exits with %q", s)
 		}
+	}
+	clickRect(h, head(t, h.tt, "bun run test"))
+	if !h.tt.HasText(failOut) {
+		t.Errorf("clicking the failed command didn't open its output; texts %q", h.tt.Texts())
 	}
 	h.click("Edit apps/web/src/components/Sidebar.tsx")
 	if !h.a.showDiff || h.a.diffFile[th.id()] != sidebarPath {

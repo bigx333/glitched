@@ -170,10 +170,11 @@ func (a *app) workLog(c *ui.Context, t thread, rs rows, i int, key string, e ent
 		if !slices.ContainsFunc(e.work, kept) {
 			return
 		}
+		ws := m.workScrollOf(key)
 		ui.Column(c).Key("kept").Gap(2).Children(func() {
 			for _, w := range e.work {
 				if kept(w) {
-					a.step(c, t, files, e.run, w, lg.maxDur, nil)
+					a.step(c, t, files, e.run, w, lg.maxDur, ws)
 				}
 			}
 		})
@@ -505,9 +506,10 @@ func workSpark(ws []client.WorkStep) []sparkRun {
 
 // step is one of the agent's steps, as a ledger row: a tag of its kind,
 // what it worked on, and how it went. A finished command shows how long
-// it took against the log's longest step, maxDur, and what it printed
-// when it failed; with ws, a click opens it to read in full. An edit of a
-// file the diff lists opens it there, and a subagent opens its panel.
+// it took against the log's longest step, maxDur. With ws, clicking a
+// command or a failed step with output toggles its drawer open or closed.
+// An edit of a file the diff lists opens it there, and a subagent opens
+// its panel.
 func (a *app) step(c *ui.Context, t thread, files []fileChange, run api.ID, w client.WorkStep, maxDur time.Duration, ws *workScroll) {
 	kind := stepKindOf(w)
 	failed := stepFailed(w)
@@ -516,7 +518,7 @@ func (a *app) step(c *ui.Context, t thread, files []fileChange, run api.ID, w cl
 		file = slices.IndexFunc(files, func(f fileChange) bool { return f.path == w.Path })
 	}
 	sub := w.Subagent != nil
-	inspectable := kind == workFilterCommand && ws != nil
+	inspectable := file < 0 && !sub && ws != nil && (kind == workFilterCommand || (failed && w.Output != ""))
 	inspected := inspectable && ws.inspect[w.Item]
 	var r ui.Element
 	if file >= 0 || sub || inspectable {
@@ -561,6 +563,9 @@ func (a *app) step(c *ui.Context, t thread, files []fileChange, run api.ID, w cl
 					ui.Icon(c, icExternal).FontSize(11).TextColor(palette.muted)
 				}
 			}
+			if inspectable && failed && w.Output != "" {
+				chevron(c.Key("chevron"), inspected).FontSize(10).TextColor(palette.faint)
+			}
 		})
 	}).Clicked() {
 		switch {
@@ -574,21 +579,21 @@ func (a *app) step(c *ui.Context, t thread, files []fileChange, run api.ID, w cl
 			a.holdUnlessAtEnd(t)
 		}
 	}
-	output := w.Output != "" && (failed || inspected)
-	if !inspected && !output {
+	if !inspected {
 		return
 	}
 	border := palette.border
 	if failed {
 		border = palette.red.Alpha(0.35)
 	}
+	showCommand := kind == workFilterCommand
 	ui.Column(c).Key(w.Item+"/drawer").Margin(0, 10, 6, 64).Padding(7, 10).Gap(6).Radius(6).Background(palette.bg).Border(1, border).Children(func() {
-		if inspected {
+		if showCommand {
 			ui.Text(c, w.Title).Key(w.Item + "/command").Selectable().FontSize(11.5).Font("monospace").LineHeight(1.5).TextColor(palette.text)
 		}
-		if output {
+		if w.Output != "" {
 			out := ui.Text(c, w.Output).Key(w.Item + "/output").Selectable().FontSize(11.5).Font("monospace").LineHeight(1.5).TextColor(palette.muted)
-			if inspected {
+			if showCommand {
 				out.BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Padding(6, 0, 0)
 			}
 		}
