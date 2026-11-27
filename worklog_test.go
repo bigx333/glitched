@@ -1023,16 +1023,16 @@ func TestAWorkLogOverflowingAShortThreadKeepsTheEndInView(t *testing.T) {
 	}
 }
 
-// stepAccess returns the accessibility node of the clickable step row button
+// stepAccess returns the accessibility node of the inspectable step disclosure
 // named name (or name followed by its failure tag).
 func stepAccess(t *testing.T, tt *ui.Tester, name string) ui.AccessInfo {
 	t.Helper()
 	for _, n := range tt.AccessAll() {
-		if n.Role == ui.RoleButton && (n.Name == name || strings.HasPrefix(n.Name, name+" · ")) {
+		if n.Role == ui.RoleDisclosure && (n.Name == name || strings.HasPrefix(n.Name, name+" · ")) {
 			return n
 		}
 	}
-	t.Fatalf("no button %q: %q", name, tt.Texts())
+	t.Fatalf("no disclosure %q: %q", name, tt.Texts())
 	return ui.AccessInfo{}
 }
 
@@ -1264,25 +1264,25 @@ func TestFailedWorkEditAndSubagentErrorToggle(t *testing.T) {
 	h, th := zenThread(t, es, false, "Both failed.")
 	const summary = "Ran 1 command · made 1 edit · started 1 subagent"
 
-	buttonByName := func(name string) ui.AccessInfo {
+	disclosureByName := func(name string) ui.AccessInfo {
 		t.Helper()
 		for _, n := range h.tt.AccessAll() {
-			if n.Role == ui.RoleButton && n.Name == name {
+			if n.Role == ui.RoleDisclosure && n.Name == name {
 				return n
 			}
 		}
-		t.Fatalf("no RoleButton %q: %q", name, h.tt.Texts())
+		t.Fatalf("no RoleDisclosure %q: %q", name, h.tt.Texts())
 		return ui.AccessInfo{}
 	}
-	rowButtonContaining := func(sub string) ui.Rect {
+	rowButtonContaining := func(sub string) ui.AccessInfo {
 		t.Helper()
 		for _, n := range h.tt.AccessAll() {
-			if n.Role == ui.RoleButton && strings.Contains(n.Name, sub) && !strings.HasPrefix(n.Name, "Show error") && !strings.HasPrefix(n.Name, "Hide error") {
-				return n.Bounds
+			if n.Role == ui.RoleButton && strings.Contains(n.Name, sub) {
+				return n
 			}
 		}
-		t.Fatalf("no row button containing %q: %q", sub, h.tt.Texts())
-		return ui.Rect{}
+		t.Fatalf("no RoleButton containing %q: %q", sub, h.tt.Texts())
+		return ui.AccessInfo{}
 	}
 
 	checkToggles := func(where string) {
@@ -1291,7 +1291,7 @@ func TestFailedWorkEditAndSubagentErrorToggle(t *testing.T) {
 			t.Fatalf("%s: error output expanded before click", where)
 		}
 		// Failed edit toggle: expands/collapses without opening diff.
-		showEdit := buttonByName("Show error: Edit main.go")
+		showEdit := disclosureByName("Show error: Edit main.go")
 		if showEdit.Expanded {
 			t.Errorf("%s: edit error toggle starts Expanded=true", where)
 		}
@@ -1302,7 +1302,7 @@ func TestFailedWorkEditAndSubagentErrorToggle(t *testing.T) {
 		if h.a.showDiff {
 			t.Fatalf("%s: edit error toggle opened diff panel", where)
 		}
-		hideEdit := buttonByName("Hide error: Edit main.go")
+		hideEdit := disclosureByName("Hide error: Edit main.go")
 		if !hideEdit.Expanded {
 			t.Errorf("%s: open edit error toggle reports Expanded=false", where)
 		}
@@ -1312,7 +1312,7 @@ func TestFailedWorkEditAndSubagentErrorToggle(t *testing.T) {
 		}
 
 		// Failed subagent toggle: expands/collapses without opening subagent panel.
-		showSub := buttonByName("Show error: Agent alpha")
+		showSub := disclosureByName("Show error: Agent alpha")
 		if showSub.Expanded {
 			t.Errorf("%s: subagent error toggle starts Expanded=true", where)
 		}
@@ -1323,7 +1323,7 @@ func TestFailedWorkEditAndSubagentErrorToggle(t *testing.T) {
 		if h.a.subagentStep[th.id()] != (subagentSel{}) {
 			t.Fatalf("%s: subagent error toggle opened subagent panel: %+v", where, h.a.subagentStep[th.id()])
 		}
-		hideSub := buttonByName("Hide error: Agent alpha")
+		hideSub := disclosureByName("Hide error: Agent alpha")
 		if !hideSub.Expanded {
 			t.Errorf("%s: open subagent error toggle reports Expanded=false", where)
 		}
@@ -1342,12 +1342,44 @@ func TestFailedWorkEditAndSubagentErrorToggle(t *testing.T) {
 	clickRect(h, head(t, h.tt, summary))
 
 	// 3. Primary row clicks still navigate to the diff and subagent panel.
-	clickRect(h, rowButtonContaining("Edit main.go"))
+	clickRect(h, rowButtonContaining("Edit main.go").Bounds)
 	if !h.a.showDiff || h.a.diffFile[th.id()] != "main.go" {
 		t.Fatalf("clicking failed edit row did not open diff: showDiff=%v file=%q", h.a.showDiff, h.a.diffFile[th.id()])
 	}
-	clickRect(h, rowButtonContaining("Agent alpha"))
+	clickRect(h, rowButtonContaining("Agent alpha").Bounds)
 	if got, want := h.a.subagentStep[th.id()], (subagentSel{run, "s1"}); got != want {
 		t.Fatalf("clicking failed subagent row opened %+v, want %+v", got, want)
 	}
+
+	// 4. Focusing a navigable row before it fails with output keeps focus when
+	// the sibling error toggle appears (stable parent wrapper key).
+	liveRun := api.NewID()
+	running := []client.Entry{
+		&client.UserEntry{Message: api.NewID(), Text: "Delegate work.", State: client.Sent},
+		&client.WorkEntry{Run: liveRun, Started: at, Items: []client.WorkStep{
+			{Item: "c1", Kind: "command", Title: "go build ./...", Status: api.WorkCompleted, Exit: &exit0, Started: at, Ended: at},
+			{Item: "s2", Kind: "tool", Title: "Agent beta", Status: api.WorkStarted, Subagent: &client.Subagent{}, Started: at},
+		}},
+	}
+	replaceEntries(h, th, running)
+	// Focus the folded work log header, then Tab onto the surfaced Agent beta button.
+	liveHead := rowButtonContaining("2 steps").Bounds
+	clickRect(h, liveHead)
+	clickRect(h, rowButtonContaining("2 steps").Bounds)
+	h.tt.Key(0, ui.KeyTab)
+	if !rowButtonContaining("AGENT Agent beta").Focused {
+		t.Fatalf("Tab from folded work log header did not focus Agent beta row")
+	}
+	failedEntry := []client.Entry{
+		running[0],
+		&client.WorkEntry{Run: liveRun, Started: at, Ended: at.Add(time.Second), Items: []client.WorkStep{
+			{Item: "c1", Kind: "command", Title: "go build ./...", Status: api.WorkCompleted, Exit: &exit0, Started: at, Ended: at},
+			{Item: "s2", Kind: "tool", Title: "Agent beta", Status: api.WorkFailed, Subagent: &client.Subagent{}, Output: "beta crashed", Started: at, Ended: at.Add(time.Second)},
+		}},
+	}
+	replaceEntries(h, th, failedEntry)
+	if !rowButtonContaining("FAIL Agent beta").Focused {
+		t.Fatalf("Agent beta lost keyboard focus when its sibling error toggle appeared")
+	}
+	disclosureByName("Show error: Agent beta")
 }

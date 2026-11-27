@@ -527,16 +527,16 @@ func (a *app) step(c *ui.Context, t thread, files []fileChange, run api.ID, w cl
 		if navigable || inspectable {
 			r = ghost(c, w.Item, false)
 			if inspectable {
-				r.Label(stepButtonLabel(w, failed)).Expanded(inspected) // the button's name and drawer state
+				r.Role(ui.RoleDisclosure).Label(stepButtonLabel(w, failed)).Expanded(inspected) // the button's name and drawer state
 			}
 		} else {
 			r = ui.Row(c).Key(w.Item).AlignItems(ui.Center)
 		}
-		if errToggle {
+		if navigable {
 			r.Grow(1).MinWidth(0)
 		}
 		r.Padding(4, 10).Gap(8).Radius(5)
-		if failed && !errToggle && !r.Hovered() {
+		if failed && !navigable && !r.Hovered() {
 			r.Background(palette.red.Alpha(0.06))
 		}
 		if r.Children(func() {
@@ -586,15 +586,21 @@ func (a *app) step(c *ui.Context, t thread, files []fileChange, run api.ID, w cl
 			}
 		}
 	}
-	if errToggle {
-		ui.Row(c).Key(w.Item + "/wrap").AlignItems(ui.Center).Radius(5).Background(palette.red.Alpha(0.06)).Children(func() {
+	if navigable {
+		wrap := ui.Row(c).Key(w.Item + "/wrap").AlignItems(ui.Center).Radius(5)
+		if failed {
+			wrap.Background(palette.red.Alpha(0.06))
+		}
+		wrap.Children(func() {
 			drawRow()
-			if ghost(c, w.Item+"/error-toggle", false).Label(errorToggleLabel(w, inspected)).Expanded(inspected).
-				Padding(5, 7).Radius(5).Justify(ui.Center).Shrink(0).Children(func() {
-				chevron(c.Key("chevron"), inspected).FontSize(10).TextColor(palette.faint)
-			}).Clicked() {
-				ws.toggleInspect(w.Item)
-				a.holdUnlessAtEnd(t)
+			if errToggle {
+				if ghost(c, w.Item+"/error-toggle", false).Role(ui.RoleDisclosure).Label(errorToggleLabel(w, inspected)).Expanded(inspected).
+					Padding(5, 7).Radius(5).Justify(ui.Center).Shrink(0).Children(func() {
+					chevron(c.Key("chevron"), inspected).FontSize(10).TextColor(palette.faint)
+				}).Clicked() {
+					ws.toggleInspect(w.Item)
+					a.holdUnlessAtEnd(t)
+				}
 			}
 		})
 	} else {
