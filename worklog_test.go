@@ -460,7 +460,7 @@ func TestExpandedLiveWorkLogFollowsNewSteps(t *testing.T) {
 	if h.tt.HasText(steps25Fail[24].Output) {
 		t.Fatalf("failed step output expanded before a click")
 	}
-	if _, ok := inScroll(h, scrollBox, "make step-24"); !ok {
+	if _, ok := inScroll(h, scrollBox, "make step-24 · ERR 1"); !ok {
 		t.Fatalf("expanded live log did not keep failed step in view inside Work steps (%v)", scrollBox)
 	}
 	clickRect(h, head(t, h.tt, "make step-24"))
@@ -1023,16 +1023,23 @@ func TestAWorkLogOverflowingAShortThreadKeepsTheEndInView(t *testing.T) {
 	}
 }
 
-// stepButton is the bounds of the clickable step row button named name.
-func stepButton(t *testing.T, tt *ui.Tester, name string) ui.Rect {
+// stepAccess returns the accessibility node of the clickable step row button
+// named name (or name followed by its failure tag).
+func stepAccess(t *testing.T, tt *ui.Tester, name string) ui.AccessInfo {
 	t.Helper()
 	for _, n := range tt.AccessAll() {
-		if n.Role == ui.RoleButton && n.Name == name {
-			return n.Bounds
+		if n.Role == ui.RoleButton && (n.Name == name || strings.HasPrefix(n.Name, name+" · ")) {
+			return n
 		}
 	}
 	t.Fatalf("no button %q: %q", name, tt.Texts())
-	return ui.Rect{}
+	return ui.AccessInfo{}
+}
+
+// stepButton is the bounds of the clickable step row button named name.
+func stepButton(t *testing.T, tt *ui.Tester, name string) ui.Rect {
+	t.Helper()
+	return stepAccess(t, tt, name).Bounds
 }
 
 // Failed step error output drawers default collapsed everywhere (under a
@@ -1079,18 +1086,27 @@ func TestFailedWorkStepOutputDefaultsCollapsedAndToggles(t *testing.T) {
 		}
 	}
 
-	// Clicking each surfaced failed row under the folded work log toggles its output.
+	// Clicking each surfaced failed row under the folded work log toggles its output
+	// and updates its accessible expanded state while keeping failure status in its name.
 	for _, tc := range []struct {
-		label, out string
-		isCmd      bool
+		label, wantAccess, out string
+		isCmd                  bool
 	}{
-		{"go test ./...", cmdOut, true},
-		{"WebFetch https://example.com", toolOut, false},
-		{"Read missing.txt", readOut, false},
+		{"go test ./...", "go test ./... · ERR 1", cmdOut, true},
+		{"WebFetch https://example.com", "WebFetch https://example.com · ERR", toolOut, false},
+		{"Read missing.txt", "Read missing.txt · ERR", readOut, false},
 	} {
-		clickRect(h, stepButton(t, h.tt, tc.label))
+		before := stepAccess(t, h.tt, tc.label)
+		if before.Name != tc.wantAccess || before.Expanded {
+			t.Errorf("before click, button = (%q, expanded=%v), want (%q, false)", before.Name, before.Expanded, tc.wantAccess)
+		}
+		clickRect(h, before.Bounds)
 		if !h.tt.HasText(tc.out) {
 			t.Fatalf("folded, clicking %q did not open %q: %q", tc.label, tc.out, h.tt.Texts())
+		}
+		opened := stepAccess(t, h.tt, tc.label)
+		if opened.Name != tc.wantAccess || !opened.Expanded {
+			t.Errorf("after click, button = (%q, expanded=%v), want (%q, true)", opened.Name, opened.Expanded, tc.wantAccess)
 		}
 		if !tc.isCmd {
 			// Non-command failed steps should not duplicate w.Title as a drawer command block.
@@ -1104,9 +1120,12 @@ func TestFailedWorkStepOutputDefaultsCollapsedAndToggles(t *testing.T) {
 				t.Errorf("non-command failed drawer duplicated title %q (%d RoleText nodes)", tc.label, nText)
 			}
 		}
-		clickRect(h, stepButton(t, h.tt, tc.label))
+		clickRect(h, opened.Bounds)
 		if h.tt.HasText(tc.out) {
 			t.Fatalf("folded, second click on %q did not collapse %q", tc.label, tc.out)
+		}
+		if closed := stepAccess(t, h.tt, tc.label); closed.Expanded {
+			t.Errorf("after second click, %q still reports Expanded=true", closed.Name)
 		}
 	}
 
@@ -1218,5 +1237,117 @@ func TestFailedWorkErrorDrawerAtEndKeepsEndInView(t *testing.T) {
 	}
 	if r := stepButton(t, h.tt, "go test ./pkg/broken"); math.Abs(float64(r.Y-rowBefore.Y)) > 1 || l.AtEnd() {
 		t.Errorf("scrolled up, collapsing error drawer moved row from Y=%v to Y=%v (atEnd=%v)", rowBefore.Y, r.Y, l.AtEnd())
+	}
+}
+
+// Failed edits (file >= 0) and failed subagent steps with output keep their
+// primary row click opening the diff or subagent panel while exposing a
+// sibling error-drawer toggle that expands and collapses w.Output without
+// navigating.
+func TestFailedWorkEditAndSubagentErrorToggle(t *testing.T) {
+	at := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	exit0 := 0
+	run := api.NewID()
+	const (
+		editOut = "old_string not found in main.go"
+		subOut  = "subagent timed out after 30s"
+	)
+	es := []client.Entry{
+		&client.UserEntry{Message: api.NewID(), Text: "Apply changes.", State: client.Sent},
+		&client.WorkEntry{Run: run, Started: at, Ended: at.Add(5 * time.Second), Items: []client.WorkStep{
+			{Item: "c1", Kind: "command", Title: "go build ./...", Status: api.WorkCompleted, Exit: &exit0, Started: at, Ended: at},
+			{Item: "e1", Kind: "edit", Title: "Edit main.go", Path: "main.go", Status: api.WorkFailed, Output: editOut, Started: at, Ended: at},
+			{Item: "s1", Kind: "tool", Title: "Agent alpha", Status: api.WorkFailed, Subagent: &client.Subagent{}, Output: subOut, Started: at, Ended: at},
+		}},
+		&client.AssistantEntry{Run: run, Text: "Both failed."},
+	}
+	h, th := zenThread(t, es, false, "Both failed.")
+	const summary = "Ran 1 command · made 1 edit · started 1 subagent"
+
+	buttonByName := func(name string) ui.AccessInfo {
+		t.Helper()
+		for _, n := range h.tt.AccessAll() {
+			if n.Role == ui.RoleButton && n.Name == name {
+				return n
+			}
+		}
+		t.Fatalf("no RoleButton %q: %q", name, h.tt.Texts())
+		return ui.AccessInfo{}
+	}
+	rowButtonContaining := func(sub string) ui.Rect {
+		t.Helper()
+		for _, n := range h.tt.AccessAll() {
+			if n.Role == ui.RoleButton && strings.Contains(n.Name, sub) && !strings.HasPrefix(n.Name, "Show error") && !strings.HasPrefix(n.Name, "Hide error") {
+				return n.Bounds
+			}
+		}
+		t.Fatalf("no row button containing %q: %q", sub, h.tt.Texts())
+		return ui.Rect{}
+	}
+
+	checkToggles := func(where string) {
+		t.Helper()
+		if h.tt.HasText(editOut) || h.tt.HasText(subOut) {
+			t.Fatalf("%s: error output expanded before click", where)
+		}
+		// Failed edit toggle: expands/collapses without opening diff.
+		showEdit := buttonByName("Show error: Edit main.go")
+		if showEdit.Expanded {
+			t.Errorf("%s: edit error toggle starts Expanded=true", where)
+		}
+		clickRect(h, showEdit.Bounds)
+		if !h.tt.HasText(editOut) {
+			t.Fatalf("%s: edit error toggle did not show %q", where, editOut)
+		}
+		if h.a.showDiff {
+			t.Fatalf("%s: edit error toggle opened diff panel", where)
+		}
+		hideEdit := buttonByName("Hide error: Edit main.go")
+		if !hideEdit.Expanded {
+			t.Errorf("%s: open edit error toggle reports Expanded=false", where)
+		}
+		clickRect(h, hideEdit.Bounds)
+		if h.tt.HasText(editOut) || h.a.showDiff {
+			t.Fatalf("%s: second edit error toggle failed to collapse or opened diff (showDiff=%v)", where, h.a.showDiff)
+		}
+
+		// Failed subagent toggle: expands/collapses without opening subagent panel.
+		showSub := buttonByName("Show error: Agent alpha")
+		if showSub.Expanded {
+			t.Errorf("%s: subagent error toggle starts Expanded=true", where)
+		}
+		clickRect(h, showSub.Bounds)
+		if !h.tt.HasText(subOut) {
+			t.Fatalf("%s: subagent error toggle did not show %q", where, subOut)
+		}
+		if h.a.subagentStep[th.id()] != (subagentSel{}) {
+			t.Fatalf("%s: subagent error toggle opened subagent panel: %+v", where, h.a.subagentStep[th.id()])
+		}
+		hideSub := buttonByName("Hide error: Agent alpha")
+		if !hideSub.Expanded {
+			t.Errorf("%s: open subagent error toggle reports Expanded=false", where)
+		}
+		clickRect(h, hideSub.Bounds)
+		if h.tt.HasText(subOut) || h.a.subagentStep[th.id()] != (subagentSel{}) {
+			t.Fatalf("%s: second subagent error toggle failed to collapse or navigated (%+v)", where, h.a.subagentStep[th.id()])
+		}
+	}
+
+	// 1. Folded work log ("kept" rows).
+	checkToggles("folded")
+
+	// 2. Expanded work log.
+	clickRect(h, head(t, h.tt, summary))
+	checkToggles("expanded")
+	clickRect(h, head(t, h.tt, summary))
+
+	// 3. Primary row clicks still navigate to the diff and subagent panel.
+	clickRect(h, rowButtonContaining("Edit main.go"))
+	if !h.a.showDiff || h.a.diffFile[th.id()] != "main.go" {
+		t.Fatalf("clicking failed edit row did not open diff: showDiff=%v file=%q", h.a.showDiff, h.a.diffFile[th.id()])
+	}
+	clickRect(h, rowButtonContaining("Agent alpha"))
+	if got, want := h.a.subagentStep[th.id()], (subagentSel{run, "s1"}); got != want {
+		t.Fatalf("clicking failed subagent row opened %+v, want %+v", got, want)
 	}
 }
