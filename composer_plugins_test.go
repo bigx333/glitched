@@ -314,3 +314,106 @@ func TestGlitchedsStopAndAccessSignKeepTheirRoom(t *testing.T) {
 	}
 	h.until("the turn stopped", func() bool { return !h.a.current().View.Live() })
 }
+
+// With a stoppable thread and nothing in the composer, Glitched renders
+// exactly one Stop button in both built-in plugin and fallback modes, never
+// two side by side. With a draft, Stop sits to the left of Send. With a
+// third-party composer.send replacement, Glitched still keeps its own Stop
+// beside the plugin's control.
+func TestComposerStopButtonNotDuplicated(t *testing.T) {
+	h, _ := questioning(t, fake.Asking())
+	countLabel := func(label string) int {
+		n := 0
+		for _, s := range h.tt.Texts() {
+			if s == label {
+				n++
+			}
+		}
+		return n
+	}
+	assertCounts := func(step string, wantStop, wantSend int) {
+		t.Helper()
+		if got := countLabel("Stop"); got != wantStop {
+			t.Fatalf("%s: got %d Stop buttons, want %d; texts: %q", step, got, wantStop, h.tt.Texts())
+		}
+		if got := countLabel("Send"); got != wantSend {
+			t.Fatalf("%s: got %d Send buttons, want %d; texts: %q", step, got, wantSend, h.tt.Texts())
+		}
+	}
+
+	// Empty composer + built-in composer-send enabled: first frame and settled.
+	h.tt.Frame()
+	assertCounts("built-in enabled (first frame)", 1, 0)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Advance(time.Second)
+	assertCounts("built-in enabled (settled)", 1, 0)
+
+	// Empty composer + built-in composer-send disabled (fallback): immediate frame and settled.
+	if err := h.a.plugins.SetEnabled("composer-send", false); err != nil {
+		t.Fatal(err)
+	}
+	h.tt.Frame()
+	assertCounts("fallback (first frame)", 1, 0)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Advance(time.Second)
+	assertCounts("fallback (settled)", 1, 0)
+
+	// Non-empty draft + fallback: Queue, Stop, Send in left-to-right order.
+	h.a.draft = "Steer this."
+	h.tt.Frame()
+	assertCounts("draft + fallback", 1, 1)
+	stopR, ok := h.tt.Find("Stop")
+	if !ok {
+		t.Fatal("draft + fallback: Stop not found")
+	}
+	sendR, ok := h.tt.Find("Send")
+	if !ok {
+		t.Fatal("draft + fallback: Send not found")
+	}
+	if !(stopR.X < sendR.X) {
+		t.Fatalf("draft + fallback: Stop (x=%v) is not left of Send (x=%v)", stopR.X, sendR.X)
+	}
+	if queueR, ok := h.tt.Find("Queue"); !ok || !(queueR.X < stopR.X) {
+		t.Fatalf("draft + fallback: Queue (ok=%v, x=%v) is not left of Stop (x=%v)", ok, queueR.X, stopR.X)
+	}
+
+	// Non-empty draft + built-in composer-send re-enabled: Stop left of Send.
+	if err := h.a.plugins.SetEnabled("composer-send", true); err != nil {
+		t.Fatal(err)
+	}
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Advance(time.Second)
+	assertCounts("draft + built-in", 1, 1)
+	stopR, _ = h.tt.Find("Stop")
+	sendR, _ = h.tt.Find("Send")
+	if !(stopR.X < sendR.X) {
+		t.Fatalf("draft + built-in: Stop (x=%v) is not left of Send (x=%v)", stopR.X, sendR.X)
+	}
+
+	// Clear draft again with built-in enabled: still 1 Stop, 0 Send.
+	h.a.draft = ""
+	h.tt.Frame()
+	assertCounts("draft cleared + built-in", 1, 0)
+
+	// Third-party composer.send replacer + empty composer: Glitched keeps its own Stop beside My send.
+	writeOwnPlugin(t, h.a, "my-send", sendManifest, sendPlugin("send"))
+	h.a.plugins.SetGranted("my-send", "ui.replace", true)
+	h.a.plugins.SetGranted("my-send", "threads:write", true)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Advance(time.Second)
+	assertCounts("third-party replacer + empty draft", 1, 0)
+	mySendR, ok := h.tt.Find("My send")
+	if !ok {
+		t.Fatalf("third-party replacer did not render My send: %q", h.tt.Texts())
+	}
+	stopR, ok = h.tt.Find("Stop")
+	if !ok || !(stopR.X < mySendR.X) {
+		t.Fatalf("third-party replacer: Stop (ok=%v, x=%v) is not left of My send (x=%v)", ok, stopR.X, mySendR.X)
+	}
+
+	// Third-party replacer fails back to built-in: still exactly 1 Stop button.
+	writeOwnPlugin(t, h.a, "my-send", sendManifest, brokenModule)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Advance(time.Second)
+	assertCounts("broken third-party fallback to built-in", 1, 0)
+}

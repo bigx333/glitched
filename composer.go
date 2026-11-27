@@ -714,20 +714,21 @@ func (a *app) sendControl(c *ui.Context, t thread, keys bool) {
 	// The native circular Send is itself Stop with nothing to send, as it
 	// is in Glitched's fallback and the built-in's native drawing. Only a
 	// replacement of someone else's needs Glitched's own Stop then; with a
-	// draft, Stop always stands beside what Send does.
-	nativeStop := false
-	if drawn := a.frameOf("composer.send").drawn["composer.send"]; drawn != nil && len(drawn.copies) == 1 {
-		nativeStop = drawn.copies[0].plugin == "" || drawn.copies[0].builtin
-	}
-	if t.View.Stoppable() && (a.message(t) != "" || !nativeStop) {
-		if a.message(t) != "" && activeTurn(t.View) {
-			a.queueButton(c, t)
+	// draft, Stop always stands beside what Send does. Decided inside
+	// pluginComponent right before the copy draws so this frame uses its
+	// own winner with no stale frame lookup or one-frame flicker.
+	before := func(by copyDrawn) {
+		nativeStop := by.plugin == "" || by.builtin
+		if t.View.Stoppable() && (a.message(t) != "" || !nativeStop) {
+			if a.message(t) != "" && activeTurn(t.View) {
+				a.queueButton(c, t)
+			}
+			a.stopButton(c, t).Shrink(0)
 		}
-		a.stopButton(c, t).Shrink(0)
 	}
 	if !a.pluginComponent(c, "composer.send", &t, componentCopy{key: composerKey(t), box: box, builtinBox: func() ui.Element {
 		return ui.Row(c).Key("send-plugin").AlignItems(ui.Center).Shrink(0)
-	}, context: ctx}) {
+	}, context: ctx, before: before}) {
 		a.sendButton(c, t, keys)
 		return
 	}

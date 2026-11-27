@@ -61,6 +61,9 @@ type componentCopy struct {
 	// as for its first drawing, so that what it shows keeps up with the
 	// app's own state, as the sidebar's threads moving between sections.
 	current bool
+	// before, when set, runs right before the copy draws (including before
+	// fallback or with no plugin host), with who is drawing it in this frame.
+	before func(copyDrawn)
 }
 
 // fallback draws the copy's native body of the component name, in the
@@ -103,6 +106,9 @@ func (a *app) fallback(c *ui.Context, name string, t *thread, cp componentCopy) 
 func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...componentCopy) bool {
 	if a.plugins == nil {
 		for _, cp := range copies {
+			if cp.before != nil {
+				cp.before(copyDrawn{glitched: cp.native != nil || cp.builtin != nil})
+			}
 			a.fallback(c, name, t, cp)
 		}
 		return false
@@ -215,12 +221,18 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 			drewAll = false
 			by.glitched = cp.native != nil || cp.builtin != nil
 			drawn.copies = append(drawn.copies, by)
+			if cp.before != nil {
+				cp.before(by)
+			}
 			a.fallback(c, name, t, cp)
 			continue
 		}
 		by.plugin = d.pl.Plugin
 		by.builtin = d.app.Builtin
 		drawn.copies = append(drawn.copies, by)
+		if cp.before != nil {
+			cp.before(by)
+		}
 		// The built-in's drawing of the copy as it was, as a message's
 		// note before it failed, is Glitched's of it as it is.
 		if cp.builtin != nil && d.app.Builtin && d.app.Answered(d.pl.Place.ID, cp.key) != d.version {
