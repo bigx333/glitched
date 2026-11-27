@@ -107,14 +107,20 @@ func TestIdleCompactWindowWaitsForASnooze(t *testing.T) {
 }
 
 func TestIdleCompactWindowAntigravityGeminiOnly(t *testing.T) {
+	if engine.AntigravityCacheTTL != time.Hour {
+		t.Fatalf("AntigravityCacheTTL = %v, want %v", engine.AntigravityCacheTTL, time.Hour)
+	}
 	base := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 
 	gemini, run := makeIdleThread("antigravity", "gemini-3.8-flash", "ag-1", engine.MinIdleCompactTokens, base, time.Time{})
 	after, start, end, ok := engine.IdleCompactWindow(gemini, base.Add(5*time.Minute))
-	wantStart := base.Add(engine.AntigravityCacheTTL * 9 / 10)
-	wantEnd := wantStart.Add(engine.CompactLapse)
+	wantStart := base.Add(54 * time.Minute)
+	wantEnd := base.Add(55 * time.Minute)
 	if !ok || after != run || !start.Equal(wantStart) || !end.Equal(wantEnd) {
 		t.Fatalf("antigravity gemini window = (%v, %v, %v, %v), want (%v, %v, %v, true)", after, start, end, ok, run, wantStart, wantEnd)
+	}
+	if !wantStart.Equal(base.Add(engine.AntigravityCacheTTL*9/10)) || !wantEnd.Equal(wantStart.Add(engine.CompactLapse)) {
+		t.Fatalf("expected 54m..55m window to match 90%% of %v + %v", engine.AntigravityCacheTTL, engine.CompactLapse)
 	}
 	if !wantEnd.Before(base.Add(engine.AntigravityCacheTTL)) {
 		t.Errorf("the window closes at %v, after the cache lapses at %v", wantEnd, base.Add(engine.AntigravityCacheTTL))
