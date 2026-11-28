@@ -24,7 +24,7 @@ import (
 func (a *app) composerMorph(host ui.Element, t thread, laid bool) {
 	id := t.id()
 	if !a.composerSeen[id] {
-		if !laid && !a.listFor(id).AtEnd() {
+		if !laid && !a.atEnd(id) {
 			a.composerRest, a.composerK, a.jumpK = false, 1, 0
 			host.Jump("composer:"+id.String(), 1)
 			host.Jump("jump:"+id.String(), 0)
@@ -41,7 +41,7 @@ func (a *app) composerMorph(host ui.Element, t thread, laid bool) {
 	k := clamp01(host.AnimateTo("composer:"+id.String(), target, anim))
 	a.composerRest, a.composerK = k == a.composerK && (k == 0 || k == 1), k
 	target, anim = 0, composerClose
-	if !a.listFor(id).AtEnd() {
+	if !a.atEnd(id) {
 		target, anim = 1, composerOpen
 	}
 	a.jumpK = clamp01(host.AnimateTo("jump:"+id.String(), target, anim))
@@ -81,7 +81,7 @@ func clamp01(v float32) float32 { return min(1, max(0, v)) }
 // composerCompact reports whether the composer is compact: away from the
 // end of the thread, not clicked open, holding nothing.
 func (a *app) composerCompact(t thread) bool {
-	if !a.composerSeen[t.id()] || a.listFor(t.id()).AtEnd() {
+	if !a.composerSeen[t.id()] || a.atEnd(t.id()) {
 		a.composerOpened = false
 		return false
 	}
@@ -903,7 +903,7 @@ func (a *app) sendAs(t thread, text, about string, mode api.DispatchMode) bool {
 		return false
 	}
 	a.steers[cmd] = steer{t.env, id}
-	a.listFor(id).ScrollToEnd()
+	a.scrollToEnd(id)
 	return true
 }
 
