@@ -1,0 +1,17 @@
+{
+  "id": "managers",
+  "name": "Managers",
+  "version": "0.1.0",
+  "description": "Manager thread header pills, sweep schedule popover, and Overview panel toggle.",
+  "author": "Glitched",
+  "main": "main.ts",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "threads:read", "threads:write"],
+  "glitched": {
+    "places": [
+      { "id": "pills", "at": "thread.header" }
+    ],
+    "events": ["place.shown", "place.hidden"]
+  }
+}

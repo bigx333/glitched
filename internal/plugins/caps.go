@@ -75,6 +75,7 @@ var Effects = map[string]string{
 	"threads.markRead":       "threads:write",
 	"threads.interrupt":      "threads:write",
 	"threads.configure":      "threads:write",
+	"threads.sweepNow":       "threads:write",
 	"threads.setAccess":      "threads:access",
 	"composer.submit":        "threads:write",
 	"composer.quote":         "threads:write",

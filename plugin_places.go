@@ -43,9 +43,21 @@ func (a *app) threadRecord(t thread) plugins.ThreadRecord {
 		Requests:    len(t.View.Requests),
 		Tokens:      t.View.Tokens,
 		Local:       t.local(),
+		Role:        t.View.Role,
 	}
-	if isManager(t) && !a.nested(t) {
-		r.Section = "managers"
+	if isManager(t) {
+		r.Sweep = effectiveSweep(t)
+		needs, active := a.managerAttention(t)
+		r.Manager = &plugins.ManagerHeader{
+			SweepTiming:  sweepTiming(t, a.now),
+			SweepBlocked: sweepBlocked(t),
+			Needs:        needs,
+			Active:       active,
+			OverviewOpen: t.id() == a.selected && a.managerPanelShown(t),
+		}
+		if !a.nested(t) {
+			r.Section = "managers"
+		}
 	}
 	if p, ok := a.parentOf(t); ok {
 		r.Parent = p.id().String()
@@ -75,7 +87,21 @@ func recordVersion(r plugins.ThreadRecord) string {
 		d = r.Disposition.State + " " + r.Disposition.Until
 	}
 	return strings.Join([]string{r.Title, r.Workspace, r.Status, r.Machine, r.UpdatedAt, r.Section, d, strconv.FormatBool(r.Unread),
-		r.Parent, strings.Join(r.Ancestors, ","), strings.Join(r.Children, ","), strconv.Itoa(r.Requests), strconv.FormatInt(r.Tokens, 10), strconv.FormatBool(r.Local), skillsVersion(r.Skills)}, "\x00")
+		r.Parent, strings.Join(r.Ancestors, ","), strings.Join(r.Children, ","), strconv.Itoa(r.Requests), strconv.FormatInt(r.Tokens, 10), strconv.FormatBool(r.Local), skillsVersion(r.Skills), string(r.Role), sweepVersion(r.Sweep), managerHeaderVersion(r.Manager)}, "\x00")
+}
+
+func sweepVersion(s *api.SweepSchedule) string {
+	if s == nil {
+		return ""
+	}
+	return strconv.FormatInt(s.IntervalSeconds, 10) + "\x01" + s.Prompt
+}
+
+func managerHeaderVersion(m *plugins.ManagerHeader) string {
+	if m == nil {
+		return ""
+	}
+	return strings.Join([]string{m.SweepTiming, strconv.FormatBool(m.SweepBlocked), strconv.Itoa(m.Needs), strconv.Itoa(m.Active), strconv.FormatBool(m.OverviewOpen)}, "\x01")
 }
 
 // skillsVersion is a header's skills as its record's version counts them.
@@ -191,7 +217,9 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread, compact, know
 			ctx, version = r, recordVersion(r)
 		}
 		if compact {
-			version += " compact"
+			version += "\x00compact"
+		} else {
+			version += "\x00full"
 		}
 		fk := [2]string{pl.Plugin, pl.Place.ID}
 		f.items[fk] = append(f.items[fk], plugins.PlaceItem{Key: key, Version: version, Context: ctx, Compact: compact})
@@ -202,7 +230,7 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread, compact, know
 		// Drawn at this width: a record that changes as the thread runs
 		// doesn't count.
 		v := app.Answered(pl.Place.ID, key)
-		drawn = drawn && (app.Err != nil || v != "" && strings.HasSuffix(v, " compact") == compact)
+		drawn = drawn && (app.Err != nil || v != "" && strings.HasSuffix(v, "\x00compact") == compact)
 		if node := app.PlaceView(pl.Place.ID, key); node != nil {
 			copies = append(copies, drawing{pl, ctx, app, node})
 		}

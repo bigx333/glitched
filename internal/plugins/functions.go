@@ -69,6 +69,7 @@ globalThis.glitched = Object.freeze({
     markRead: (thread) => app("threads.markRead", { thread }),
     interrupt: (thread) => app("threads.interrupt", { thread }),
     configure: (thread, options = {}) => app("threads.configure", { ...options, thread }),
+    sweepNow: (thread) => app("threads.sweepNow", { thread }),
     setAccess: (thread, access) => app("threads.setAccess", { thread: thread ?? "", access }),
   }),
   skills: Object.freeze({ list: (thread) => app("skills.list", { thread }) }),

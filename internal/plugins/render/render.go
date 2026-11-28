@@ -629,7 +629,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			return
 		}
 		if n.Style == "count" {
-			ui.Text(kc, n.Text).FontSize(11).TextColor(st.Muted).Padding(0, 6).Radius(999).Background(st.Hover)
+			r.tip(c, ui.Text(kc, n.Text).FontSize(11).TextColor(st.Muted).Padding(0, 6).Radius(999).Background(st.Hover), n.Tooltip)
 			return
 		}
 		col := map[string]ui.Color{"accent": st.Accent, "success": st.Green, "warning": st.Amber, "danger": st.Red}[n.Style]
@@ -639,7 +639,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		if c, ok := st.color(n.Color); ok {
 			col = c
 		}
-		ui.Text(kc, n.Text).FontSize(11).FontWeight(600).TextColor(col).Padding(1, 6).Radius(5).Background(col.Alpha(0.14))
+		r.tip(c, ui.Text(kc, n.Text).FontSize(11).FontWeight(600).TextColor(col).Padding(1, 6).Radius(5).Background(col.Alpha(0.14)), n.Tooltip)
 	case "divider":
 		if n.Style == "vertical" {
 			ui.Box(kc).Width(1).AlignSelf(ui.Stretch).Background(st.Border)

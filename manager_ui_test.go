@@ -23,9 +23,11 @@ import (
 
 func TestManagerUIHeaderSweepAndWakeDismiss(t *testing.T) {
 	dir := tempDir(t)
+	installOwn(t, dir, "managers")
 	h := startWith(t, dir, func(c *daemon.Config) {
 		c.Providers = daemon.FakeProviders(fake.New(fake.Turn(true)))
 	})
+	h.grantManagers()
 
 	ws := gitWorkspace(t)
 	mgrID := h.a.backend.CreateManager(h.local(), ws, "Workspace Coordinator", api.ModelRef{Provider: "claude", Model: "claude-opus-5-5"}, api.AccessAutoEdits, &api.SweepSchedule{IntervalSeconds: 1800})
@@ -36,23 +38,21 @@ func TestManagerUIHeaderSweepAndWakeDismiss(t *testing.T) {
 
 	h.a.selected = mgrID
 	h.a.backend.OpenThread(h.local(), mgrID)
-	h.tt.Advance(time.Second)
+	h.until("the Manager's pills", func() bool {
+		h.tt.Frame()
+		_, m := h.inHeader("Manager")
+		_, s := h.inHeader("Sweep 30m")
+		return m && s
+	})
 
-	if !h.tt.HasText("Manager") || !h.tt.HasText("Sweep 30m") {
-		t.Fatalf("header missing Manager/Sweep 30m pills: %q", h.tt.Texts())
-	}
-
-	h.click("Sweep 30m")
+	h.clickHeaderPlugin("Sweep 30m")
 	h.until("the sweep popover", func() bool { h.tt.Frame(); return h.tt.HasText("Sweep schedule") })
-	h.click("Sweep every 1h")
+	h.clickPlugin("Sweep every 1h")
 	h.until("sweep updated to 1h", func() bool {
 		th := h.local().Threads[mgrID]
 		return th != nil && th.View.Sweep != nil && th.View.Sweep.IntervalSeconds == 3600
 	})
-	h.tt.Frame()
-	if !h.tt.HasText("Sweep 1h") {
-		t.Fatalf("expected updated Sweep 1h pill, got %q", h.tt.Texts())
-	}
+	h.until("Sweep 1h pill", func() bool { h.tt.Frame(); _, ok := h.inHeader("Sweep 1h"); return ok })
 
 	runID := h.a.backend.Send(h.local(), mgrID, "sweep turn", api.StartNow)
 	h.until("manager turn waiting", func() bool {
@@ -179,9 +179,32 @@ func TestManagerSweepCadenceKeepsItsPrompt(t *testing.T) {
 // which the workers titled workers run, in the workspace ws, which docs
 // fill once they have: the docs go into the Manager's prompt, which the
 // fake spawner reads.
+func (h *harness) grantManagers() {
+	h.t.Helper()
+	for _, c := range []string{"threads:read", "threads:write"} {
+		if err := h.a.plugins.SetGranted("managers", c, true); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+}
+
+func (h *harness) clickHeaderPlugin(text string) {
+	h.t.Helper()
+	var r ui.Rect
+	h.until(text+" in header", func() bool {
+		h.tt.Frame()
+		var ok bool
+		r, ok = h.inHeader(text)
+		return ok
+	})
+	h.tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
+	settlePlugins(h.t, h.a, h.tt, h.p)
+}
+
 func managerFixture(t *testing.T, ws string, docs map[string]string, workers ...string) (*harness, api.ID) {
 	t.Helper()
 	dir := tempDir(t)
+	installOwn(t, dir, "managers")
 	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
 	seed(t, d, ws, "A plain thread")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -202,6 +225,7 @@ func managerFixture(t *testing.T, ws string, docs map[string]string, workers ...
 		}
 	}
 	h := start(t, dir)
+	h.grantManagers()
 	h.thread("The coordinator")
 	h.thread("A plain thread")
 	for _, w := range workers {
@@ -337,35 +361,53 @@ func TestManagerDialogMakesAManagerAndOpensItsOverview(t *testing.T) {
 // The header's sweep pill opens a popover whose cadences keep the
 // Manager's prompt, through Off too, and whose Run sweep now sweeps.
 func TestManagerSweepPopoverKeepsThePromptAndSweeps(t *testing.T) {
-	h := start(t, tempDir(t))
+	dir := tempDir(t)
+	installOwn(t, dir, "managers")
+	h := start(t, dir)
+	h.grantManagers()
 	const prompt = "Only check release blockers"
 	id := h.a.backend.CreateManager(h.local(), t.TempDir(), "Manager", fakeModel, api.AccessAsk, &api.SweepSchedule{IntervalSeconds: 14400, Prompt: prompt})
 	h.until("the Manager", func() bool { th := h.local().Threads[id]; return th != nil && th.View.Revision > 0 })
 	h.a.select_(thread{h.local(), h.local().Threads[id]})
 	sweep := func() *api.SweepSchedule { return h.local().Threads[id].View.Sweep }
-	h.click("Sweep 4h")
+	h.clickHeaderPlugin("Sweep 4h")
 	h.until("the popover", func() bool { h.tt.Frame(); return h.tt.HasText("Sweep schedule") })
 	for _, step := range []struct {
 		click  string
 		secs   int64
 		header string
 	}{{"Sweep every 1h", 3600, "Sweep 1h"}, {"Sweeps off", 0, "Sweep off"}, {"Sweep every 15m", 900, "Sweep 15m"}} {
-		h.click(step.click)
+		h.clickPlugin(step.click)
 		h.until(step.header, func() bool {
 			h.tt.Frame()
 			s := sweep()
-			return s != nil && s.IntervalSeconds == step.secs && h.tt.HasText(step.header)
+			_, in := h.inHeader(step.header)
+			return s != nil && s.IntervalSeconds == step.secs && in
 		})
 		if s := sweep(); s.Prompt != prompt {
 			t.Fatalf("after %s the prompt is %q, want %q", step.click, s.Prompt, prompt)
 		}
 	}
-	h.click("Run sweep now")
+	h.clickPlugin("Run sweep now")
 	h.until("a sweep", func() bool { return !h.local().Threads[id].View.LastSweep.IsZero() })
-	h.tt.Frame()
-	if h.tt.HasText("Sweep schedule") {
-		t.Errorf("Run sweep now left the popover open")
-	}
+	h.until("popover closed", func() bool { h.tt.Frame(); return !h.tt.HasText("Sweep schedule") })
+}
+
+func TestManagerSweepPromptEndingInCompactShowsHeaderPills(t *testing.T) {
+	dir := tempDir(t)
+	installOwn(t, dir, "managers")
+	h := start(t, dir)
+	h.grantManagers()
+	id := h.a.backend.CreateManager(h.local(), t.TempDir(), "Compact Prompt Coordinator", fakeModel, api.AccessAsk, &api.SweepSchedule{IntervalSeconds: 1800, Prompt: "Keep output compact"})
+	h.until("the Manager", func() bool { th := h.local().Threads[id]; return th != nil && th.View.Revision > 0 })
+	h.a.select_(thread{h.local(), h.local().Threads[id]})
+	h.until("the Manager's pills", func() bool {
+		h.tt.Frame()
+		_, m := h.inHeader("Manager")
+		_, s := h.inHeader("Sweep 30m")
+		_, o := h.inHeader("Overview")
+		return m && s && o
+	})
 }
 
 // The overview lists what needs the user, the workers and the shared
@@ -377,11 +419,19 @@ func TestManagerOverviewShowsWorkersDocsAndWhatNeedsYou(t *testing.T) {
 	mgr := thread{h.local(), h.local().Threads[id]}
 	h.a.select_(mgr)
 	h.until("the overview's button", func() bool { h.tt.Frame(); return h.tt.HasText("Overview") })
-	h.click("Overview")
+	h.clickPlugin("Overview")
 	h.until("the overview", func() bool {
 		h.tt.Frame()
 		return h.tt.HasText("WORKERS") && h.tt.HasText("AGENTS.md") && h.tt.HasText("Worker two")
 	})
+	otherID := h.a.backend.CreateManager(h.local(), ws, "Other Manager", fakeModel, api.AccessAsk, &api.SweepSchedule{IntervalSeconds: 1800})
+	h.until("other manager", func() bool { th := h.local().Threads[otherID]; return th != nil && th.View.Revision > 0 })
+	if got := h.a.threadRecord(mgr).Manager; got == nil || !got.OverviewOpen {
+		t.Fatalf("selected Manager record OverviewOpen = %+v, want true", got)
+	}
+	if got := h.a.threadRecord(thread{h.local(), h.local().Threads[otherID]}).Manager; got == nil || got.OverviewOpen {
+		t.Fatalf("unselected Manager record OverviewOpen = %+v, want false", got)
+	}
 	h.until("the docs", func() bool {
 		h.tt.Frame()
 		return h.tt.HasText("Not created") && h.tt.HasText(fileSize(int64(len(agents))))
@@ -426,23 +476,34 @@ func TestManagerSweepEditsComposeAndPreserveDraft(t *testing.T) {
 	const draft = "Check nightly failures first"
 	h.a.mgr.promptFor = id
 	h.a.mgr.promptDraft = draft
-	h.a.toggleSweepPopover(mgr)
+	h.clickHeaderPlugin("Sweep 1h")
+	h.until("sweep popover open", func() bool { h.tt.Frame(); return h.tt.HasText("Sweep schedule") })
 	if h.a.mgr.promptDraft != draft {
 		t.Fatalf("opening sweep popover wiped draft: got %q, want %q", h.a.mgr.promptDraft, draft)
 	}
-	h.tt.Frame()
-	if !h.tt.HasText("Sweep 1h") {
-		t.Fatalf("header pill did not reflect pending 1h cadence: %q", h.tt.Texts())
-	}
 
-	// Saving the prompt composes with the pending 1h cadence rather than reverting to 30m.
-	h.a.mgr.sweepPopover = api.ID{}
-	h.tt.Frame()
+	// Saving the prompt in Overview composes with the pending 1h cadence rather than reverting to 30m.
+	h.clickHeaderPlugin("Sweep 1h")
+	h.until("sweep popover closed", func() bool { h.tt.Frame(); return !h.tt.HasText("Sweep schedule") })
 	h.click("Save prompt")
 	h.until("composed sweep saved", func() bool {
 		s := h.local().Threads[id].View.Sweep
 		return s != nil && s.IntervalSeconds == 3600 && s.Prompt == draft
 	})
+
+	// Clear the synthetic pending entry and verify an untouched Overview draft refreshes when saved elsewhere.
+	mgr.Thread.Pending = nil
+	h.tt.Frame()
+	const headerPrompt = "Saved from header popover"
+	h.a.backend.SetSweep(h.local(), id, &api.SweepSchedule{IntervalSeconds: 3600, Prompt: headerPrompt})
+	h.until("header prompt persisted", func() bool {
+		s := h.local().Threads[id].View.Sweep
+		return s != nil && s.Prompt == headerPrompt
+	})
+	h.tt.Frame()
+	if h.a.mgr.promptDraft != headerPrompt {
+		t.Fatalf("untouched Overview draft = %q, want %q", h.a.mgr.promptDraft, headerPrompt)
+	}
 }
 
 func TestManagerNeedsYouIncludesFailedManagerAndRemoteWaitingWorker(t *testing.T) {

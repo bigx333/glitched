@@ -72,6 +72,7 @@ var pluginIcons = map[string]*ui.SVG{
 	"zap":      icZap,
 	"folder":   icFolder,
 	"message":  icMessage,
+	"manager":  icManager,
 }
 
 // releaseKeys are the keys that sign the built-in plugins.
@@ -644,6 +645,8 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		}), nil
 	case "threads.configure":
 		return a.configureEffect(e.Args)
+	case "threads.sweepNow":
+		return a.sweepNowEffect(e.Args)
 	case "threads.setAccess":
 		return a.setAccessEffect(e.Args)
 	case "composer.submit":
