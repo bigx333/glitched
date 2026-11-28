@@ -28,6 +28,9 @@ var queueEdges = edges[QueueState]{
 	QueueReady:   {QueueClaimed, QueueCancelled, QueueHeld},
 	QueueHeld:    {QueueClaimed, QueueCancelled, QueueReady},
 	QueueClaimed: {QueueDispatched, QueueCancelled, QueueUncertain},
+	// A steer the agent was sent is cancelled when the stopped run ends
+	// without having read it.
+	QueueDispatched: {QueueCancelled},
 }
 
 // An answer commits with the effect that delivers it, so only that effect

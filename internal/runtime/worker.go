@@ -234,7 +234,7 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 
 	case engine.SteerTurn:
 		o = engine.Steered{Message: b.Message}
-		if err = h.act(b.Run, provider.Steer{Text: b.Text}); errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		if err = h.act(b.Run, provider.Steer{Text: b.Text, Message: b.Message}); errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			o = engine.SteerLost{Message: b.Message}
 		} else if err != nil {
 			o = engine.SteerFailed{Message: b.Message, Error: secrets.Redact(err.Error(), h.credentials(e.Thread))}

@@ -228,3 +228,164 @@ func TestStoppingACompactionHoldsNothing(t *testing.T) {
 		t.Fatal("the stopped compaction ended and the wake waited; want the wake's turn")
 	}
 }
+
+// steering is a running turn the user steered with "hurry", which the
+// agent was sent, and then stopped.
+func steering(t *testing.T) (*thread, api.ID, api.ID) {
+	f, run := running(t)
+	steer := f.must(dispatch("hurry", api.SteerActive))
+	f.observe(engine.Steered{Message: steer})
+	f.must(api.TurnInterrupt{})
+	return f, run, steer
+}
+
+func cancelled(evs []engine.Event) []api.MessageCancelled {
+	var out []api.MessageCancelled
+	for _, e := range evs {
+		if c, ok := e.Body.(api.MessageCancelled); ok {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func endedAt(evs []engine.Event) (int, api.TurnEnded) {
+	for i, e := range evs {
+		if b, ok := e.Body.(api.TurnEnded); ok {
+			return i, b
+		}
+	}
+	return -1, api.TurnEnded{}
+}
+
+// A steer the agent was sent but never read, as the stop came first, is
+// cancelled with the turn's end, in the same decision, and says why.
+func TestAStopCancelsTheSteerTheAgentNeverTook(t *testing.T) {
+	f, run, steer := steering(t)
+	evs := f.observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted, Untaken: []api.ID{steer}})
+	if f.state(steer) != engine.QueueCancelled {
+		t.Fatalf("the untaken steer is %v, want cancelled", f.state(steer))
+	}
+	got := cancelled(evs)
+	if len(got) != 1 || got[0].Message != steer || got[0].Reason != "the stop came before the agent read it" {
+		t.Fatalf("message.cancelled %+v; want the steer's, saying the stop came first", got)
+	}
+	i, ended := endedAt(evs)
+	if i < 0 || ended.Outcome != api.OutcomeInterrupted {
+		t.Fatalf("the turn ended %+v at %d, want interrupted in the same decision", ended, i)
+	}
+}
+
+// Only the steers the agent never took are cancelled, each once.
+func TestAStopCancelsOnlyTheSteersNamedUntaken(t *testing.T) {
+	f, run, taken := steering(t)
+	if evs := f.observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted}); len(cancelled(evs)) != 0 || f.state(taken) != engine.QueueDispatched {
+		t.Fatalf("a stop with no untaken steers cancelled %+v and left the steer %v; want none, dispatched", cancelled(evs), f.state(taken))
+	}
+
+	f, run = running(t)
+	taken = f.must(dispatch("one", api.SteerActive))
+	f.observe(engine.Steered{Message: taken})
+	untaken := f.must(dispatch("two", api.SteerActive))
+	f.observe(engine.Steered{Message: untaken})
+	f.must(api.TurnInterrupt{})
+	evs := f.observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted, Untaken: []api.ID{untaken, untaken}})
+	if got := cancelled(evs); len(got) != 1 || got[0].Message != untaken {
+		t.Fatalf("message.cancelled %+v; want the second steer's once", got)
+	}
+	if f.state(taken) != engine.QueueDispatched || f.state(untaken) != engine.QueueCancelled {
+		t.Fatalf("steers %v and %v; want the taken one dispatched, the untaken cancelled", f.state(taken), f.state(untaken))
+	}
+}
+
+// An untaken id that isn't a steer this run was sent is no one's to
+// cancel: unknown, another run's, the run's own prompt, or one not sent.
+func TestUntakenNamesOnlyTheRunsSentSteers(t *testing.T) {
+	f, first := running(t)
+	older := f.must(dispatch("older", api.SteerActive))
+	f.observe(engine.Steered{Message: older})
+	lost := f.must(dispatch("lost", api.SteerActive))
+	f.observe(engine.Ended{Run: first, Outcome: api.OutcomeCompleted})
+	run := f.must(dispatch("again", api.StartNow))
+	f.observe(engine.Started{Run: run})
+	claimed := f.must(dispatch("claimed", api.SteerActive))
+	f.must(api.TurnInterrupt{})
+
+	evs := f.observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted, Untaken: []api.ID{api.NewID(), older, run, claimed, lost}})
+	if got := cancelled(evs); len(got) != 0 {
+		t.Fatalf("message.cancelled %+v; want none", got)
+	}
+	if i, ended := endedAt(evs); i < 0 || ended.Outcome != api.OutcomeInterrupted {
+		t.Fatalf("the turn ended %+v at %d, want interrupted", ended, i)
+	}
+	if f.state(older) != engine.QueueDispatched || f.state(run) != engine.QueueDispatched {
+		t.Fatalf("the other run's steer is %v and the prompt %v; want both dispatched", f.state(older), f.state(run))
+	}
+}
+
+// A message that went in with the run's prompt is no steer, so an
+// adapter that names it untaken cancels nothing.
+func TestUntakenNamesNoMessageThatWentInWithThePrompt(t *testing.T) {
+	f, first := running(t)
+	f.observe(report(api.ReportDone, "c", ""))
+	prompt := f.must(dispatch("next", api.AfterActive))
+	f.observe(engine.Ended{Run: first, Outcome: api.OutcomeCompleted})
+	f.observe(engine.Started{Run: prompt})
+	var along api.ID
+	for _, m := range f.th.Queue {
+		if m.Run == prompt && m.ID != prompt {
+			along = m.ID
+		}
+	}
+	if along.IsZero() || f.state(along) != engine.QueueDispatched {
+		t.Fatalf("the wake that went in with the prompt is %v; want dispatched", f.state(along))
+	}
+	f.must(api.TurnInterrupt{})
+	evs := f.observe(engine.Ended{Run: prompt, Outcome: api.OutcomeInterrupted, Untaken: []api.ID{along}})
+	if got := cancelled(evs); len(got) != 0 || f.state(along) != engine.QueueDispatched {
+		t.Fatalf("message.cancelled %+v and the wake %v; want none, dispatched", got, f.state(along))
+	}
+}
+
+// Only the user ends an uncertain run, so its untaken steers stay as
+// they are.
+func TestAnUncertainRunCancelsNoUntakenSteer(t *testing.T) {
+	f, run := running(t)
+	steer := f.must(dispatch("hurry", api.SteerActive))
+	f.observe(engine.Steered{Message: steer})
+	f.observe(engine.Reconciled{Run: run})
+	if evs := f.observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted, Untaken: []api.ID{steer}}); len(evs) != 0 || f.state(steer) != engine.QueueDispatched {
+		t.Fatalf("an uncertain run's end recorded %v and left the steer %v; want nothing, dispatched", evs, f.state(steer))
+	}
+}
+
+// A steer's failure that comes after the agent was sent it cancels
+// nothing: the agent has it.
+func TestALateSteerFailureLeavesTheSentSteer(t *testing.T) {
+	f, _ := running(t)
+	steer := f.must(dispatch("hurry", api.SteerActive))
+	f.observe(engine.Steered{Message: steer})
+	evs, _, err := engine.Observe(f.th, engine.SteerFailed{Message: steer, Error: "boom"}, now)
+	if len(evs) != 0 || !errors.Is(err, engine.ErrRefused) || f.state(steer) != engine.QueueDispatched {
+		t.Fatalf("a late steer failure: %v, %v, steer %v; want nothing recorded, engine.ErrRefused, dispatched", evs, err, f.state(steer))
+	}
+}
+
+// A run that ends on its own, not stopped, cancels no steer its adapter
+// names untaken: the agent still holds it and runs it next.
+func TestAnUnstoppedEndCancelsNoUntakenSteer(t *testing.T) {
+	for name, outcome := range map[string]api.Outcome{"completed": api.OutcomeCompleted, "failed": api.OutcomeFailed} {
+		t.Run(name, func(t *testing.T) {
+			f, run := running(t)
+			steer := f.must(dispatch("hurry", api.SteerActive))
+			f.observe(engine.Steered{Message: steer})
+			evs := f.observe(engine.Ended{Run: run, Outcome: outcome, Untaken: []api.ID{steer}})
+			if got := cancelled(evs); len(got) != 0 || f.state(steer) != engine.QueueDispatched {
+				t.Fatalf("the end cancelled %+v and left the steer %v; want none, dispatched", got, f.state(steer))
+			}
+			if i, ended := endedAt(evs); i < 0 || ended.Outcome != outcome {
+				t.Fatalf("the turn ended %+v at %d, want %v", ended, i, outcome)
+			}
+		})
+	}
+}

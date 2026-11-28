@@ -183,7 +183,7 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				hold()
 				flushAllNested()
 				flushText()
-				if ended = commit(engine.Ended{Run: run, Outcome: ev.Outcome, Error: redact(ev.Error), Tokens: ev.Tokens, Limit: limitOf(ev), Head: ev.Head}); ended {
+				if ended = commit(engine.Ended{Run: run, Outcome: ev.Outcome, Error: redact(ev.Error), Tokens: ev.Tokens, Limit: limitOf(ev), Head: ev.Head, Untaken: ev.Untaken}); ended {
 					h.forget(run)
 				}
 			}

@@ -191,11 +191,11 @@ func TestTablesRefuseUnlistedEdges(t *testing.T) {
 			f.observe(engine.Ended{Run: run, Outcome: api.OutcomeCompleted})
 			return f.th, api.MessageDispatched{Message: steer}
 		},
-		"message dispatched to cancelled": func(t *testing.T) (engine.Thread, api.EventBody) {
+		"message dispatched to uncertain": func(t *testing.T) (engine.Thread, api.EventBody) {
 			f, _ := running(t)
 			steer := f.must(dispatch("hurry", api.SteerActive))
 			f.observe(engine.Steered{Message: steer})
-			return f.th, api.MessageCancelled{Message: steer}
+			return f.th, api.MessageUncertain{Message: steer}
 		},
 		"message uncertain to dispatched": func(t *testing.T) (engine.Thread, api.EventBody) {
 			f, run := running(t)

@@ -303,6 +303,33 @@ func TestFoldPlacesASteerWhereItReachedTheRun(t *testing.T) {
 	)
 }
 
+// A steer sent into a run its stop then cut before the agent read it
+// shows cancelled, with why, where it reached the run.
+func TestFoldCancelsASentSteerTheStopCut(t *testing.T) {
+	a, c := api.NewID(), api.NewID()
+	evs := slices.Concat(start(a, "one", 0), []api.EventBody{
+		api.AssistantDelta{Run: a, Text: "first"},
+		api.MessageQueued{Message: c, Text: "faster", Mode: api.SteerActive, Pos: 1},
+		api.MessageClaimed{Message: c, Run: a},
+		api.MessageDispatched{Message: c},
+		api.TurnStopping{Run: a},
+	})
+	expect(t, play(evs...),
+		`user "one" sent`,
+		`assistant "first"`,
+		`user "faster" sent`,
+	)
+	evs = append(evs,
+		api.MessageCancelled{Message: c, Reason: "the stop came before the agent read it"},
+		api.TurnEnded{Run: a, Outcome: api.OutcomeInterrupted},
+	)
+	expect(t, play(evs...),
+		`user "one" sent`,
+		`assistant "first"`,
+		`user "faster" cancelled the stop came before the agent read it`,
+	)
+}
+
 func TestFoldReleasesHeldBackAndCancelledMessages(t *testing.T) {
 	a, steer, held, gone, never := api.NewID(), api.NewID(), api.NewID(), api.NewID(), api.NewID()
 	evs := slices.Concat(start(a, "one", 0), []api.EventBody{

@@ -42,6 +42,7 @@ func TestNothingRunsAfterAStoppedTurnEnds(t *testing.T) {
 	t.Run("interrupt_cancel_queued_v1", func(t *testing.T) { nothingRunsAfterAStop(t, "steer-stop") })
 	// A Claude Code without the capability ignores cancel_queued.
 	t.Run("without it", func(t *testing.T) { nothingRunsAfterAStop(t, "steer-stop-uncancellable") })
+	t.Run("without it, with msg_lifecycle_v1", func(t *testing.T) { nothingRunsAfterAStop(t, "steer-stop-uncancellable-lifecycle") })
 }
 
 func nothingRunsAfterAStop(t *testing.T, tape string) {
