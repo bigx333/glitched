@@ -202,12 +202,12 @@ func TestASettledWorkLogFoldsToWhatItDid(t *testing.T) {
 	}
 	h, _ := zenThread(t, es, false, "Looked everywhere.")
 	const summary = "Ran 2 commands · made 1 edit · started 1 subagent"
-	for _, s := range []string{summary, "1 failed", "40s", "go test ./...", "--- FAIL: TestIt", "Agent alpha", "notes.txt", "Searched 30 times"} {
+	for _, s := range []string{summary, "1 failed", "40s", "ERR 1", "go test ./...", "Agent alpha", "notes.txt", "Searched 30 times"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("folded, the thread doesn't show %q: %q", s, h.tt.Texts())
 		}
 	}
-	for _, s := range []string{"Edit main.go", "go build ./...", "1 step", "Searched for thing 0"} {
+	for _, s := range []string{"Edit main.go", "go build ./...", "1 step", "Searched for thing 0", "--- FAIL: TestIt"} {
 		if h.tt.HasText(s) {
 			t.Errorf("folded, the thread shows %q", s)
 		}
@@ -218,6 +218,9 @@ func TestASettledWorkLogFoldsToWhatItDid(t *testing.T) {
 	if !h.tt.HasText("Edit main.go") || !h.tt.HasText("go build ./...") {
 		t.Fatalf("a click didn't open the log: %q", h.tt.Texts())
 	}
+	if h.tt.HasText("--- FAIL: TestIt") {
+		t.Fatalf("opening the log expanded the failed command's output before a click")
+	}
 	// At the end, opening it follows the end: its head goes up by as much
 	// as the thread now overflows, and stays in view.
 	l := h.a.listFor(h.a.current().id())
@@ -225,8 +228,8 @@ func TestASettledWorkLogFoldsToWhatItDid(t *testing.T) {
 		t.Errorf("opening it moved its head from %v to %v, at end %v", top.Y, r.Y, l.AtEnd())
 	}
 	clickRect(h, head(t, h.tt, summary))
-	if h.tt.HasText("Edit main.go") || !h.tt.HasText("--- FAIL: TestIt") {
-		t.Fatalf("a second click didn't close the log, or hid its failure: %q", h.tt.Texts())
+	if h.tt.HasText("Edit main.go") || !h.tt.HasText("go test ./...") || !h.tt.HasText("ERR 1") || h.tt.HasText("--- FAIL: TestIt") {
+		t.Fatalf("a second click didn't close the log cleanly: %q", h.tt.Texts())
 	}
 	if r := head(t, h.tt, summary); r.Y != top.Y || !l.AtEnd() {
 		t.Errorf("closing it moved its head from %v to %v, at end %v", top.Y, r.Y, l.AtEnd())
@@ -443,14 +446,25 @@ func TestExpandedLiveWorkLogFollowsNewSteps(t *testing.T) {
 	if _, ok := inScroll(h, scrollBox, "make step-24"); !ok {
 		t.Fatalf("expanded live log did not start at end inside Work steps (%v)", scrollBox)
 	}
-	// Command 24 fails with multi-line output (height grows without step count changing),
-	// then steps 25..39 arrive.
+	// Command 24 fails with multi-line output (default collapsed); once
+	// opened, further output growth still follows the bottom without step
+	// count changing, and steps 25..39 follow after it.
 	steps25Fail := liveSteps(25)
 	exit1 := 1
 	steps25Fail[24].Status, steps25Fail[24].Exit = api.WorkFailed, &exit1
-	steps25Fail[24].Output = strings.Repeat("error line\n", 8) + "exit status 1"
+	steps25Fail[24].Output = "error line\nexit status 1"
 	th.View.Run = api.RunRunning
 	th.View.Turn = &api.Turn{Run: run}
+	replaceEntries(h, th, with(steps25Fail))
+	h.tt.Advance(100 * time.Millisecond)
+	if h.tt.HasText(steps25Fail[24].Output) {
+		t.Fatalf("failed step output expanded before a click")
+	}
+	if _, ok := inScroll(h, scrollBox, "make step-24 · ERR 1"); !ok {
+		t.Fatalf("expanded live log did not keep failed step in view inside Work steps (%v)", scrollBox)
+	}
+	clickRect(h, head(t, h.tt, "make step-24"))
+	steps25Fail[24].Output = strings.Repeat("error line\n", 8) + "exit status 1"
 	replaceEntries(h, th, with(steps25Fail))
 	h.tt.Advance(100 * time.Millisecond)
 	if _, ok := inScroll(h, scrollBox, steps25Fail[24].Output); !ok {
@@ -1007,4 +1021,365 @@ func TestAWorkLogOverflowingAShortThreadKeepsTheEndInView(t *testing.T) {
 	if r := head(t, h.tt, summary); h.tt.HasText("make step-0") || r.Y != top.Y {
 		t.Errorf("a second click didn't close the log in place: head %v, was %v", r.Y, top.Y)
 	}
+}
+
+// stepAccess returns the accessibility node of the inspectable step disclosure
+// named name (or name followed by its failure tag).
+func stepAccess(t *testing.T, tt *ui.Tester, name string) ui.AccessInfo {
+	t.Helper()
+	for _, n := range tt.AccessAll() {
+		if n.Role == ui.RoleDisclosure && (n.Name == name || strings.HasPrefix(n.Name, name+" · ")) {
+			return n
+		}
+	}
+	t.Fatalf("no disclosure %q: %q", name, tt.Texts())
+	return ui.AccessInfo{}
+}
+
+// stepButton is the bounds of the clickable step row button named name.
+func stepButton(t *testing.T, tt *ui.Tester, name string) ui.Rect {
+	t.Helper()
+	return stepAccess(t, tt, name).Bounds
+}
+
+// Failed step error output drawers default collapsed everywhere (under a
+// folded work log, inside an expanded work log, and in an inline single
+// step) and toggle open and closed on click for both commands and
+// non-command tool calls.
+func TestFailedWorkStepOutputDefaultsCollapsedAndToggles(t *testing.T) {
+	at := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	exit0, exit1 := 0, 1
+	runMulti, runSingle := api.NewID(), api.NewID()
+	const (
+		cmdOut    = "--- FAIL: TestAuth\nexpected 200, got 500"
+		toolOut   = "404 Not Found\nserver refused request"
+		readOut   = "open missing.txt: no such file or directory"
+		singleOut = "permission denied on /etc/shadow"
+	)
+	es := []client.Entry{
+		&client.UserEntry{Message: api.NewID(), Text: "Run checks.", State: client.Sent},
+		&client.WorkEntry{Run: runMulti, Started: at, Ended: at.Add(10 * time.Second), Items: []client.WorkStep{
+			{Item: "ok", Kind: "command", Title: "go build ./...", Status: api.WorkCompleted, Exit: &exit0, Started: at, Ended: at},
+			{Item: "fc", Kind: "command", Title: "go test ./...", Status: api.WorkFailed, Exit: &exit1, Output: cmdOut, Started: at, Ended: at},
+			{Item: "ft", Kind: "tool", Title: "WebFetch https://example.com", Status: api.WorkFailed, Output: toolOut, Started: at, Ended: at},
+			{Item: "fr", Kind: "read", Title: "Read missing.txt", Path: "missing.txt", Status: api.WorkFailed, Output: readOut, Started: at, Ended: at},
+		}},
+		&client.AssistantEntry{Run: runMulti, Text: "Three failed."},
+		&client.UserEntry{Message: api.NewID(), Text: "Read secret.", State: client.Sent},
+		&client.WorkEntry{Run: runSingle, Started: at, Ended: at.Add(time.Second), Items: []client.WorkStep{
+			{Item: "s1", Kind: "tool", Title: "Fetch secret", Status: api.WorkFailed, Output: singleOut, Started: at, Ended: at},
+		}},
+		&client.AssistantEntry{Run: runSingle, Text: "Could not read it."},
+	}
+	h, _ := zenThread(t, es, false, "Could not read it.")
+	const summary = "Ran 2 commands · used 1 tool · read 1 file"
+
+	// 1. Folded work log + inline single step: failed rows show, outputs stay hidden.
+	for _, want := range []string{summary, "3 failed", "ERR 1", "go test ./...", "WebFetch https://example.com", "missing.txt", "Fetch secret"} {
+		if !h.tt.HasText(want) {
+			t.Fatalf("folded, missing %q: %q", want, h.tt.Texts())
+		}
+	}
+	for _, hidden := range []string{cmdOut, toolOut, readOut, singleOut} {
+		if h.tt.HasText(hidden) {
+			t.Fatalf("folded, error output %q expanded before click", hidden)
+		}
+	}
+
+	// Clicking each surfaced failed row under the folded work log toggles its output
+	// and updates its accessible expanded state while keeping failure status in its name.
+	for _, tc := range []struct {
+		label, wantAccess, out string
+		isCmd                  bool
+	}{
+		{"go test ./...", "go test ./... · ERR 1", cmdOut, true},
+		{"WebFetch https://example.com", "WebFetch https://example.com · ERR", toolOut, false},
+		{"Read missing.txt", "Read missing.txt · ERR", readOut, false},
+	} {
+		before := stepAccess(t, h.tt, tc.label)
+		if before.Name != tc.wantAccess || before.Expanded {
+			t.Errorf("before click, button = (%q, expanded=%v), want (%q, false)", before.Name, before.Expanded, tc.wantAccess)
+		}
+		clickRect(h, before.Bounds)
+		if !h.tt.HasText(tc.out) {
+			t.Fatalf("folded, clicking %q did not open %q: %q", tc.label, tc.out, h.tt.Texts())
+		}
+		opened := stepAccess(t, h.tt, tc.label)
+		if opened.Name != tc.wantAccess || !opened.Expanded {
+			t.Errorf("after click, button = (%q, expanded=%v), want (%q, true)", opened.Name, opened.Expanded, tc.wantAccess)
+		}
+		if !tc.isCmd {
+			// Non-command failed steps should not duplicate w.Title as a drawer command block.
+			nText := 0
+			for _, n := range h.tt.AccessAll() {
+				if n.Role == ui.RoleText && n.Name == tc.label {
+					nText++
+				}
+			}
+			if nText > 1 {
+				t.Errorf("non-command failed drawer duplicated title %q (%d RoleText nodes)", tc.label, nText)
+			}
+		}
+		clickRect(h, opened.Bounds)
+		if h.tt.HasText(tc.out) {
+			t.Fatalf("folded, second click on %q did not collapse %q", tc.label, tc.out)
+		}
+		if closed := stepAccess(t, h.tt, tc.label); closed.Expanded {
+			t.Errorf("after second click, %q still reports Expanded=true", closed.Name)
+		}
+	}
+
+	// Opening a kept drawer, expanding the work log, then closing the work log
+	// resets cleanly so the drawer collapses and can open again.
+	clickRect(h, stepButton(t, h.tt, "go test ./..."))
+	if !h.tt.HasText(cmdOut) {
+		t.Fatalf("clicking kept failed command did not open output")
+	}
+	clickRect(h, head(t, h.tt, summary))
+	if !h.tt.HasText("go build ./...") || !h.tt.HasText(cmdOut) {
+		t.Fatalf("expanding log after opening kept drawer lost state: %q", h.tt.Texts())
+	}
+	clickRect(h, head(t, h.tt, summary))
+	if h.tt.HasText("go build ./...") || h.tt.HasText(cmdOut) {
+		t.Fatalf("closing log did not fold steps and reset kept drawer: %q", h.tt.Texts())
+	}
+
+	// 2. Inside an expanded work log, failed outputs default collapsed and toggle on click.
+	clickRect(h, head(t, h.tt, summary))
+	for _, hidden := range []string{cmdOut, toolOut, readOut} {
+		if h.tt.HasText(hidden) {
+			t.Fatalf("expanded log showed error output %q before click", hidden)
+		}
+	}
+	for _, tc := range []struct{ label, out string }{
+		{"go test ./...", cmdOut},
+		{"WebFetch https://example.com", toolOut},
+		{"Read missing.txt", readOut},
+	} {
+		clickRect(h, stepButton(t, h.tt, tc.label))
+		if !h.tt.HasText(tc.out) {
+			t.Fatalf("expanded, clicking %q did not open %q", tc.label, tc.out)
+		}
+		clickRect(h, stepButton(t, h.tt, tc.label))
+		if h.tt.HasText(tc.out) {
+			t.Fatalf("expanded, second click on %q did not collapse %q", tc.label, tc.out)
+		}
+	}
+	clickRect(h, head(t, h.tt, summary))
+
+	// 3. Single-step inline failed tool call defaults collapsed and toggles on click.
+	clickRect(h, stepButton(t, h.tt, "Fetch secret"))
+	if !h.tt.HasText(singleOut) {
+		t.Fatalf("inline single failed step did not open %q on click", singleOut)
+	}
+	clickRect(h, stepButton(t, h.tt, "Fetch secret"))
+	if h.tt.HasText(singleOut) {
+		t.Fatalf("inline single failed step did not collapse %q on second click", singleOut)
+	}
+}
+
+// Expanding and collapsing a surfaced failed error drawer at the end of a
+// scrolling timeline keeps AtEnd and the full composer; scrolled up, it
+// holds the row's place.
+func TestFailedWorkErrorDrawerAtEndKeepsEndInView(t *testing.T) {
+	at := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	exit0, exit1 := 0, 1
+	run := api.NewID()
+	longErr := strings.Repeat("--- FAIL: TestLongTrace line\n", 10) + "exit status 1"
+	es := synthetic(40)
+	es = append(es,
+		&client.UserEntry{Message: api.NewID(), Text: "Run failing test.", State: client.Sent},
+		&client.WorkEntry{Run: run, Started: at, Ended: at.Add(5 * time.Second), Items: []client.WorkStep{
+			{Item: "a", Kind: "command", Title: "go build ./...", Status: api.WorkCompleted, Exit: &exit0, Started: at, Ended: at},
+			{Item: "b", Kind: "command", Title: "go test ./pkg/broken", Status: api.WorkFailed, Exit: &exit1, Output: longErr, Started: at, Ended: at},
+		}},
+		&client.AssistantEntry{Run: run, Text: "Test failed."},
+	)
+	h, _ := zenThread(t, es, false, "Test failed.")
+	l := h.a.listFor(h.a.current().id())
+	press := func(r ui.Rect) { h.tt.ClickAt(r.X+r.W/2, r.Y+r.H/2) }
+	if !l.AtEnd() || h.a.composerK != 1 {
+		t.Fatalf("thread did not start at end with full composer: atEnd=%v composerK=%v", l.AtEnd(), h.a.composerK)
+	}
+	if h.tt.HasText(longErr) {
+		t.Fatal("failed error output expanded before click")
+	}
+
+	press(stepButton(t, h.tt, "go test ./pkg/broken"))
+	atEndAndFull(t, h, l, "expanding failed error drawer at end")
+	if !h.tt.HasText(longErr) {
+		t.Fatalf("clicking failed row did not show error output: %q", h.tt.Texts())
+	}
+
+	press(stepButton(t, h.tt, "go test ./pkg/broken"))
+	atEndAndFull(t, h, l, "collapsing failed error drawer at end")
+	if h.tt.HasText(longErr) {
+		t.Fatal("second click did not collapse error output")
+	}
+
+	// Scrolled up, toggling the failed error drawer holds its row in place.
+	wheel(h, -120)
+	h.tt.Advance(time.Second)
+	if l.AtEnd() {
+		t.Fatal("scrolling up left list at end")
+	}
+	rowBefore := stepButton(t, h.tt, "go test ./pkg/broken")
+	clickRect(h, rowBefore)
+	if !h.tt.HasText(longErr) {
+		t.Fatal("scrolled up, clicking failed row did not show error output")
+	}
+	if r := stepButton(t, h.tt, "go test ./pkg/broken"); math.Abs(float64(r.Y-rowBefore.Y)) > 1 || l.AtEnd() {
+		t.Errorf("scrolled up, expanding error drawer moved row from Y=%v to Y=%v (atEnd=%v)", rowBefore.Y, r.Y, l.AtEnd())
+	}
+	clickRect(h, stepButton(t, h.tt, "go test ./pkg/broken"))
+	if h.tt.HasText(longErr) {
+		t.Fatal("scrolled up, second click did not collapse error output")
+	}
+	if r := stepButton(t, h.tt, "go test ./pkg/broken"); math.Abs(float64(r.Y-rowBefore.Y)) > 1 || l.AtEnd() {
+		t.Errorf("scrolled up, collapsing error drawer moved row from Y=%v to Y=%v (atEnd=%v)", rowBefore.Y, r.Y, l.AtEnd())
+	}
+}
+
+// Failed edits (file >= 0) and failed subagent steps with output keep their
+// primary row click opening the diff or subagent panel while exposing a
+// sibling error-drawer toggle that expands and collapses w.Output without
+// navigating.
+func TestFailedWorkEditAndSubagentErrorToggle(t *testing.T) {
+	at := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	exit0 := 0
+	run := api.NewID()
+	const (
+		editOut = "old_string not found in main.go"
+		subOut  = "subagent timed out after 30s"
+	)
+	es := []client.Entry{
+		&client.UserEntry{Message: api.NewID(), Text: "Apply changes.", State: client.Sent},
+		&client.WorkEntry{Run: run, Started: at, Ended: at.Add(5 * time.Second), Items: []client.WorkStep{
+			{Item: "c1", Kind: "command", Title: "go build ./...", Status: api.WorkCompleted, Exit: &exit0, Started: at, Ended: at},
+			{Item: "e1", Kind: "edit", Title: "Edit main.go", Path: "main.go", Status: api.WorkFailed, Output: editOut, Started: at, Ended: at},
+			{Item: "s1", Kind: "tool", Title: "Agent alpha", Status: api.WorkFailed, Subagent: &client.Subagent{}, Output: subOut, Started: at, Ended: at},
+		}},
+		&client.AssistantEntry{Run: run, Text: "Both failed."},
+	}
+	h, th := zenThread(t, es, false, "Both failed.")
+	const summary = "Ran 1 command · made 1 edit · started 1 subagent"
+
+	disclosureByName := func(name string) ui.AccessInfo {
+		t.Helper()
+		for _, n := range h.tt.AccessAll() {
+			if n.Role == ui.RoleDisclosure && n.Name == name {
+				return n
+			}
+		}
+		t.Fatalf("no RoleDisclosure %q: %q", name, h.tt.Texts())
+		return ui.AccessInfo{}
+	}
+	rowButtonContaining := func(sub string) ui.AccessInfo {
+		t.Helper()
+		for _, n := range h.tt.AccessAll() {
+			if n.Role == ui.RoleButton && strings.Contains(n.Name, sub) {
+				return n
+			}
+		}
+		t.Fatalf("no RoleButton containing %q: %q", sub, h.tt.Texts())
+		return ui.AccessInfo{}
+	}
+
+	checkToggles := func(where string) {
+		t.Helper()
+		if h.tt.HasText(editOut) || h.tt.HasText(subOut) {
+			t.Fatalf("%s: error output expanded before click", where)
+		}
+		// Failed edit toggle: expands/collapses without opening diff.
+		showEdit := disclosureByName("Show error: Edit main.go")
+		if showEdit.Expanded {
+			t.Errorf("%s: edit error toggle starts Expanded=true", where)
+		}
+		clickRect(h, showEdit.Bounds)
+		if !h.tt.HasText(editOut) {
+			t.Fatalf("%s: edit error toggle did not show %q", where, editOut)
+		}
+		if h.a.showDiff {
+			t.Fatalf("%s: edit error toggle opened diff panel", where)
+		}
+		hideEdit := disclosureByName("Hide error: Edit main.go")
+		if !hideEdit.Expanded {
+			t.Errorf("%s: open edit error toggle reports Expanded=false", where)
+		}
+		clickRect(h, hideEdit.Bounds)
+		if h.tt.HasText(editOut) || h.a.showDiff {
+			t.Fatalf("%s: second edit error toggle failed to collapse or opened diff (showDiff=%v)", where, h.a.showDiff)
+		}
+
+		// Failed subagent toggle: expands/collapses without opening subagent panel.
+		showSub := disclosureByName("Show error: Agent alpha")
+		if showSub.Expanded {
+			t.Errorf("%s: subagent error toggle starts Expanded=true", where)
+		}
+		clickRect(h, showSub.Bounds)
+		if !h.tt.HasText(subOut) {
+			t.Fatalf("%s: subagent error toggle did not show %q", where, subOut)
+		}
+		if h.a.subagentStep[th.id()] != (subagentSel{}) {
+			t.Fatalf("%s: subagent error toggle opened subagent panel: %+v", where, h.a.subagentStep[th.id()])
+		}
+		hideSub := disclosureByName("Hide error: Agent alpha")
+		if !hideSub.Expanded {
+			t.Errorf("%s: open subagent error toggle reports Expanded=false", where)
+		}
+		clickRect(h, hideSub.Bounds)
+		if h.tt.HasText(subOut) || h.a.subagentStep[th.id()] != (subagentSel{}) {
+			t.Fatalf("%s: second subagent error toggle failed to collapse or navigated (%+v)", where, h.a.subagentStep[th.id()])
+		}
+	}
+
+	// 1. Folded work log ("kept" rows).
+	checkToggles("folded")
+
+	// 2. Expanded work log.
+	clickRect(h, head(t, h.tt, summary))
+	checkToggles("expanded")
+	clickRect(h, head(t, h.tt, summary))
+
+	// 3. Primary row clicks still navigate to the diff and subagent panel.
+	clickRect(h, rowButtonContaining("Edit main.go").Bounds)
+	if !h.a.showDiff || h.a.diffFile[th.id()] != "main.go" {
+		t.Fatalf("clicking failed edit row did not open diff: showDiff=%v file=%q", h.a.showDiff, h.a.diffFile[th.id()])
+	}
+	clickRect(h, rowButtonContaining("Agent alpha").Bounds)
+	if got, want := h.a.subagentStep[th.id()], (subagentSel{run, "s1"}); got != want {
+		t.Fatalf("clicking failed subagent row opened %+v, want %+v", got, want)
+	}
+
+	// 4. Focusing a navigable row before it fails with output keeps focus when
+	// the sibling error toggle appears (stable parent wrapper key).
+	liveRun := api.NewID()
+	running := []client.Entry{
+		&client.UserEntry{Message: api.NewID(), Text: "Delegate work.", State: client.Sent},
+		&client.WorkEntry{Run: liveRun, Started: at, Items: []client.WorkStep{
+			{Item: "c1", Kind: "command", Title: "go build ./...", Status: api.WorkCompleted, Exit: &exit0, Started: at, Ended: at},
+			{Item: "s2", Kind: "tool", Title: "Agent beta", Status: api.WorkStarted, Subagent: &client.Subagent{}, Started: at},
+		}},
+	}
+	replaceEntries(h, th, running)
+	// Focus the folded work log header, then Tab onto the surfaced Agent beta button.
+	liveHead := rowButtonContaining("2 steps").Bounds
+	clickRect(h, liveHead)
+	clickRect(h, rowButtonContaining("2 steps").Bounds)
+	h.tt.Key(0, ui.KeyTab)
+	if !rowButtonContaining("AGENT Agent beta").Focused {
+		t.Fatalf("Tab from folded work log header did not focus Agent beta row")
+	}
+	failedEntry := []client.Entry{
+		running[0],
+		&client.WorkEntry{Run: liveRun, Started: at, Ended: at.Add(time.Second), Items: []client.WorkStep{
+			{Item: "c1", Kind: "command", Title: "go build ./...", Status: api.WorkCompleted, Exit: &exit0, Started: at, Ended: at},
+			{Item: "s2", Kind: "tool", Title: "Agent beta", Status: api.WorkFailed, Subagent: &client.Subagent{}, Output: "beta crashed", Started: at, Ended: at.Add(time.Second)},
+		}},
+	}
+	replaceEntries(h, th, failedEntry)
+	if !rowButtonContaining("FAIL Agent beta").Focused {
+		t.Fatalf("Agent beta lost keyboard focus when its sibling error toggle appeared")
+	}
+	disclosureByName("Show error: Agent beta")
 }

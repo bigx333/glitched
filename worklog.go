@@ -170,10 +170,11 @@ func (a *app) workLog(c *ui.Context, t thread, rs rows, i int, key string, e ent
 		if !slices.ContainsFunc(e.work, kept) {
 			return
 		}
+		ws := m.workScrollOf(key)
 		ui.Column(c).Key("kept").Gap(2).Children(func() {
 			for _, w := range e.work {
 				if kept(w) {
-					a.step(c, t, files, e.run, w, lg.maxDur, nil)
+					a.step(c, t, files, e.run, w, lg.maxDur, ws)
 				}
 			}
 		})
@@ -505,9 +506,10 @@ func workSpark(ws []client.WorkStep) []sparkRun {
 
 // step is one of the agent's steps, as a ledger row: a tag of its kind,
 // what it worked on, and how it went. A finished command shows how long
-// it took against the log's longest step, maxDur, and what it printed
-// when it failed; with ws, a click opens it to read in full. An edit of a
-// file the diff lists opens it there, and a subagent opens its panel.
+// it took against the log's longest step, maxDur. With ws, clicking a
+// command or a failed step with output toggles its drawer open or closed;
+// edits in the diff and subagents still open their panels on row click,
+// with a sibling error toggle when they fail with output.
 func (a *app) step(c *ui.Context, t thread, files []fileChange, run api.ID, w client.WorkStep, maxDur time.Duration, ws *workScroll) {
 	kind := stepKindOf(w)
 	failed := stepFailed(w)
@@ -516,83 +518,140 @@ func (a *app) step(c *ui.Context, t thread, files []fileChange, run api.ID, w cl
 		file = slices.IndexFunc(files, func(f fileChange) bool { return f.path == w.Path })
 	}
 	sub := w.Subagent != nil
-	inspectable := kind == workFilterCommand && ws != nil
-	inspected := inspectable && ws.inspect[w.Item]
-	var r ui.Element
-	if file >= 0 || sub || inspectable {
-		r = ghost(c, w.Item, false)
-		if inspectable {
-			r.Label(w.Title) // the button's name
-		}
-	} else {
-		r = ui.Row(c).Key(w.Item).AlignItems(ui.Center)
-	}
-	r.Padding(4, 10).Gap(8).Radius(5)
-	if failed && !r.Hovered() {
-		r.Background(palette.red.Alpha(0.06))
-	}
-	if r.Children(func() {
-		stepTag(c, w, kind, failed)
-		stepPayload(c, t.View.Workspace, w, kind)
-		ui.Row(c).Shrink(0).Gap(6).AlignItems(ui.Center).Children(func() {
-			if sub {
-				ui.Text(c, plural(w.Subagent.Steps(), "step")).FontSize(11).FontFeatures("tnum").TextColor(palette.faint).SingleLine().Shrink(0)
+	navigable := file >= 0 || sub
+	inspectable := !navigable && ws != nil && (kind == workFilterCommand || (failed && w.Output != ""))
+	errToggle := navigable && failed && w.Output != "" && ws != nil
+	inspected := (inspectable || errToggle) && ws.inspect[w.Item]
+	drawRow := func() {
+		var r ui.Element
+		if navigable || inspectable {
+			r = ghost(c, w.Item, false)
+			if inspectable {
+				r.Role(ui.RoleDisclosure).Label(stepButtonLabel(w, failed)).Expanded(inspected) // the button's name and drawer state
 			}
+		} else {
+			r = ui.Row(c).Key(w.Item).AlignItems(ui.Center)
+		}
+		if navigable {
+			r.Grow(1).MinWidth(0)
+		}
+		r.Padding(4, 10).Gap(8).Radius(5)
+		if failed && !navigable && !r.Hovered() {
+			r.Background(palette.red.Alpha(0.06))
+		}
+		if r.Children(func() {
+			stepTag(c, w, kind, failed)
+			stepPayload(c, t.View.Workspace, w, kind)
+			ui.Row(c).Shrink(0).Gap(6).AlignItems(ui.Center).Children(func() {
+				if sub {
+					ui.Text(c, plural(w.Subagent.Steps(), "step")).FontSize(11).FontFeatures("tnum").TextColor(palette.faint).SingleLine().Shrink(0)
+				}
+				switch {
+				case w.Status == api.WorkStarted:
+					a.statusMark(c, statusWorking)
+				case file >= 0:
+					add, del := a.diffStats(t, files[file])
+					counts(c, add, del)
+					if r.Hovered() {
+						ui.Text(c, "Open in diff").FontSize(11).TextColor(palette.muted).SingleLine().Shrink(0)
+						ui.Icon(c, icExternal).FontSize(11).TextColor(palette.muted)
+					}
+				case sub || kind == workFilterCommand:
+					d, timed := stepDur(w)
+					if timed {
+						durationBar(c, d, maxDur, failed)
+					}
+					if timed || w.Exit != nil {
+						ui.Text(c, tookFor(d)).Font("monospace").FontFeatures("tnum").FontSize(11).TextColor(palette.faint).
+							MinWidth(30).TextAlign(ui.End).SingleLine().Shrink(0)
+					}
+					if sub && r.Hovered() {
+						ui.Icon(c, icExternal).FontSize(11).TextColor(palette.muted)
+					}
+				}
+				if inspectable && failed && w.Output != "" {
+					chevron(c.Key("chevron"), inspected).FontSize(10).TextColor(palette.faint)
+				}
+			})
+		}).Clicked() {
 			switch {
-			case w.Status == api.WorkStarted:
-				a.statusMark(c, statusWorking)
 			case file >= 0:
-				add, del := a.diffStats(t, files[file])
-				counts(c, add, del)
-				if r.Hovered() {
-					ui.Text(c, "Open in diff").FontSize(11).TextColor(palette.muted).SingleLine().Shrink(0)
-					ui.Icon(c, icExternal).FontSize(11).TextColor(palette.muted)
-				}
-			case sub || kind == workFilterCommand:
-				d, timed := stepDur(w)
-				if timed {
-					durationBar(c, d, maxDur, failed)
-				}
-				if timed || w.Exit != nil {
-					ui.Text(c, tookFor(d)).Font("monospace").FontFeatures("tnum").FontSize(11).TextColor(palette.faint).
-						MinWidth(30).TextAlign(ui.End).SingleLine().Shrink(0)
-				}
-				if sub && r.Hovered() {
-					ui.Icon(c, icExternal).FontSize(11).TextColor(palette.muted)
+				a.showDiff, a.showPreview, a.panelsJump = true, false, false
+				a.diffFile[t.id()] = w.Path
+			case sub:
+				a.openSubagent(t, run, w)
+			case inspectable:
+				ws.toggleInspect(w.Item)
+				a.holdUnlessAtEnd(t)
+			}
+		}
+	}
+	if navigable {
+		wrap := ui.Row(c).Key(w.Item + "/wrap").AlignItems(ui.Center).Radius(5)
+		if failed {
+			wrap.Background(palette.red.Alpha(0.06))
+		}
+		wrap.Children(func() {
+			drawRow()
+			if errToggle {
+				if ghost(c, w.Item+"/error-toggle", false).Role(ui.RoleDisclosure).Label(errorToggleLabel(w, inspected)).Expanded(inspected).
+					Padding(5, 7).Radius(5).Justify(ui.Center).Shrink(0).Children(func() {
+					chevron(c.Key("chevron"), inspected).FontSize(10).TextColor(palette.faint)
+				}).Clicked() {
+					ws.toggleInspect(w.Item)
+					a.holdUnlessAtEnd(t)
 				}
 			}
 		})
-	}).Clicked() {
-		switch {
-		case file >= 0:
-			a.showDiff, a.showPreview, a.panelsJump = true, false, false
-			a.diffFile[t.id()] = w.Path
-		case sub:
-			a.openSubagent(t, run, w)
-		case inspectable:
-			ws.toggleInspect(w.Item)
-			a.holdUnlessAtEnd(t)
-		}
+	} else {
+		drawRow()
 	}
-	output := w.Output != "" && (failed || inspected)
-	if !inspected && !output {
+	if !inspected {
 		return
 	}
 	border := palette.border
 	if failed {
 		border = palette.red.Alpha(0.35)
 	}
+	showCommand := kind == workFilterCommand
 	ui.Column(c).Key(w.Item+"/drawer").Margin(0, 10, 6, 64).Padding(7, 10).Gap(6).Radius(6).Background(palette.bg).Border(1, border).Children(func() {
-		if inspected {
+		if showCommand {
 			ui.Text(c, w.Title).Key(w.Item + "/command").Selectable().FontSize(11.5).Font("monospace").LineHeight(1.5).TextColor(palette.text)
 		}
-		if output {
+		if w.Output != "" {
 			out := ui.Text(c, w.Output).Key(w.Item + "/output").Selectable().FontSize(11.5).Font("monospace").LineHeight(1.5).TextColor(palette.muted)
-			if inspected {
+			if showCommand {
 				out.BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Padding(6, 0, 0)
 			}
 		}
 	})
+}
+
+// stepButtonLabel is the accessible name of an inspectable step button:
+// its title, followed by its failure tag when it failed so screen readers
+// hear both the step and its failure status while prefix lookups keep matching.
+func stepButtonLabel(w client.WorkStep, failed bool) string {
+	if !failed {
+		return w.Title
+	}
+	tag := "ERR"
+	if w.Exit != nil {
+		tag = fmt.Sprintf("ERR %d", *w.Exit)
+	}
+	return fmt.Sprintf("%s · %s", w.Title, tag)
+}
+
+// errorToggleLabel is the accessible name of the sibling error drawer
+// toggle on a failed edit or subagent row.
+func errorToggleLabel(w client.WorkStep, open bool) string {
+	verb := "Show error"
+	if open {
+		verb = "Hide error"
+	}
+	if w.Title == "" {
+		return verb
+	}
+	return verb + ": " + w.Title
 }
 
 // stepTag is a ledger row's tag: its kind, or how it failed.

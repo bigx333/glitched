@@ -210,8 +210,8 @@ func TestALongTimeline(t *testing.T) {
 		h.tt.Frame()
 		h.tt.Advance(time.Second)
 		y := at(t, turnText(101))
-		// A command of the work above, out of view, fails, and shows what
-		// it printed.
+		// A command of the work above, out of view, fails, surfacing a
+		// failed row under its folded summary.
 		exit := 1
 		apply(api.WorkItem{Run: tr.Entries[298].(*client.WorkEntry).Run, Item: "s1", Status: api.WorkFailed, Exit: &exit,
 			Output: strings.Repeat("--- FAIL: TestAnother line it printed\n", 6) + "exit status 1"})
@@ -225,12 +225,19 @@ func TestALongTimeline(t *testing.T) {
 		if got := at(t, turnText(101)); got-y < 119 || got-y > 121 {
 			t.Errorf("scrolling up 120 moved the turn by %v", got-y)
 		}
-		// The work above shows what the command printed.
+		// The work above surfaces the failed command; clicking opens what it printed.
 		l().ScrollTo(298, ui.Start)
 		h.tt.Frame()
 		h.tt.Advance(time.Second)
+		if !h.tt.HasText("ERR 1") || !h.tt.HasText("go test ./...") {
+			t.Error("the work above doesn't surface its failed command")
+		}
+		if slices.ContainsFunc(h.tt.Texts(), func(s string) bool { return strings.Contains(s, "TestAnother line it printed") }) {
+			t.Error("the failed command's output expanded before a click")
+		}
+		clickRect(h, head(t, h.tt, "go test ./..."))
 		if !slices.ContainsFunc(h.tt.Texts(), func(s string) bool { return strings.Contains(s, "TestAnother line it printed") }) {
-			t.Error("the work above doesn't show what its command printed")
+			t.Error("clicking the failed command didn't show what it printed")
 		}
 		l().ScrollTo(300, ui.Start)
 		h.tt.Frame()
