@@ -7,7 +7,6 @@ import (
 	"image"
 	"image/draw"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/daemon"
+	"glitched/internal/gittest"
 	"glitched/internal/provider/fake"
 )
 
@@ -490,7 +490,7 @@ func TestChoosingAThreadWhileItsComposerFolds(t *testing.T) {
 func TestEscapeOnCommitAndPushFocusesItsButton(t *testing.T) {
 	dir := tempDir(t)
 	repo := filepath.Join(t.TempDir(), "repo")
-	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+	if out, err := gittest.Command("init", "-q", repo).CombinedOutput(); err != nil {
 		t.Fatal(err, string(out))
 	}
 	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("a"), 0o644); err != nil {

@@ -21,6 +21,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
+	"glitched/internal/gittest"
 	"glitched/internal/jsonfile"
 	"glitched/internal/plugins"
 	"glitched/internal/provider/fake"
@@ -86,10 +87,10 @@ func bareRepoAt(t *testing.T, bare string) string {
 	}
 	for _, args := range [][]string{
 		{"-C", work, "init", "-q"}, {"-C", work, "add", "."},
-		{"-C", work, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "readme"},
+		{"-C", work, "commit", "-qm", "readme"},
 		{"clone", "-q", "--bare", work, bare},
 	} {
-		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+		if out, err := gittest.Command(args...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v %s", args, err, out)
 		}
 	}

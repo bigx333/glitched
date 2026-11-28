@@ -22,6 +22,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
+	"glitched/internal/gittest"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 )
@@ -316,7 +317,7 @@ func TestInheritedGitVariablesDontChangeHead(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(other, sidebarPath), []byte("another repository's\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	git(t, other, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "other")
+	git(t, other, "commit", "-qam", "other")
 	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
 	t.Setenv("GIT_WORK_TREE", other)
 	t.Setenv("GIT_INDEX_FILE", filepath.Join(other, ".git", "index"))
@@ -464,7 +465,7 @@ func link(t *testing.T, target, name string) {
 
 func git(t *testing.T, ws string, args ...string) {
 	t.Helper()
-	if out, err := exec.Command("git", append([]string{"-C", ws}, args...)...).CombinedOutput(); err != nil {
+	if out, err := gittest.Command(append([]string{"-C", ws}, args...)...).CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v %s", args, err, out)
 	}
 }

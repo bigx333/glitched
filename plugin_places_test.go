@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
+	"glitched/internal/gittest"
 	"glitched/internal/plugins"
 	"glitched/internal/provider/fake"
 )
@@ -142,8 +142,8 @@ func TestSlotsAreStableNames(t *testing.T) {
 // and the service runs git as the user.
 func TestAPageAsksItsServiceWhichRunsGit(t *testing.T) {
 	dir, repo := tempDir(t), t.TempDir()
-	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start"}} {
-		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "start"}} {
+		if out, err := gittest.Command(append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
 			t.Skipf("git: %v %s", err, out)
 		}
 	}

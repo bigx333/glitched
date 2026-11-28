@@ -118,6 +118,7 @@ func repo(t *testing.T) (string, string) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	t.Setenv("LC_ALL", "C") // git's messages, as the tests read them
 	os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[user]\n\tname = T\n\temail = t@example.invalid\n[init]\n\tdefaultBranch = main\n"), 0o644)
 	origin := filepath.Join(t.TempDir(), "origin.git")

@@ -13,6 +13,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
+	"glitched/internal/gittest"
 	"glitched/internal/provider/fake"
 	"glitched/internal/providerlog"
 )
@@ -105,7 +106,7 @@ func TestThreadMenuWorkspace(t *testing.T) {
 		t.Skip("no git")
 	}
 	ws := t.TempDir()
-	if out, err := exec.Command("git", "init", "-q", "-b", "t3code/sidebar-sort", ws).CombinedOutput(); err != nil {
+	if out, err := gittest.Command("init", "-q", "-b", "t3code/sidebar-sort", ws).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v %s", err, out)
 	}
 	var opened string

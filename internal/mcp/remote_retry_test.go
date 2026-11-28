@@ -1,13 +1,12 @@
 package mcp_test
 
 import (
-	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/gittest"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 	"glitched/internal/runtime"
@@ -19,8 +18,7 @@ import (
 func TestARetryOfARemoteDelegateInALaterTurnFindsItsPlaceholder(t *testing.T) {
 	dir := t.TempDir()
 	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "init"}} {
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t", "GIT_CONFIG_GLOBAL="+os.DevNull)
+		cmd := gittest.Command(append([]string{"-C", dir}, args...)...)
 		if b, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git: %v %s", err, b)
 		}

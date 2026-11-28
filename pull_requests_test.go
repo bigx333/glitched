@@ -25,6 +25,7 @@ func githubBranch(t *testing.T) string {
 	cfg := filepath.Join(t.TempDir(), "gitconfig")
 	os.WriteFile(cfg, []byte("[user]\n\tname = T\n\temail = t@example.invalid\n"), 0o644)
 	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	origin, work := filepath.Join(t.TempDir(), "origin.git"), filepath.Join(t.TempDir(), "work")
 	git := func(dir string, args ...string) {
 		t.Helper()

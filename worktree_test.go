@@ -2,17 +2,18 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"glitched/internal/gittest"
 )
 
 func branchIn(t *testing.T, dir string) string {
 	t.Helper()
-	out, err := exec.Command("git", "-C", dir, "branch", "--show-current").Output()
+	out, err := gittest.Command("-C", dir, "branch", "--show-current").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +154,7 @@ func TestDeletingAThreadInAWorktreeAsksAboutItsWorktree(t *testing.T) {
 
 func gitRun(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	out, err := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@t"}, args...)...).Output()
+	out, err := gittest.Command(append([]string{"-C", dir}, args...)...).Output()
 	if err != nil {
 		t.Fatalf("git %v: %v", args, err)
 	}
@@ -393,8 +394,8 @@ func TestADraftWithNoProjectOffersNoWorktree(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"init", "-q"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "root"}} {
-		if out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+	for _, args := range [][]string{{"init", "-q"}, {"commit", "-q", "--allow-empty", "-m", "root"}} {
+		if out, err := gittest.Command(append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v %s", args, err, out)
 		}
 	}
